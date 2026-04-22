@@ -161,7 +161,7 @@ priority. Update the **Status** column as we fix things.
 | # | File | Issue | Status |
 |---|---|---|---|
 | 1 | `APPs/AxisGroupSM.st` | `DigitalInputPointer` used unguarded in `BLOCK_FOR_DIGITAL_INPUT` and `GET_DIGITAL_INPUT` handlers; null deref crashes PLC if `HECAT_1616.InputData` isn't wired (currently commented out at line 371). | **Fixed 2026-04-22** — added `<> 0` guard on both handlers; `GET_DIGITAL_INPUT` returns 0 when unwired. |
-| 2 | `APPs/AxisGroupSM.st` | Missing `.Error` checks on `MC_GroupReadStatus` / `MC_GroupReadActualPosition`; garbage propagates into progress tracking. | **Open** (error is checked in the `'M'` packet branch at line 640; progress-tracking at line 250–266 uses outputs unconditionally — review needed) |
+| 2 | `APPs/AxisGroupSM.st` | Missing `.Error` checks on `MC_GroupReadStatus` / `MC_GroupReadActualPosition`; garbage propagates into progress tracking. | **Fixed 2026-04-22** — `UpdateMotionProgress` now freezes `MotionBufferSize := 0` when either FB reports `.Error`; also guards against `LastAcceptedMovementId - MovementId` underflow. |
 
 ### P1 — Bugs
 
@@ -179,14 +179,14 @@ priority. Update the **Status** column as we fix things.
 | 7 | `Robot_FBs/AxisGroupManager_BB/*` | Delete entire folder. | **Fixed 2026-04-22** via `delete_dead_pous.py` template. |
 | 8 | `APPs/TCP_Server_Mult.st` | Delete echo-only prototype. | **Fixed 2026-04-22** via `delete_dead_pous.py`. |
 | 9 | `APPs/AxisGroupSM.st` | Remove `IF FALSE THEN ... END_IF` blocks and commented-out VAR lines. | **Won't fix** — line 177 says *"IMPORTANT: following if TRUE... and if FALSE.... are mandatory, DO not try to remove/optimize it"*. |
-| 10 | `APPs/AxisGroupSM.st` | Resolve AUX-thread `TODO`s (implement or delete). | **Open** — feature decision needed. |
+| 10 | `APPs/AxisGroupSM.st` | Resolve AUX-thread `TODO`s (implement or delete). | **Clarified 2026-04-22** — replaced `TODO` with an explicit comment that the buffers are intentionally drained until the AUX feature is wired. Still tracked here as the real feature work. |
 | 11 | `Robot_FBs/performanceTestPOU.st` | Move to debug folder or delete. | **Fixed 2026-04-22** — deleted. |
 
 ### P3 — Readability / architecture
 
 | # | Target | Action | Status |
 |---|---|---|---|
-| 12 | `APPs/AxisGroupSM.st` | Magic numbers → named constants (`FLY_EVENT_STAGE_LIMIT`, `MOTION_BUFFER_THRESHOLD`, `RETRY_COOLDOWN_MS`, sentinel `UNSET_POSITION = -919191`). | **Open** |
+| 12 | `APPs/AxisGroupSM.st` | Magic numbers → named constants. | **Partially fixed 2026-04-22** — added `MOTION_BUFFER_THRESHOLD`, `RETRY_COOLDOWN_G4_MS`, `RETRY_COOLDOWN_G1_MS`, `TRIGGER_TIMEOUT_ERR`, `G1_A_UNSET_SENTINEL`. (`FlyEventStageLimit` was already named.) Remaining: in-function literals like `'event_id'` keys and `16#FF` masks — acceptable as-is. |
 | 13 | `APPs/AxisGroupSM.st` | Command strings → `E_CommandType` enum + `CASE` dispatch. | **Open** |
 | 14 | Project-wide | Pick one naming convention (proposal: PascalCase for types/FBs, camelCase for variables). | **Open** |
 | 15 | `APPs/AxisGroupSM.st` | Split into `FB_MotionDispatcher`, `FB_FlyEventManager`, `FB_ReelMotorDriver`, `FB_IoTracker`. | **Open** |
@@ -197,6 +197,9 @@ priority. Update the **Status** column as we fix things.
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-04-22 | **P0 #2 — freeze progress on MC FB error.** `UpdateMotionProgress` now sets `MotionBufferSize := 0` if `GroupReadStatusFb.Error` or `GroupReadPositionFb.Error`; downstream `ProcessMotionPacket` then won't accept new moves while errored. Also clamped `LastAccepted - MovementId` underflow. | `APPs/AxisGroupSM.st` |
+| 2026-04-22 | **P2 #10 — clarified AUX command handlers.** Removed `TODO` noise; added explicit comment that buffers are intentionally drained until the AUX feature is implemented. | `APPs/AxisGroupSM.st` |
+| 2026-04-22 | **P3 #12 — magic numbers → named constants.** `MOTION_BUFFER_THRESHOLD`, `RETRY_COOLDOWN_G4_MS`, `RETRY_COOLDOWN_G1_MS`, `TRIGGER_TIMEOUT_ERR`, `G1_A_UNSET_SENTINEL`. | `APPs/AxisGroupSM.st` |
 | 2026-04-22 | **P2 #7/8/11 — deleted dead POUs.** `AxisGroupManager_BB` (5 files, stale backup), `TCP_Server_Mult.st` (echo prototype on same port as `TCP_Server`), `performanceTestPOU.st` (scratch). Build still clean. | project-wide |
 | 2026-04-22 | **P0 #1 — null guard on `DigitalInputPointer` in `BLOCK_FOR_DIGITAL_INPUT` and `GET_DIGITAL_INPUT` handlers.** Prevents PLC crash when the HECAT_1616 device isn't present. `GET_DIGITAL_INPUT` now returns 0 in that case. | `APPs/AxisGroupSM.st` |
 | 2026-04-22 | **P1 #3 — fix `space() >= 0` UDINT tautology in `TCP_Server`.** Was always true, letting packets drop into a full ring buffer. Changed to `> 0`. | `APPs/TCP_Server.st` |

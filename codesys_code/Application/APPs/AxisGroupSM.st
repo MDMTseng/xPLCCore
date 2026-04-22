@@ -4,6 +4,19 @@ PROGRAM AxisGroupSM
         FlyEventBufferSize: UDINT := 10;
         TaskInstructionBufferSize: UDINT := 10;
         FlyEventStageLimit: INT := 9;
+
+        // Motion buffer fullness threshold: reject new 'M' packets when the
+        // SoftMotion command buffer has this many queued moves (back-pressure).
+        MOTION_BUFFER_THRESHOLD : ULINT := 12;
+        // Cooldown (ms) before re-trying a motion command after the FB
+        // refused .CommandAccepted (e.g. GroupWait, MoveLinearAbsolute).
+        RETRY_COOLDOWN_G4_MS    : DINT := 100;
+        RETRY_COOLDOWN_G1_MS    : DINT := 101;
+        // Error code reported on FlyEvent TimeToLive expiry.
+        TRIGGER_TIMEOUT_ERR     : INT := 100;
+        // Sentinel used by 'G1' to detect "A not supplied" in the TryReadREAL
+        // default. Any real A value is << |919191|.
+        G1_A_UNSET_SENTINEL     : LREAL := -919191;
     END_VAR
     VAR
         reelpullmotor_fActPosition:REAL;
@@ -248,7 +261,13 @@ PROGRAM AxisGroupSM
     //UpdateMotionProgress();
     IF TRUE THEN
         TempMovementId := GroupReadPositionFb.MovementId;
-        IF (GroupReadPositionFb.MovementId = 0) THEN
+        // If either MC read FB is in error, don't propagate its outputs -- they
+        // may be stale. Freeze buffer size to 0 so ProcessMotionPacket won't
+        // treat "buffer has room" as "motion is healthy" and accept a new
+        // move on top of an errored group.
+        IF GroupReadStatusFb.Error OR GroupReadPositionFb.Error THEN
+            MotionBufferSize := 0;
+        ELSIF (GroupReadPositionFb.MovementId = 0) THEN
             MotionBufferSize := 0;
             CurrentMovementId := GroupReadStatusFb.LastAcceptedMovementId;
             CurrentMovementIdProgress := 1;
@@ -256,7 +275,14 @@ PROGRAM AxisGroupSM
                 CurrentMovementIdProgress := 0;
             END_IF;
         ELSE
-            MotionBufferSize := GroupReadStatusFb.LastAcceptedMovementId - GroupReadPositionFb.MovementId;
+            // Guard against underflow: both are unsigned SMC_Movement_Id.
+            // LastAccepted < current shouldn't happen, but could during
+            // a reset race. Clamp to 0 rather than wrapping to huge ULINT.
+            IF GroupReadStatusFb.LastAcceptedMovementId >= GroupReadPositionFb.MovementId THEN
+                MotionBufferSize := GroupReadStatusFb.LastAcceptedMovementId - GroupReadPositionFb.MovementId;
+            ELSE
+                MotionBufferSize := 0;
+            END_IF;
 
             IF (CurrentMovementId <> GroupReadPositionFb.MovementId) THEN
                 CurrentMovementId := GroupReadPositionFb.MovementId;
@@ -340,21 +366,21 @@ PROGRAM AxisGroupSM
 
 
     IF TRUE THEN//ProcessAuxCommands
+        // AUX command threads: currently drained without parsing so their ring
+        // buffers don't back up and block the client. Wire a real handler here
+        // when the AUX command feature is implemented (see README §P2 #10).
         IF (GVL.aux0_info_buf_ridx.size() > 0) THEN
             AuxCommandBufferPointer := ADR(GVL.aux0_info_buf[GVL.aux0_info_buf_ridx.getTail()][0]);
-            // TODO: parse/handle AUX thread 0 data from AuxCommandBufferPointer
             GVL.aux0_info_buf_ridx.consumeTail();
         END_IF;
 
         IF (GVL.aux1_info_buf_ridx.size() > 0) THEN
             AuxCommandBufferPointer := ADR(GVL.aux1_info_buf[GVL.aux1_info_buf_ridx.getTail()][0]);
-            // TODO: parse/handle AUX thread 1 data from AuxCommandBufferPointer
             GVL.aux1_info_buf_ridx.consumeTail();
         END_IF;
 
         IF (GVL.aux2_info_buf_ridx.size() > 0) THEN
             AuxCommandBufferPointer := ADR(GVL.aux2_info_buf[GVL.aux2_info_buf_ridx.getTail()][0]);
-            // TODO: parse/handle AUX thread 2 data from AuxCommandBufferPointer
             GVL.aux2_info_buf_ridx.consumeTail();
         END_IF;
     END_IF;
@@ -466,7 +492,7 @@ PROGRAM AxisGroupSM
                             FlyEventBuffer[Index].TimeToLiveMs := FlyEventBuffer[Index].TimeToLiveMs - BusPeriod;
                             IF (FlyEventBuffer[Index].TimeToLiveMs <= 0) THEN
                                 TriggerActive := TRUE;
-                                TriggerErrorCode := 100;
+                                TriggerErrorCode := TRIGGER_TIMEOUT_ERR;
                             END_IF;
                         END_IF;
                     END_IF;
@@ -630,7 +656,7 @@ PROGRAM AxisGroupSM
     
     IF TRUE THEN//ProcessMotionPacket
 
-        IF (RetryMotionCommandCooldown = 0 AND PacketType = 'M' AND GVL.minfo_buf_ridx.size() > 0 AND MotionBufferSize < 12) THEN
+        IF (RetryMotionCommandCooldown = 0 AND PacketType = 'M' AND GVL.minfo_buf_ridx.size() > 0 AND MotionBufferSize < MOTION_BUFFER_THRESHOLD) THEN
             ShouldReturn := FALSE;
             CommandAck := FALSE;
 
@@ -731,7 +757,7 @@ PROGRAM AxisGroupSM
                         ShouldReturn := TRUE;
                         CommandAck := TRUE;
                     ELSE
-                        RetryMotionCommandCooldown := 100;
+                        RetryMotionCommandCooldown := RETRY_COOLDOWN_G4_MS;
                     END_IF;
                 ELSE
                     GVL.minfo_buf_ridx.consumeTail();
@@ -985,8 +1011,8 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
                 MotionPose.c.X := MessageUnpackerFb.TryReadREAL('X', MotionPose.c.X);
                 MotionPose.c.Y := MessageUnpackerFb.TryReadREAL('Y', MotionPose.c.Y);
                 MotionPose.c.Z := MessageUnpackerFb.TryReadREAL('Z', MotionPose.c.Z);
-                MotionPoseTempReal := MessageUnpackerFb.TryReadREAL('A', -919191);
-                IF (MotionPoseTempReal <> -919191) THEN
+                MotionPoseTempReal := MessageUnpackerFb.TryReadREAL('A', G1_A_UNSET_SENTINEL);
+                IF (MotionPoseTempReal <> G1_A_UNSET_SENTINEL) THEN
                     MotionPose.c.A := MotionPoseTempReal / 10;
                 END_IF;
 
@@ -1039,7 +1065,7 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
                     ShouldReturn := TRUE;
                     CommandAck := TRUE;
                 ELSE
-                    RetryMotionCommandCooldown := 101;
+                    RetryMotionCommandCooldown := RETRY_COOLDOWN_G1_MS;
                 END_IF;
 
             ELSIF (CommandType = 'getDigitalInputFlipCount') THEN
