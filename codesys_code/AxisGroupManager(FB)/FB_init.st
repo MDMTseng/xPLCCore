@@ -9,6 +9,9 @@ VAR_INPUT
     // The robot's axis group
     agAxisGroup : REFERENCE TO AXIS_GROUP_REF_SM3;
 
+    // The single (reel) axis
+    axReel      : REFERENCE TO AXIS_REF_SM3;
+
 END_VAR
 VAR
     i : UINT;
@@ -17,8 +20,9 @@ END_VAR
 
 
 
-// Store the reference to the axis group
+// Store the references
 _agAxisGroup REF= agAxisGroup;
+_axReel      REF= axReel;
 
 FB_init := TRUE;
 

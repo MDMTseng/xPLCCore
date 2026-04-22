@@ -21,7 +21,7 @@ CASE _eState OF
             SMC_GroupReset(AxisGroup:=_agAxisGroup, Execute:=FALSE);
             
             // Reset Single Axis FBs
-            fbResetReel(Axis:= reelpullmotor, Execute:=FALSE);
+            fbResetReel(Axis:= _axReel, Execute:=FALSE);
             
             IoConfig_Globals.EtherCAT_Master_SoftMotion.xRestart:=TRUE;
         END_IF
@@ -31,7 +31,7 @@ CASE _eState OF
             SMC_GroupReset(AxisGroup:=_agAxisGroup, Execute:=TRUE);
             
             // Reset the single motor
-            fbResetReel(Axis:= reelpullmotor, Execute:=TRUE);
+            fbResetReel(Axis:= _axReel, Execute:=TRUE);
             
             IoConfig_Globals.EtherCAT_Master_SoftMotion();
             IoConfig_Globals.EtherCAT_Master_SoftMotion.xRestart:=FALSE;
@@ -135,7 +135,7 @@ CASE _eState OF
             
             SMC_GroupDisable(AxisGroup:=_agAxisGroup, Execute:=FALSE);
             SMC_GroupReset(AxisGroup:=_agAxisGroup, Execute:=FALSE);
-            fbResetReel(Axis:= reelpullmotor, Execute:=FALSE);
+            fbResetReel(Axis:= _axReel, Execute:=FALSE);
         END_IF
         
         IF(uidx=0)THEN
@@ -144,7 +144,7 @@ CASE _eState OF
             bReelPowerReq   := FALSE;
             SMC_GroupDisable(AxisGroup:=_agAxisGroup, Execute:=TRUE);
             SMC_GroupReset(AxisGroup:=_agAxisGroup, Execute:=TRUE);
-            fbResetReel(Axis:= reelpullmotor, Execute:=TRUE);
+            fbResetReel(Axis:= _axReel, Execute:=TRUE);
         END_IF
 END_CASE
 
@@ -160,11 +160,11 @@ SMC_GroupPower_0(
 
 // 2. Single Motor Power (Reel Pull)
 fbPowerReel(
-    Axis         := reelpullmotor,
+    Axis         := _axReel,
     Enable       := bReelPowerReq,
     bRegulatorOn := bReelPowerReq,
     bDriveStart  := bReelPowerReq
 );
 
-// 3. Single Motor Reset
-fbResetReel(Axis := reelpullmotor);
+// 3. Single Motor Reset (tick every scan so Done/Busy/Error advance)
+fbResetReel(Axis := _axReel);

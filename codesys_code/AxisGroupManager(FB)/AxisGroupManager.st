@@ -14,6 +14,7 @@ VAR
 
     // --- Axis Configuration ---
     _agAxisGroup : REFERENCE TO AXIS_GROUP_REF_SM3; // Internal reference to the axis group
+    _axReel      : REFERENCE TO AXIS_REF_SM3;       // Internal reference to the single (reel) axis
    
     // --- Status & Error Info ---
     _bIsHomed : BOOL;
@@ -50,5 +51,10 @@ VAR
 	motionPoseIdx:INT;
 	
 	stateCD:INT;
-	
+
 END_VAR
+
+// Cyclic driver: advances in-state logic every scan.
+// External callers post user events via Transition(eEvent);
+// EV_OK / EV_ERROR are posted from inside Update(0) when Done/Error flags latch.
+Update(0);
