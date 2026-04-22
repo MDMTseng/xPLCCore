@@ -1,0 +1,62 @@
+{
+  "selectedPort": "COM3",
+  "baudRate": 19200,
+  "savedCommands": [
+    {
+      "name": "VON",
+      "slaveId": 1,
+      "modbusFunction": "write_register",
+      "address": 5,
+      "value": "1"
+    },
+    {
+      "name": "VOFF",
+      "slaveId": 1,
+      "modbusFunction": "write_register",
+      "address": 5,
+      "value": "0"
+    },
+    {
+      "name": "SVON",
+      "slaveId": 1,
+      "modbusFunction": "write_register",
+      "address": 10,
+      "value": "1"
+    },
+    {
+      "name": "SVOFF",
+      "slaveId": 1,
+      "modbusFunction": "write_register",
+      "address": 10,
+      "value": "0"
+    },
+    {
+      "name": "ReadV10",
+      "slaveId": 1,
+      "modbusFunction": "read_holding_registers",
+      "address": 45,
+      "value": "5"
+    },
+    {
+      "name": "ReadV5",
+      "slaveId": 1,
+      "modbusFunction": "read_holding_registers",
+      "address": 20,
+      "value": "5"
+    },
+    {
+      "name": "VB_TOP_L_ON",
+      "slaveId": 1,
+      "modbusFunction": "write_register",
+      "address": 12,
+      "value": "0x08"
+    },
+    {
+      "name": "VB_TOP_L_OFF",
+      "slaveId": 1,
+      "modbusFunction": "write_register",
+      "address": 12,
+      "value": "0x00"
+    }
+  ]
+}
