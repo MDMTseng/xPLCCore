@@ -665,7 +665,7 @@ PROGRAM AxisGroupSM
                 InputPinGroup := TO_UINT(MessageUnpackerFb.TryReadINT64('group', 0));
                 InputPinState := TO_UINT(MessageUnpackerFb.TryReadINT64('state', 0));
 
-                IF ((DigitalInputPointer[InputPinGroup] AND InputPinMask) = (InputPinState AND InputPinMask)) THEN
+                IF DigitalInputPointer <> 0 AND ((DigitalInputPointer[InputPinGroup] AND InputPinMask) = (InputPinState AND InputPinMask)) THEN
                     ShouldReturn := TRUE;
                     CommandAck := TRUE;
 
@@ -678,7 +678,13 @@ PROGRAM AxisGroupSM
                 ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
 
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('state'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead,diValue:=DigitalInputPointer[0]OR  SHL( TO_UDINT( DigitalInputPointer[1]),8));
+                IF DigitalInputPointer <> 0 THEN
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead,diValue:=DigitalInputPointer[0]OR  SHL( TO_UDINT( DigitalInputPointer[1]),8));
+                ELSE
+                    // DigitalInputPointer not wired (HECAT_1616 line in TrackDigitalInputFlips is commented out).
+                    // Return 0 rather than dereferencing null.
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := 0);
+                END_IF;
 
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
@@ -856,13 +862,22 @@ PROGRAM AxisGroupSM
 							(* Read pin mask value (unsigned integer) - sequential read *)
 							(* UnpackNext reads integers into diLastDINT; convert to ULINT for unsigned values *)
 							fbPinOpSeqUnpacker.UnpackNext();
-							(* For unsigned values, convert from DINT to ULINT *)
-							(* Note: This works correctly for values that fit in positive DINT range *)
-							StagePinMaskTemp := DINT_TO_ULINT(fbPinOpSeqUnpacker.diLastDINT);
-							
+							(* Pin masks are bit patterns, inherently non-negative. Clamp negative
+							   DINT values (e.g. client sent a signed negative int by mistake) to 0
+							   so we don't wrap into a huge ULINT and trigger unintended outputs. *)
+							IF fbPinOpSeqUnpacker.diLastDINT < 0 THEN
+								StagePinMaskTemp := 0;
+							ELSE
+								StagePinMaskTemp := DINT_TO_ULINT(fbPinOpSeqUnpacker.diLastDINT);
+							END_IF;
+
 							(* Read pin state value (unsigned integer) - sequential read *)
 							fbPinOpSeqUnpacker.UnpackNext();
-							StagePinStateTemp := DINT_TO_ULINT(fbPinOpSeqUnpacker.diLastDINT);
+							IF fbPinOpSeqUnpacker.diLastDINT < 0 THEN
+								StagePinStateTemp := 0;
+							ELSE
+								StagePinStateTemp := DINT_TO_ULINT(fbPinOpSeqUnpacker.diLastDINT);
+							END_IF;
 							
 							(* Only add stage if pin mask is non-zero *)
 							IF StagePinMaskTemp <> 0 THEN

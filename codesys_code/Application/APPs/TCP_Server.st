@@ -168,7 +168,8 @@ IF myConnection.xActive THEN
 							
 							
 							
-							IF(GVL.minfo_buf_ridx.space()>=0)THEN
+							// space() returns UDINT — was >=0 (always true). Need free slot before writing.
+							IF(GVL.minfo_buf_ridx.space() > 0)THEN
 								tmp_ptr:=ADR(GVL.minfo_buf[GVL.minfo_buf_ridx.getHead()][0]);
 								tmp_ptr[0]:=DINT_TO_BYTE(curPacketLen);//keep data len
 								//MEM.MemMove(ADR(TMP_buffer_ptr[curPacketStartIdx]),ADR(tmp_ptr[1]),DINT_TO_UINT(curPacketLen));

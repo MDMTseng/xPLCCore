@@ -164,17 +164,17 @@ priority. Update the **Status** column as we fix things.
 
 | # | File | Issue | Status |
 |---|---|---|---|
-| 1 | `APPs/AxisGroupSM.st` | `DigitalInputPointer` declared but apparently never assigned; deref will crash. | **Open — needs verification** |
-| 2 | `APPs/AxisGroupSM.st` | Missing `.Error` checks on `MC_GroupReadStatus` / `MC_GroupReadActualPosition`; garbage propagates into progress tracking. | **Open** |
+| 1 | `APPs/AxisGroupSM.st` | `DigitalInputPointer` used unguarded in `BLOCK_FOR_DIGITAL_INPUT` and `GET_DIGITAL_INPUT` handlers; null deref crashes PLC if `HECAT_1616.InputData` isn't wired (currently commented out at line 371). | **Fixed 2026-04-22** — added `<> 0` guard on both handlers; `GET_DIGITAL_INPUT` returns 0 when unwired. |
+| 2 | `APPs/AxisGroupSM.st` | Missing `.Error` checks on `MC_GroupReadStatus` / `MC_GroupReadActualPosition`; garbage propagates into progress tracking. | **Open** (error is checked in the `'M'` packet branch at line 640; progress-tracking at line 250–266 uses outputs unconditionally — review needed) |
 
 ### P1 — Bugs
 
 | # | File | Issue | Status |
 |---|---|---|---|
-| 3 | `APPs/TCP_Server.st` | `space() >= 0` tautology — should be `> 0`. | **Open** |
-| 4 | `APPs/AxisGroupSM.st` | Reel request flag one-shot behaviour is correct but undocumented; add comment. | **Open** |
-| 5 | `APPs/AxisGroupSM.st` | `DINT_TO_ULINT` on unpacked pin mask wraps negative values silently. | **Open** |
-| 6 | `APPs/AxisGroupSM.st` | FlyEvent buffer-full case has no NAK response. | **Open** |
+| 3 | `APPs/TCP_Server.st` | `space() >= 0` tautology on `UDINT` — should be `> 0`. | **Fixed 2026-04-22** |
+| 4 | `APPs/AxisGroupSM.st` | Reel request flag one-shot is correct but should be documented. | **Already documented** at lines 1094–1095; closing. |
+| 5 | `APPs/AxisGroupSM.st` | `DINT_TO_ULINT` on unpacked pin mask wraps negative values silently (bit-pattern corruption → unintended outputs). | **Fixed 2026-04-22** — clamp negatives to 0 before conversion, on both pin-mask and pin-state fields. |
+| 6 | `APPs/AxisGroupSM.st` | FlyEvent buffer-full has no NAK. | **Not a bug** — generic `ack=FALSE` path at line 1051 covers it. Closing. |
 
 ### P2 — Dead code / duplication
 
@@ -201,6 +201,9 @@ priority. Update the **Status** column as we fix things.
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-04-22 | **P0 #1 — null guard on `DigitalInputPointer` in `BLOCK_FOR_DIGITAL_INPUT` and `GET_DIGITAL_INPUT` handlers.** Prevents PLC crash when the HECAT_1616 device isn't present. `GET_DIGITAL_INPUT` now returns 0 in that case. | `APPs/AxisGroupSM.st` |
+| 2026-04-22 | **P1 #3 — fix `space() >= 0` UDINT tautology in `TCP_Server`.** Was always true, letting packets drop into a full ring buffer. Changed to `> 0`. | `APPs/TCP_Server.st` |
+| 2026-04-22 | **P1 #5 — clamp negative pin mask / pin state values to 0** before `DINT_TO_ULINT` in M4 `pin_op_seq` parser. Prevents wraparound into huge ULINT values that would trigger unintended outputs. | `APPs/AxisGroupSM.st` |
 | 2026-04-22 | **Two-FB dispatch for back-to-back reel moves.** Added `reelMoveRelative2` + dispatcher selecting whichever FB is idle; `BufferMode := Buffered`. Fixes `SMC_MORE_THAN_ONE_MOVEMENT_PER_INSTANCE`. | `APPs/AxisGroupSM.st` |
 | 2026-04-22 | **Reel motion cyclic driver.** Moved `MC_MoveRelative` call out of command branch into cyclic loop with `reelGoRequest` flag pattern. Fixes "motor dies silently mid-move." | `APPs/AxisGroupSM.st` |
 | 2026-04-22 | **ReelGo parameter plumbing.** Added `TryReadREAL` for `F`, `ACC`, `DEA`, `JERK`, `Distance` from client message. Fixes `SMC_MR_INVALID_VELACC_VALUES`. | `APPs/AxisGroupSM.st` |
