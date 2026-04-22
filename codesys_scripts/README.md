@@ -250,6 +250,70 @@ at the end of a template.
 - **`__DONE__` never seen → rc=1** — means server died mid-exec. Check
   the Script Messages pane in CODESYS for a Python traceback.
 
+## Workflow caveats (not obvious until they bite you)
+
+- **Import doesn't create or delete objects.** `import_all` only updates
+  the text of objects that already exist in the project tree. If you
+  add a new POU on disk, import silently reports it as `[miss]` —
+  create the object in the IDE first, then export to capture its
+  skeleton, then edit on disk.
+- **Rename/delete on the IDE side leaves orphans on disk.** Export
+  writes new files but never removes old ones. After a rename or
+  delete in the IDE, `git status` in `codesys_code/` will show the
+  dead files — delete them manually. Similarly the disk tree can get
+  stale if you delete a folder-backed POU's children.
+- **Import runs `generate_code()` but does NOT save the project.**
+  Always review in the IDE and `File → Save` to persist. If CODESYS
+  is closed without save, everything import did is discarded.
+- **`projects.primary` picks the currently active project.** If more
+  than one is open, be explicit (`projects.all`, filter by path).
+- **TCP server is single-connection, single-threaded.** A long-running
+  or hung template blocks everything else until it returns. No
+  timeout — if a template hangs, kill the script in the IDE (Scripting
+  → Stop) and re-run `tcp_server.py`.
+- **Each TCP call runs in a fresh globals dict.** State does not
+  persist between calls. If you need persistence across calls, stash
+  on `system._your_key` (same trick the server uses for its socket).
+- **Running a template directly (not via TCP) dumps output to the
+  Script Messages pane**, not stdout. Easy to miss errors. Always go
+  through `tcp_client.py` unless you're bootstrapping the server
+  itself.
+- **`generate_code()` lives on the Application object, not the
+  project.** `projects.primary.generate_code()` does not exist. Iterate
+  `projects.primary.find("Application", True)` and call it on each.
+- **Build message category ID is a GUID.** To clear before a build:
+  `system.clear_messages("{97f48d64-a2a3-4856-b640-75c046e37ea9}")`.
+  That GUID is the build category; other categories (online change,
+  etc.) have their own GUIDs — filter by description containing
+  `"build"` rather than hardcoding.
+- **Object names with filesystem-hostile chars get sanitized**
+  (`<>:"/\|?*` → `_`). Reverse lookup in import uses the sanitized
+  path, so as long as you don't rename, round-trip is stable. A POU
+  literally named `Foo/Bar` would collide with one named `Foo_Bar`.
+- **`.project` file is locked by the IDE.** Scripts that try to copy
+  or move it while CODESYS is open will fail. Close the IDE first.
+- **Online API requires the PLC to be in run mode and the
+  Application logged in.** `oapp.login(OnlineChangeOption.Try, False)`
+  before `read_value`, `oapp.logout()` after. `Try` is safer than
+  `Force` — avoid `Force` unless you understand the online-change
+  consequences.
+- **IronPython 2.7 syntax gotchas beyond ASCII:**
+  - `print` is a statement, not a function. `print("a",  "b")` prints a
+    tuple. Use `print "a", "b"` or import from `__future__`.
+  - String formatting: `"{}".format(x)` works; f-strings do **not**.
+  - `True`/`False` are keywords as expected, but `None`-comparisons
+    should use `is None` not `== None` (some CODESYS objects override
+    `__eq__` oddly).
+- **`build.py` (cold start) expects CODESYS at the default install
+  path.** If CODESYS is installed elsewhere, edit the path in
+  `build.py`. Prefer the warm TCP flow instead — cold start is 30–60s
+  per call.
+- **Round-trip preserves whitespace but NOT `.project` object
+  metadata** (IDs, GUIDs, position in tree, folder color, etc.). Don't
+  expect `codesys_code/` to be a complete project snapshot — it's
+  source text only. The authoritative project file is still
+  `PackerX.project`.
+
 ## Project path
 
 Currently hardcoded in several places:
