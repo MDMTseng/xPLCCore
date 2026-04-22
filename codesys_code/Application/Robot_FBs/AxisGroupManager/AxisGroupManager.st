@@ -53,6 +53,7 @@ VAR
 	stateCD:INT;
 
 END_VAR
+(* =========== IMPLEMENTATION =========== *)
 
 // Cyclic driver: advances in-state logic every scan.
 // External callers post user events via Transition(eEvent);

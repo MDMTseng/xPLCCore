@@ -6,8 +6,7 @@ VAR_OUTPUT
 	error:BOOL;
 	new_state:E_RobotState;
 END_VAR
-
-
+(* =========== IMPLEMENTATION =========== *)
 
 
 
