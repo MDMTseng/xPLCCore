@@ -187,11 +187,11 @@ priority. Update the **Status** column as we fix things.
 | # | Target | Action | Status |
 |---|---|---|---|
 | 12 | `APPs/AxisGroupSM.st` | Magic numbers → named constants. | **Partially fixed 2026-04-22** — added `MOTION_BUFFER_THRESHOLD`, `RETRY_COOLDOWN_G4_MS`, `RETRY_COOLDOWN_G1_MS`, `TRIGGER_TIMEOUT_ERR`, `G1_A_UNSET_SENTINEL`. (`FlyEventStageLimit` was already named.) Remaining: in-function literals like `'event_id'` keys and `16#FF` masks — acceptable as-is. |
-| 13 | `APPs/AxisGroupSM.st` | Command strings → `E_CommandType` enum + `CASE` dispatch. | **Open** |
-| 14 | Project-wide | Pick one naming convention (proposal: PascalCase for types/FBs, camelCase for variables). | **Open** |
-| 15 | `APPs/AxisGroupSM.st` | Split into `FB_MotionDispatcher`, `FB_FlyEventManager`, `FB_ReelMotorDriver`, `FB_IoTracker`. | **Open** |
-| 16 | `Robot_FBs/FB_Homing.st` | Parameterize axis refs via `FB_init` instead of hardcoding `IoConfig_Globals.EAxis0/1/2`. | **Open** |
-| 17 | `APPs/TCP_Server.st` | Replace blocking `WHILE` loop with non-blocking handshake. | **Open** |
+| 13 | `APPs/AxisGroupSM.st` | Command strings → `E_CommandType` enum + `CASE` dispatch. | **Open** — invasive refactor; defer until the command set stabilizes. |
+| 14 | Project-wide | Pick one naming convention. | **Open** — project-wide rename; do as part of #15 if ever. |
+| 15 | `APPs/AxisGroupSM.st` | Split into `FB_MotionDispatcher`, `FB_FlyEventManager`, `FB_ReelMotorDriver`, `FB_IoTracker`. | **Open** — major surgery; only once behavior is fully understood. |
+| 16 | `Robot_FBs/FB_Homing.st` | Parameterize axis refs via `FB_init` instead of hardcoding `IoConfig_Globals.EAxis0/1/2`. | **Open** — safety-critical; needs user coordination before touching homing. |
+| 17 | `APPs/TCP_Server.st` | Replace blocking `WHILE` loop with non-blocking handshake. | **Open** — behavior change; needs client-side coordination. |
 
 ### Recently completed
 
