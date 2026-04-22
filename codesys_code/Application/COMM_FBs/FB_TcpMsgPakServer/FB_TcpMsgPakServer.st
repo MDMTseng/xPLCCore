@@ -55,7 +55,6 @@ VAR
     DBG_recvCount           : DINT := 0;
     DBG_pktPopCount         : DINT := 0;
 END_VAR
-
 (* =========== IMPLEMENTATION =========== *)
 
 

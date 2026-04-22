@@ -100,7 +100,6 @@ VAR
 	MotPosIntegral0:DINT:=0;
 	IOGapCounter:DINT:=0;
 END_VAR
-
 (* =========== IMPLEMENTATION =========== *)
 i:=i+1;
 

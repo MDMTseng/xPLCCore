@@ -71,7 +71,6 @@ VAR
 	fbWaitTimeout   : TON;         // Timer to escape the blocking loop
 	
 END_VAR
-
 (* =========== IMPLEMENTATION =========== *)
 
 IF INIT THEN

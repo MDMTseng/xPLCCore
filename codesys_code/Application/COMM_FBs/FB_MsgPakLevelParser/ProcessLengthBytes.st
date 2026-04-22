@@ -4,7 +4,6 @@ END_VAR
 VAR
     ui_shift : UDINT;
 END_VAR
-
 (* =========== IMPLEMENTATION =========== *)
 
 (* Accumulate length bytes in big-endian format *)

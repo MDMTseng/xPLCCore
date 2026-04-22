@@ -25,8 +25,7 @@ Application/
 │   ├── EthercatPOU.st          EtherCAT bus management.
 │   ├── POU_BUFFER_RUN.st       Buffered-motion execution loop.
 │   ├── TCP_MSGPAK_Server.st    Active MessagePack command server.
-│   ├── TCP_Server.st           Older TCP server (candidate for removal?).
-│   ├── TCP_Server_Mult.st      Echo prototype (candidate for removal).
+│   ├── TCP_Server.st           Secondary TCP server on :8123 (motion path).
 │   └── WebServer_SIMPLE.st     Minimal HTTP responder.
 ├── APP_COMM_FBs/               App-level comm DUTs + helper POUs.
 │   ├── FlyEvent*.st            Fly-event data / enums.
@@ -49,12 +48,9 @@ Application/
     │   ├── FB_init.st          Takes axReel : REFERENCE TO AXIS_REF_SM3.
     │   ├── Update.st           Per-scan state machine step.
     │   └── Transition.st       State transition guard.
-    ├── AxisGroupManager_BB/    *Stale backup.* Zero external refs — delete.
-    │   └── …
     ├── FB_Homing.st            Homing sequence (hardcoded axis refs — P3).
     ├── E_RobotEvent.st         Event enum.
-    ├── E_RobotState.st         State enum.
-    └── performanceTestPOU.st   Scratch/test code — move or delete.
+    └── E_RobotState.st         State enum.
 ```
 
 ## High-level data flow
@@ -180,11 +176,11 @@ priority. Update the **Status** column as we fix things.
 
 | # | Target | Action | Status |
 |---|---|---|---|
-| 7 | `Robot_FBs/AxisGroupManager_BB/*` | Delete entire folder. Confirm no references first. | **Open** |
-| 8 | `APPs/TCP_Server_Mult.st` | Delete if echo-only prototype; confirm `TCP_MSGPAK_Server` is the active one. | **Open** |
-| 9 | `APPs/AxisGroupSM.st` | Remove `IF FALSE THEN ... END_IF` blocks and commented-out VAR lines. | **Open** |
-| 10 | `APPs/AxisGroupSM.st` | Resolve AUX-thread `TODO`s (implement or delete). | **Open** |
-| 11 | `Robot_FBs/performanceTestPOU.st` | Move to debug folder or delete. | **Open** |
+| 7 | `Robot_FBs/AxisGroupManager_BB/*` | Delete entire folder. | **Fixed 2026-04-22** via `delete_dead_pous.py` template. |
+| 8 | `APPs/TCP_Server_Mult.st` | Delete echo-only prototype. | **Fixed 2026-04-22** via `delete_dead_pous.py`. |
+| 9 | `APPs/AxisGroupSM.st` | Remove `IF FALSE THEN ... END_IF` blocks and commented-out VAR lines. | **Won't fix** — line 177 says *"IMPORTANT: following if TRUE... and if FALSE.... are mandatory, DO not try to remove/optimize it"*. |
+| 10 | `APPs/AxisGroupSM.st` | Resolve AUX-thread `TODO`s (implement or delete). | **Open** — feature decision needed. |
+| 11 | `Robot_FBs/performanceTestPOU.st` | Move to debug folder or delete. | **Fixed 2026-04-22** — deleted. |
 
 ### P3 — Readability / architecture
 
@@ -201,6 +197,7 @@ priority. Update the **Status** column as we fix things.
 
 | Date | Change | Files |
 |---|---|---|
+| 2026-04-22 | **P2 #7/8/11 — deleted dead POUs.** `AxisGroupManager_BB` (5 files, stale backup), `TCP_Server_Mult.st` (echo prototype on same port as `TCP_Server`), `performanceTestPOU.st` (scratch). Build still clean. | project-wide |
 | 2026-04-22 | **P0 #1 — null guard on `DigitalInputPointer` in `BLOCK_FOR_DIGITAL_INPUT` and `GET_DIGITAL_INPUT` handlers.** Prevents PLC crash when the HECAT_1616 device isn't present. `GET_DIGITAL_INPUT` now returns 0 in that case. | `APPs/AxisGroupSM.st` |
 | 2026-04-22 | **P1 #3 — fix `space() >= 0` UDINT tautology in `TCP_Server`.** Was always true, letting packets drop into a full ring buffer. Changed to `> 0`. | `APPs/TCP_Server.st` |
 | 2026-04-22 | **P1 #5 — clamp negative pin mask / pin state values to 0** before `DINT_TO_ULINT` in M4 `pin_op_seq` parser. Prevents wraparound into huge ULINT values that would trigger unintended outputs. | `APPs/AxisGroupSM.st` |

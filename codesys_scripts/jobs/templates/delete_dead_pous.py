@@ -10,7 +10,7 @@
 # After deletion, the matching .st files on disk in codesys_code/ should
 # also be removed (git rm) -- this script does NOT touch disk.
 
-APPLY = False  # flip to True to actually remove
+APPLY = False  # flip to True to actually remove (safety default)
 
 proj = projects.primary
 
