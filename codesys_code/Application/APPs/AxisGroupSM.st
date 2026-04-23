@@ -345,6 +345,13 @@ PROGRAM AxisGroupSM
                 StateString := TO_STRING(AxisGroupManagerFb._eState);
                 PrevAxisGroupState := TO_INT(AxisGroupManagerFb._eState);
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(StateString));
+            ELSE
+                // Unknown SYS command -- emit NAK so the TS caller doesn't hang on timeout.
+                ShouldReturn := TRUE;
+                CommandAck := FALSE;
+                ResponsePacketPointer^.ele_count := 1;
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('unknown SYS cmd'));
             END_IF;
 
             GVL.minfo_buf_ridx.consumeTail();

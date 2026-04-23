@@ -134,7 +134,22 @@ TMP_PKT_IDX := fbMyServer.PKT_IDX;
 DBG_reMP_info_ridx_size:=GVL.reMP_info_ridx.size();
 IF GVL.reMP_info_ridx.size()>0 THEN
 	tmp_MsgPakInfo_ptr:=ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getTail()]);
-	fbMyServer.Send(BUFFER_PTR := tmp_MsgPakInfo_ptr^.buf, BUFFER_LEN := tmp_MsgPakInfo_ptr^.buf_size);
-	
-	GVL.reMP_info_ridx.consumeTail();
+	// Only consume the slot if the TCP write succeeded. A failure here
+	// means the client went away between queueing and this cycle's write;
+	// leave the packet in the ring so it can retry next cycle once the
+	// connection re-establishes, or be flushed by the reset path if not.
+	IF fbMyServer.Send(BUFFER_PTR := tmp_MsgPakInfo_ptr^.buf, BUFFER_LEN := tmp_MsgPakInfo_ptr^.buf_size) THEN
+		GVL.reMP_info_ridx.consumeTail();
+	ELSIF NOT fbMyServer.CLIENT.xActive THEN
+		// Connection is down -- retrying forever is pointless. Drop the
+		// backlog so we don't replay stale replies to a future client.
+		WHILE GVL.reMP_info_ridx.size() > 0 DO
+			GVL.reMP_info_ridx.consumeTail();
+		END_WHILE;
+	END_IF;
 END_IF
+
+// --- MsgPack self-test harness hook (Comm task; runs cyclically).
+// See doc/msgpack.md and FB_MsgPackTests. Toggle GVL.bRunMsgPackTests
+// in online mode to fire; results on GVL.fbMsgPackTests.*.
+GVL.fbMsgPackTests(bRun := GVL.bRunMsgPackTests);
