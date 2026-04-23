@@ -6,6 +6,11 @@ import type { COMCtrlObj } from './types';
 import { useTcpStringConnection } from './hooks/useTcpStringConnection';
 import { t, type UILang } from './i18n';
 
+// Bump when shipping changes to the TCP/msgpack dispatcher or PLC protocol.
+// Shown as a pill next to the app title so you can tell at a glance whether
+// the dev server reloaded.
+const __UI_BUILD_TAG__ = 'v0.3.0-harness';
+
 type AppPacket = {
   tl: string;
   target_id: number;
@@ -424,8 +429,17 @@ export const PluginHello: React.FC<{
             const message = obj as any; // Cast for convenience
             if (message && message.id) {
               if (message.id in _this.RX_lookup) {
-                _this.RX_lookup[message.id].resolve(message);
-                if(_this.RX_lookup[message.id]._PERSIST_!==true){
+                const entry = _this.RX_lookup[message.id];
+                if (entry.timer) { clearTimeout(entry.timer); entry.timer = null; }
+                // NAK support: a reply with ack===false rejects the caller
+                // instead of resolving, so `await` sites see the failure.
+                // (PLC schema: {id, ack:bool, err?:string}.)
+                if (message.ack === false) {
+                  try { entry.reject(new Error(message.err || `nak (id=${message.id}, cmd=${entry?.tx_data?.cmd ?? entry?.tx_data?.type})`)); } catch {}
+                } else {
+                  entry.resolve(message);
+                }
+                if (entry._PERSIST_ !== true) {
                   delete _this.RX_lookup[message.id];
                 }
               }
@@ -444,16 +458,30 @@ export const PluginHello: React.FC<{
       }
       handleConnectionRX(socket);
 
+      const rejectAllPending = (reason: string) => {
+        const lookup = _this.RX_lookup;
+        for (const key of Object.keys(lookup)) {
+          const entry = lookup[key];
+          if (!entry) continue;
+          if (entry._PERSIST_ === true) continue; // keep callback subscriptions
+          if (entry.timer) { clearTimeout(entry.timer); entry.timer = null; }
+          try { entry.reject(new Error(reason)); } catch {}
+          delete lookup[key];
+        }
+      };
+
       socket.on('error', (err: any) => {
         console.error('TCP Error:', err);
         setTcpConnected(false);
         tcpSocketRef.current = null;
+        rejectAllPending(`tcp error: ${err?.message || err}`);
       });
 
       socket.on('close', () => {
         console.log('TCP Connection closed');
         setTcpConnected(false);
         tcpSocketRef.current = null;
+        rejectAllPending('tcp connection closed');
       });
     } catch (error) {
       console.error('Failed to create TCP connection:', error);
@@ -499,7 +527,8 @@ export const PluginHello: React.FC<{
   // Track whether any MsgPack was sent recently; used to skip HB when traffic is busy
   const sentFlagRef = useRef<boolean>(false);
 
-  const sendTcpMsgPack = useCallback((data: any, await_tracking: boolean = true) : Promise<any>|boolean => {
+  const DEFAULT_TCP_REPLY_TIMEOUT_MS = 5000;
+  const sendTcpMsgPack = useCallback((data: any, await_tracking: boolean = true, timeout_ms: number = DEFAULT_TCP_REPLY_TIMEOUT_MS) : Promise<any>|boolean => {
     if (!tcpSocketRef.current) return false;
 
     // if(data?.cmd!=="GET_DIGITAL_INPUT"){
@@ -523,11 +552,22 @@ export const PluginHello: React.FC<{
           rej_fn = reject;
         });
 
-        _this.RX_lookup[ava_id] = {
+        const entry: any = {
           tx_data: data,
           resolve: res_fn,
-          reject: rej_fn
+          reject: rej_fn,
+          timer: null,
+        };
+        if (timeout_ms > 0) {
+          entry.timer = setTimeout(() => {
+            const pending = _this.RX_lookup[ava_id];
+            if (pending && pending._PERSIST_ !== true) {
+              delete _this.RX_lookup[ava_id];
+              try { pending.reject(new Error(`tcp reply timeout (id=${ava_id}, cmd=${data?.cmd ?? data?.type})`)); } catch {}
+            }
+          }, timeout_ms);
         }
+        _this.RX_lookup[ava_id] = entry;
       }
       // console.log("sendTcpMsgPack",data);
 
@@ -713,6 +753,102 @@ export const PluginHello: React.FC<{
 
   // UDP removed
 
+  // ---------------------------------------------------------------------
+  // Remote-harness polling loop.
+  // A local dev harness (codesys_scripts/remote_harness.py) queues
+  // instructions; this loop pulls one per tick and executes it, then POSTs
+  // the result. Guarded by the hasHarness flag so production builds never
+  // hit a network timer unless the harness is actually reachable.
+  // ---------------------------------------------------------------------
+  const HARNESS_URL = 'http://127.0.0.1:8127';
+  const [harnessEnabled, setHarnessEnabled] = useState<boolean>(() => {
+    try { return window.localStorage.getItem('remote_harness_enabled') === '1'; } catch { return false; }
+  });
+  const harnessBusyRef = useRef<boolean>(false);
+
+  const harnessExecute = useCallback(async (instr: any): Promise<any> => {
+    const action = instr.action as string;
+    const payload = instr.payload ?? {};
+    switch (action) {
+      case 'ping':
+        return { pong: true, ts: Date.now(), build: __UI_BUILD_TAG__ };
+      case 'get_state':
+        return {
+          tcpConnected,
+          tcpHost,
+          tcpPort,
+          build: __UI_BUILD_TAG__,
+          pendingRequests: Object.keys(_this.RX_lookup).length,
+        };
+      case 'connect_tcp':
+        if (typeof payload.host === 'string') setTcpHost(payload.host);
+        if (typeof payload.port === 'number' || typeof payload.port === 'string') setTcpPort(parseInt(String(payload.port)));
+        setTcpClientEnabled(true);
+        return { requested: true };
+      case 'disconnect_tcp':
+        setTcpClientEnabled(false);
+        return { requested: true };
+      case 'send_tcp_msgpack': {
+        const data = payload.data ?? payload;
+        const awaitTracking = payload.await_tracking !== false;
+        const timeoutMs = typeof payload.timeout_ms === 'number' ? payload.timeout_ms : undefined;
+        const result = (sendTcpMsgPack as any)(data, awaitTracking, timeoutMs);
+        if (result instanceof Promise) {
+          return await result;
+        }
+        return { sync: result };
+      }
+      case 'wait_ms':
+        await new Promise((res) => setTimeout(res, Number(payload.ms ?? 0)));
+        return { waited_ms: Number(payload.ms ?? 0) };
+      default:
+        throw new Error(`unknown harness action: ${action}`);
+    }
+  }, [tcpConnected, tcpHost, tcpPort, sendTcpMsgPack]);
+
+  useEffect(() => {
+    if (!harnessEnabled) return;
+    let stopped = false;
+    const tick = async () => {
+      if (stopped || harnessBusyRef.current) return;
+      try {
+        const resp = await fetch(`${HARNESS_URL}/poll`, { method: 'GET' });
+        if (!resp.ok) return;
+        const instr = await resp.json();
+        if (!instr || !instr.action) return;
+        harnessBusyRef.current = true;
+        const started = performance.now();
+        let ok = true;
+        let value: any = undefined;
+        let err: string | undefined;
+        try {
+          value = await harnessExecute(instr);
+        } catch (e: any) {
+          ok = false;
+          err = e?.message ?? String(e);
+        }
+        const elapsed_ms = Math.round(performance.now() - started);
+        try {
+          await fetch(`${HARNESS_URL}/result`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ instr_id: instr.instr_id, ok, value, err, elapsed_ms, action: instr.action }),
+          });
+        } catch { /* harness gone; keep polling */ }
+      } catch {
+        // harness offline -- stay silent, keep polling
+      } finally {
+        harnessBusyRef.current = false;
+      }
+    };
+    const id = window.setInterval(tick, 1000);
+    return () => { stopped = true; window.clearInterval(id); };
+  }, [harnessEnabled, harnessExecute]);
+
+  useEffect(() => {
+    try { window.localStorage.setItem('remote_harness_enabled', harnessEnabled ? '1' : '0'); } catch {}
+  }, [harnessEnabled]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -776,7 +912,42 @@ export const PluginHello: React.FC<{
       <div style={{ ...sectionCardStyle, marginBottom: 12, borderRadius: 14, padding: 0, overflow: 'hidden' }}>
         <div style={{ padding: '9px 12px', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto', gap: 8, alignItems: 'start' }}>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 800, color: '#0f172a' }}>{t(uiLang, 'appTitle')}</div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 6 }}>
+              {t(uiLang, 'appTitle')}
+              <span
+                title="UI build tag — bumps every time the dispatcher/msgpack layer changes"
+                style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  color: '#065f46',
+                  background: '#d1fae5',
+                  border: '1px solid #6ee7b7',
+                  borderRadius: 6,
+                  padding: '1px 6px',
+                  letterSpacing: 0.3,
+                }}
+              >
+                {__UI_BUILD_TAG__}
+              </span>
+              <button
+                type="button"
+                onClick={() => setHarnessEnabled((v) => !v)}
+                title="Toggle remote-harness polling (codesys_scripts/remote_harness.py on :8127)"
+                style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  color: harnessEnabled ? '#7c2d12' : '#334155',
+                  background: harnessEnabled ? '#fed7aa' : '#f1f5f9',
+                  border: harnessEnabled ? '1px solid #fb923c' : '1px solid #cbd5e1',
+                  borderRadius: 6,
+                  padding: '1px 6px',
+                  letterSpacing: 0.3,
+                  cursor: 'pointer',
+                }}
+              >
+                {harnessEnabled ? 'harness ON' : 'harness off'}
+              </button>
+            </div>
             <div style={{ marginTop: 2, fontSize: 11, color: '#64748b' }}>
               {t(uiLang, 'instanceProject', { instance: instance_id, project: plugin_name })}
             </div>
