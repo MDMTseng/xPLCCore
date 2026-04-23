@@ -54,10 +54,18 @@ class Harness:
             ev = self.waiters.get(instr_id)
         if ev is None:
             return {"ok": False, "err": f"no such instr_id {instr_id}"}
-        if not ev.wait(timeout):
-            return {"ok": False, "err": "harness wait timeout"}
-        with self.lock:
-            return self.results.get(instr_id, {"ok": False, "err": "missing result"})
+        try:
+            if not ev.wait(timeout):
+                return {"ok": False, "err": "harness wait timeout"}
+            with self.lock:
+                return self.results.get(instr_id, {"ok": False, "err": "missing result"})
+        finally:
+            # Prune both waiter and result once the caller has consumed (or
+            # given up). Otherwise these dicts grow unbounded over a long
+            # session and /status becomes huge.
+            with self.lock:
+                self.waiters.pop(instr_id, None)
+                self.results.pop(instr_id, None)
 
     def record_result(self, data: Dict[str, Any]) -> None:
         instr_id = data.get("instr_id")

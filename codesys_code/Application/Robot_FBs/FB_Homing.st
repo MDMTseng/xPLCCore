@@ -183,6 +183,7 @@ bIgnoreHWLimit:=TRUE
 
 );
 
-
-bDone:=fbHome_Axis0.bDone AND fbHome_Axis1.bDone AND fbHome_Axis2.bDone;
-bError:=fbHome_Axis0.bError OR fbHome_Axis1.bError OR fbHome_Axis2.bError;
+// Outputs bDone/bError/bBusy are owned by the state machine above.
+// Do NOT recompute from axis flags here -- state 99 (timeout) sets
+// bError:=TRUE, and axis flags would clobber it back to FALSE on the
+// next scan, hiding the timeout from the outer FSM.

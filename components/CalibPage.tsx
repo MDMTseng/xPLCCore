@@ -2691,7 +2691,9 @@ export const CalibPage: React.FC<{
       
 
       <button onClick={async() =>{
-        await sendTcpMsgPack({ "type": "M", "cmd": "ReelGo"});
+        await sendTcpMsgPack({ "type": "M", "cmd": "ReelGo","Distance":4*2, "F":5000,ACC:100000,DEA:10000,JERK:100000 });
+        await delay(100);
+        await sendTcpMsgPack({ "type": "M", "cmd": "ReelGo","Distance":4*2, "F":5000,ACC:100000,DEA:10000,JERK:100000 });
       }}>ReelGo</button>
       {/* <button onClick={async() =>{
         // sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 1 });

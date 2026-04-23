@@ -41,4 +41,21 @@ VAR_GLOBAL
 	fbVirtualMotorsExpire      : Standard.TON;
 	VIRTUAL_MOTORS_TTL         : TIME := T#10M;
 
+	(* --- Error diagnostic latch.
+	   Written from AxisGroupManager.Update (per-state FB error checks) and
+	   from the AxisGroupSM motion-FB supervisor. Cleared on UnInited entry.
+	   Published in the SYS/GA_EV TCP reply as err_src / err_id so the UI
+	   can show a cause instead of just "state=Error". *)
+	LastErrorSource : STRING(40) := '';
+	LastErrorID     : DWORD := 0;
+
+	(* --- Bus-restart throttle.
+	   UnInited entry pulses IoConfig_Globals.EtherCAT_Master_SoftMotion.xRestart
+	   :=TRUE to re-sync slaves. An Error -> UnInited -> Error loop would hammer
+	   the bus; LastBusRestartMs records the RuntimeMs of the last pulse so
+	   UnInited entry can gate the restart to once per BUS_RESTART_COOLDOWN_MS.
+	   0 = never restarted yet. *)
+	LastBusRestartMs       : LINT := 0;
+	BUS_RESTART_COOLDOWN_MS : LINT := 30000;
+
 END_VAR

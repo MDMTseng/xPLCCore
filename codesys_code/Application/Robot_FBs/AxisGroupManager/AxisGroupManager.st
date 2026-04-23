@@ -21,6 +21,10 @@ VAR
     _bIsInError : BOOL;
     _dwErrorID : DWORD;
     _bReadyForOperation : BOOL;
+    // Error latch lives in GVL (GVL.LastErrorSource / GVL.LastErrorID) so
+    // that both this FB (internal writes from Update) and external
+    // supervisors (AxisGroupSM) can populate it without needing method/
+    // property plumbing.
 
     // --- Motion Control Function Blocks ---
     _fbPower : MC_Power;
@@ -49,8 +53,20 @@ VAR
 	MoveLinearAbsolute_0: SM3_Robotics.MC_MoveLinearAbsolute;
 	motionPoseRunPass:INT;
 	motionPoseIdx:INT;
-	
+
 	stateCD:INT;
+
+	// State-entry watchdogs. Reset on entry (IN:=FALSE in uidx=-1), driven
+	// IN:=TRUE during the state's update. If .Q latches before the state
+	// completes, fire EV_ERROR with source=<state>:timeout. Timeouts chosen
+	// generously to tolerate normal hardware latency but still catch a
+	// stuck bus / silent drive / missed Done latch.
+	watchdogPowering      : Standard.TON;
+	watchdogGroupEnabling : Standard.TON;
+	watchdogHoming        : Standard.TON;
+	WATCHDOG_POWERING_PT      : TIME := T#10S;
+	WATCHDOG_GROUP_ENABLE_PT  : TIME := T#10S;
+	WATCHDOG_HOMING_PT        : TIME := T#30S;
 
 END_VAR
 (* =========== IMPLEMENTATION =========== *)

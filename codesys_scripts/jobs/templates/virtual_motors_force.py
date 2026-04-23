@@ -10,12 +10,21 @@ for app in list(proj.find("Application", True) or []):
 oapp = online.create_online_application(app_obj)
 oapp.login(OnlineChangeOption.Try, False)
 try:
+    import time
+    # Always cycle FALSE->TRUE so the derived flag re-opens the gate even if
+    # the TTL TON (fbVirtualMotorsExpire) is latched from a previous session
+    # (see memory: virtual_motors_gate_ton_reset.md).
+    oapp.set_prepared_value("GVL.bVirtualMotorsMode_Request", "FALSE")
+    oapp.force_prepared_values()
+    time.sleep(0.3)
     oapp.set_prepared_value("GVL.bVirtualMotorsMode_Request", "TRUE")
     oapp.force_prepared_values()
-    import time; time.sleep(0.2)
+    time.sleep(0.3)
     req = oapp.read_value("GVL.bVirtualMotorsMode_Request")
     derived = oapp.read_value("GVL.bVirtualMotorsMode")
     print("bVirtualMotorsMode_Request =", req)
     print("bVirtualMotorsMode         =", derived)
+    if "TRUE" not in str(derived):
+        print("WARN: derived flag is not TRUE -- gate closed, TTL may be latched.")
 finally:
     oapp.logout()

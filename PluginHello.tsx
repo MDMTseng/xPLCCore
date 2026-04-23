@@ -809,20 +809,44 @@ export const PluginHello: React.FC<{
   useEffect(() => {
     if (!harnessEnabled) return;
     let stopped = false;
+    // Hard cap per instruction. Anything longer is a bug (or a wedged TCP
+    // reply). We race harnessExecute against this so busy cannot stick
+    // forever even if a Promise never resolves.
+    const INSTR_MAX_MS = 15000;
+    // Watchdog: if busy has been TRUE longer than this with no progress,
+    // force-clear. Covers StrictMode double-mounts and HMR leaving a stale
+    // busy=true from a previous effect instance.
+    const BUSY_WATCHDOG_MS = 20000;
+    let busySince = 0;
     const tick = async () => {
-      if (stopped || harnessBusyRef.current) return;
+      if (stopped) return;
+      if (harnessBusyRef.current) {
+        if (busySince && performance.now() - busySince > BUSY_WATCHDOG_MS) {
+          console.warn('[harness] busy stuck >20s, force-clearing');
+          harnessBusyRef.current = false;
+          busySince = 0;
+        }
+        return;
+      }
       try {
         const resp = await fetch(`${HARNESS_URL}/poll`, { method: 'GET' });
         if (!resp.ok) return;
         const instr = await resp.json();
         if (!instr || !instr.action) return;
         harnessBusyRef.current = true;
-        const started = performance.now();
+        busySince = performance.now();
+        const started = busySince;
         let ok = true;
         let value: any = undefined;
         let err: string | undefined;
         try {
-          value = await harnessExecute(instr);
+          value = await Promise.race([
+            harnessExecute(instr),
+            new Promise((_, rej) => setTimeout(
+              () => rej(new Error(`harness instr timeout >${INSTR_MAX_MS}ms (action=${instr.action})`)),
+              INSTR_MAX_MS,
+            )),
+          ]);
         } catch (e: any) {
           ok = false;
           err = e?.message ?? String(e);
@@ -839,10 +863,18 @@ export const PluginHello: React.FC<{
         // harness offline -- stay silent, keep polling
       } finally {
         harnessBusyRef.current = false;
+        busySince = 0;
       }
     };
     const id = window.setInterval(tick, 1000);
-    return () => { stopped = true; window.clearInterval(id); };
+    return () => {
+      stopped = true;
+      window.clearInterval(id);
+      // Don't leave a stale busy flag for the next effect instance (HMR,
+      // StrictMode, dep changes). A tick still in-flight will run its own
+      // finally and redundantly clear; that's fine.
+      harnessBusyRef.current = false;
+    };
   }, [harnessEnabled, harnessExecute]);
 
   useEffect(() => {

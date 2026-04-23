@@ -217,13 +217,17 @@ PROGRAM AxisGroupSM
     IF TRUE THEN
         RuntimeMs := RuntimeMs + BusPeriod;
 
+        // VisuEventControl=0 is the idle/no-op default so the TCP handler
+        // (ProcessSystemPacket below) can own InputEvent without being
+        // clobbered by this block on the next cycle. Visualisation buttons
+        // should write 1..6 momentarily and reset to 0.
         CASE VisuEventControl OF
-            0: InputEvent := E_RobotEvent.EV_POWER_ON;
-            1: InputEvent := E_RobotEvent.EV_GROUP_ENABLE;
-            2: InputEvent := E_RobotEvent.EV_HOME_GO;
-            3: InputEvent := E_RobotEvent.EV_ERROR;
-            4: InputEvent := E_RobotEvent.EV_RESET;
-            5: InputEvent := E_RobotEvent.EV_HOME_GO_FORCE_SKIP;
+            1: InputEvent := E_RobotEvent.EV_POWER_ON;
+            2: InputEvent := E_RobotEvent.EV_GROUP_ENABLE;
+            3: InputEvent := E_RobotEvent.EV_HOME_GO;
+            4: InputEvent := E_RobotEvent.EV_ERROR;
+            5: InputEvent := E_RobotEvent.EV_RESET;
+            6: InputEvent := E_RobotEvent.EV_HOME_GO_FORCE_SKIP;
         END_CASE;
 
         IF (PreviousInputEvent <> InputEvent) THEN
@@ -263,7 +267,33 @@ PROGRAM AxisGroupSM
             CoordSystem := SMC_COORD_SYSTEM.WCS,
             Position => ReadPosition,
         );
-		
+
+    END_IF;
+
+
+    // Global error supervisor: the per-state checks in AxisGroupManager.Update
+    // only watch the power FBs. A move that goes into errorstop (axis fault,
+    // bus drop mid-motion, servo trip) surfaces on GroupReadStatusFb.Error /
+    // GroupReadPositionFb.Error, and a bus-level fault on
+    // IoConfig_Globals.EtherCAT_Master_SoftMotion.xError. Catch those here
+    // and drive the FSM to Error -- guarded so we don't loop while already
+    // in Error/UnInited. Bus errors take priority so the error source is
+    // diagnostic rather than a downstream symptom.
+    IF (AxisGroupManagerFb._eState <> E_RobotState.Error
+        AND AxisGroupManagerFb._eState <> E_RobotState.UnInited) THEN
+        IF IoConfig_Globals.EtherCAT_Master_SoftMotion.xError THEN
+            GVL.LastErrorSource := 'Supervisor:EtherCAT_Master';
+            GVL.LastErrorID := 0;
+            AxisGroupManagerFb.Transition(E_RobotEvent.EV_ERROR);
+        ELSIF GroupReadStatusFb.Error THEN
+            GVL.LastErrorSource := 'Supervisor:GroupReadStatus';
+            GVL.LastErrorID := TO_DWORD(GroupReadStatusFb.ErrorID);
+            AxisGroupManagerFb.Transition(E_RobotEvent.EV_ERROR);
+        ELSIF GroupReadPositionFb.Error THEN
+            GVL.LastErrorSource := 'Supervisor:GroupReadPosition';
+            GVL.LastErrorID := TO_DWORD(GroupReadPositionFb.ErrorID);
+            AxisGroupManagerFb.Transition(E_RobotEvent.EV_ERROR);
+        END_IF;
     END_IF;
 
 
@@ -347,13 +377,19 @@ PROGRAM AxisGroupSM
 
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
-                ResponsePacketPointer^.ele_count := 2;
+                ResponsePacketPointer^.ele_count := 4;
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('st'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := AxisGroupManagerFb._eState);
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('st_str'));
                 StateString := TO_STRING(AxisGroupManagerFb._eState);
                 PrevAxisGroupState := TO_INT(AxisGroupManagerFb._eState);
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(StateString));
+                // Error latch: empty string + 0 when no error has been recorded
+                // since the last EV_RESET -> UnInited cycle.
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_src'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(GVL.LastErrorSource));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_id'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.LastErrorID));
             ELSE
                 // Unknown SYS command -- emit NAK so the TS caller doesn't hang on timeout.
                 ShouldReturn := TRUE;

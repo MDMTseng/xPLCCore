@@ -41,10 +41,15 @@ REMOTE_CTRL = HERE / "remote_ctrl.py"
 EV_POWER_ON = 2
 EV_GROUP_ENABLE = 4
 EV_HOME_GO_FORCE_SKIP = 7
-EV_OK = 10
+EV_RESET = 8
 
 # E_RobotState values we expect
 READY = 70
+
+# The FSM emits EV_OK internally from Update(0) when the SoftMotion-simulated
+# drives report Status/Done. We only fire the user-driven events and wait
+# between them so the internal transitions can complete.
+SETTLE_SEC = 1.0
 
 
 def fire(ev: int, label: str) -> dict:
@@ -62,18 +67,36 @@ def fire(ev: int, label: str) -> dict:
 
 def main() -> int:
     steps = [
-        (EV_POWER_ON,            "EV_POWER_ON"),
-        (EV_OK,                  "EV_OK (Powering->Powered)"),
-        (EV_GROUP_ENABLE,        "EV_GROUP_ENABLE"),
-        (EV_OK,                  "EV_OK (GroupEnabling->GroupEnabled)"),
-        (EV_HOME_GO_FORCE_SKIP,  "EV_HOME_GO_FORCE_SKIP"),
+        # EV_RESET first: Transition.st has a universal fallback so any state
+        # snaps back to UnInited, letting the smoketest start from a known
+        # baseline even if a prior run left the FSM at Ready/Error/etc.
+        (EV_RESET,               "EV_RESET",               SETTLE_SEC),
+        (EV_POWER_ON,            "EV_POWER_ON",            SETTLE_SEC),
+        (EV_GROUP_ENABLE,        "EV_GROUP_ENABLE",        SETTLE_SEC),
+        (EV_HOME_GO_FORCE_SKIP,  "EV_HOME_GO_FORCE_SKIP",  0.3),
     ]
 
     final_state = None
-    for ev, label in steps:
+    for ev, label, wait in steps:
         reply = fire(ev, label)
         final_state = reply.get("st", final_state)
-        time.sleep(0.15)
+        time.sleep(wait)
+
+    # The UI may return {"sync": false} when the PLC state reply doesn't
+    # arrive inside the UI's own send-timeout window. Fall back to reading
+    # the FSM state directly via the IDE so the smoketest still reports
+    # truthfully.
+    if final_state != READY:
+        time.sleep(1.0)
+        plc_ctrl = HERE / "plc_ctrl.py"
+        res = subprocess.run(
+            [sys.executable, str(plc_ctrl), "read", "AxisGroupSM.AxisGroupManagerFb._eState"],
+            capture_output=True, text=True, timeout=60,
+        )
+        tail = (res.stdout or "").strip().splitlines()[-1:] or [""]
+        print(f"[verify] FSM direct read -> {tail[0]}")
+        if "Ready" in tail[0]:
+            final_state = READY
 
     print()
     if final_state == READY:

@@ -75,8 +75,12 @@ END_CASE
 IF(new_state=_eState)THEN//error/stop handling
 	IF(eEvent=E_RobotEvent.EV_ERROR)THEN
 		new_state:=E_RobotState.Error;
+	ELSIF(eEvent=E_RobotEvent.EV_RESET)THEN
+		// Universal reset: any state snaps back to UnInited. Lets operators
+		// (and smoketests) re-run the FSM sequence without a cold boot.
+		new_state:=E_RobotState.UnInited;
 	END_IF
-	
+
 END_IF
 
 IF(new_state<>_eState)THEN
