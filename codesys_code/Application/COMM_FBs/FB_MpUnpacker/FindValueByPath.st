@@ -14,6 +14,8 @@ VAR
 	fbTempUnpacker : FB_MpUnpacker;
 	// Local pointer for cleaner dereferencing
 	pWordLen : POINTER TO WORD; // Declared here
+	pDwordLen : POINTER TO DWORD;
+	udiTmpCount : UDINT;
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
 	FindValueByPath := FALSE;
@@ -42,6 +44,12 @@ END_VAR
 				pWordLen := pResult + 1; // Point to the 2-byte length field
 				Swap16To(pWordLen,ADR(nMapCount));
 				pResult := pResult + 3; // Advance pointer by 1 (marker) + 2 (count bytes)
+			ELSIF pResult^ = 16#DF THEN // map 32
+				pDwordLen := pResult + 1;
+				Swap32To(pDwordLen, ADR(udiTmpCount));
+				IF udiTmpCount > 16#FFFF THEN RETURN; END_IF; // path-search cap
+				nMapCount := UDINT_TO_UINT(udiTmpCount);
+				pResult := pResult + 5;
 			ELSE
 				// Current element is not a map, so path segment is invalid
 				RETURN;
@@ -82,9 +90,15 @@ END_VAR
 			ELSIF pResult^ = 16#DC THEN // array 16
 				// --- PREVIOUS BUG FIX FOR ARRAY ---
 				pWordLen := pResult + 1; // Point to the 2-byte length field
-				
+
 				Swap16To(pWordLen,ADR(nArrayCount));
 				pResult := pResult + 3; // Advance pointer by 1 (marker) + 2 (count bytes)
+			ELSIF pResult^ = 16#DD THEN // array 32
+				pDwordLen := pResult + 1;
+				Swap32To(pDwordLen, ADR(udiTmpCount));
+				IF udiTmpCount > 16#FFFF THEN RETURN; END_IF; // path-search cap
+				nArrayCount := UDINT_TO_UINT(udiTmpCount);
+				pResult := pResult + 5;
 			ELSE
 				// Current element is not an array, so path segment is invalid
 				RETURN;

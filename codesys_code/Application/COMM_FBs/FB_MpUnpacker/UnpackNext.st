@@ -114,37 +114,87 @@ eLastType := E_MpType.MP_UNKNOWN;
 			rLastREAL := LREAL_TO_REAL(tmpLReal);
 			pCurrent := pCurrent + 8;
 		
-		// --- String Types ---
+		// --- String Types (Fix 3: clamp length against remaining buffer before MemCpy) ---
 		16#D9: // str 8
 			udiLength := pCurrent^;
 			pCurrent := pCurrent + 1;
 			eLastType := E_MpType.MP_STRING;
+			IF udiLength > 255 THEN udiLength := 255; END_IF;
+			IF (pCurrent + udiLength) > (pStart + udiSize) THEN
+				udiLength := DWORD_TO_UDINT((pStart + udiSize) - pCurrent);
+			END_IF;
 			MEMUtils.MemCpy(pbyDest:=ADR(sLastString), pbySrc:=pCurrent, dwSize:=UDINT_TO_DWORD(udiLength));
 			sLastString[udiLength] := 0;
 			pCurrent := pCurrent + udiLength;
-			
+
 		16#DA: // str 16
 			pWordLen := pCurrent;
 			Swap16To(pWordLen, ADR(udiLength));
 			pCurrent := pCurrent + 2;
 			eLastType := E_MpType.MP_STRING;
+			IF udiLength > 255 THEN udiLength := 255; END_IF;
+			IF (pCurrent + udiLength) > (pStart + udiSize) THEN
+				udiLength := DWORD_TO_UDINT((pStart + udiSize) - pCurrent);
+			END_IF;
 			MEMUtils.MemCpy(pbyDest:=ADR(sLastString), pbySrc:=pCurrent, dwSize:=UDINT_TO_DWORD(udiLength));
 			sLastString[udiLength] := 0;
 			pCurrent := pCurrent + udiLength;
-			
+
 		16#DB: // str 32
 			pDwordLen := pCurrent;
 			Swap32To(pDwordLen, ADR(udiLength));
 			pCurrent := pCurrent + 4;
 			eLastType := E_MpType.MP_STRING;
-			// Check if string fits in STRING buffer (typically 255 chars)
-			IF udiLength > 255 THEN
-				udiLength := 255; // Truncate to max STRING size
+			IF udiLength > 255 THEN udiLength := 255; END_IF;
+			IF (pCurrent + udiLength) > (pStart + udiSize) THEN
+				udiLength := DWORD_TO_UDINT((pStart + udiSize) - pCurrent);
 			END_IF;
 			MEMUtils.MemCpy(pbyDest:=ADR(sLastString), pbySrc:=pCurrent, dwSize:=UDINT_TO_DWORD(udiLength));
 			sLastString[udiLength] := 0;
 			pCurrent := pCurrent + udiLength;
 		
+		// --- Binary Types (Fix 2: prevent desync when bin appears in a stream) ---
+		16#C4: // bin 8
+			udiLength := pCurrent^;
+			pCurrent := pCurrent + 1 + udiLength;
+			eLastType := E_MpType.MP_BINARY;
+
+		16#C5: // bin 16
+			pWordLen := pCurrent;
+			Swap16To(pWordLen, ADR(udiLength));
+			pCurrent := pCurrent + 2 + udiLength;
+			eLastType := E_MpType.MP_BINARY;
+
+		16#C6: // bin 32
+			pDwordLen := pCurrent;
+			Swap32To(pDwordLen, ADR(udiLength));
+			pCurrent := pCurrent + 4 + udiLength;
+			eLastType := E_MpType.MP_BINARY;
+
+		// --- Ext Types (skip-over; preserves alignment for downstream iteration) ---
+		16#D4: pCurrent := pCurrent + 2;  eLastType := E_MpType.MP_BINARY; // fixext 1  (type+1)
+		16#D5: pCurrent := pCurrent + 3;  eLastType := E_MpType.MP_BINARY; // fixext 2  (type+2)
+		16#D6: pCurrent := pCurrent + 5;  eLastType := E_MpType.MP_BINARY; // fixext 4  (type+4)
+		16#D7: pCurrent := pCurrent + 9;  eLastType := E_MpType.MP_BINARY; // fixext 8  (type+8)
+		16#D8: pCurrent := pCurrent + 17; eLastType := E_MpType.MP_BINARY; // fixext 16 (type+16)
+
+		16#C7: // ext 8  : [len:1][type:1][data:len]
+			udiLength := pCurrent^;
+			pCurrent := pCurrent + 2 + udiLength;
+			eLastType := E_MpType.MP_BINARY;
+
+		16#C8: // ext 16 : [len:2][type:1][data:len]
+			pWordLen := pCurrent;
+			Swap16To(pWordLen, ADR(udiLength));
+			pCurrent := pCurrent + 3 + udiLength;
+			eLastType := E_MpType.MP_BINARY;
+
+		16#C9: // ext 32 : [len:4][type:1][data:len]
+			pDwordLen := pCurrent;
+			Swap32To(pDwordLen, ADR(udiLength));
+			pCurrent := pCurrent + 5 + udiLength;
+			eLastType := E_MpType.MP_BINARY;
+
 		// --- Array Types ---
 		16#DC: // array 16
 			pWordLen := pCurrent;
@@ -188,6 +238,9 @@ eLastType := E_MpType.MP_UNKNOWN;
 		IF (byMarker >= 16#A0 AND byMarker <= 16#BF) THEN // fixstr
 			udiLength := byMarker - 16#A0;
 			eLastType := E_MpType.MP_STRING;
+			IF (pCurrent + udiLength) > (pStart + udiSize) THEN
+				udiLength := DWORD_TO_UDINT((pStart + udiSize) - pCurrent);
+			END_IF;
 			MEMUtils.MemCpy(pbyDest:=ADR(sLastString), pbySrc:=pCurrent, dwSize:=UDINT_TO_DWORD(udiLength));
 			sLastString[udiLength] := 0;
 			pCurrent := pCurrent + udiLength;
