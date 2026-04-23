@@ -45,7 +45,9 @@ CASE _eState OF
 		E_RobotEvent.EV_HOME_GO:
 			 new_state:=E_RobotState.Homing;
 		E_RobotEvent.EV_HOME_GO_FORCE_SKIP:
-			 new_state:=E_RobotState.Ready;
+			 IF GVL.bVirtualMotorsMode THEN
+			     new_state:=E_RobotState.Ready;
+			 END_IF
 		END_CASE
 	E_RobotState.Homing:
 		CASE eEvent OF

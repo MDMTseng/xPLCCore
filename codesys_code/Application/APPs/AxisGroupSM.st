@@ -203,6 +203,15 @@ PROGRAM AxisGroupSM
         END_IF;
     END_IF;
 
+    // Virtual-motors TTL gate. Derive GVL.bVirtualMotorsMode from
+    // GVL.bVirtualMotorsMode_Request (which the operator forces via
+    // CODESYS online mode) and a self-expiring timer. Even if the force
+    // is left on indefinitely, the derived flag snaps back to FALSE
+    // after VIRTUAL_MOTORS_TTL so a forgotten override can't leak into
+    // a real-motor session without a cold boot. See GVL.st for docs.
+    GVL.fbVirtualMotorsExpire(IN := GVL.bVirtualMotorsMode_Request, PT := GVL.VIRTUAL_MOTORS_TTL);
+    GVL.bVirtualMotorsMode := GVL.bVirtualMotorsMode_Request AND NOT GVL.fbVirtualMotorsExpire.Q;
+
 
     //UpdateRuntimeAndInputEvent();
     IF TRUE THEN
