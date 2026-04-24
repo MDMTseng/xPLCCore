@@ -25,11 +25,16 @@ VAR
 	auxThreadId: DINT := -1;
 	id: DINT := 0;
 	auxPacketStored: BOOL := FALSE;
-	auxAckBuf: ARRAY [0..256-1] OF BYTE;
-	auxAckMsg: MsgPakInfo;
 	auxAckPacker: FB_MpPacker;
-	
-	
+
+	// Send-stall recovery: if Send() keeps returning FALSE while the
+	// socket reports xActive=TRUE (half-open / TX backpressure), the
+	// reply ring would fill up forever. Drop the head packet after
+	// SEND_MAX_RETRIES consecutive cycles and count it. See
+	// doc/ringbuf-bugs.md #7.
+	send_retry_count: UDINT := 0;
+	SEND_MAX_RETRIES: UDINT := 100;
+
 	DBG_reMP_info_ridx_size:INT;
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
@@ -105,21 +110,22 @@ IF fbMyServer.PKT_IDX > TMP_PKT_IDX THEN
 			END_CASE;
 		END_IF;
 		// Always ack an AUX packet so the client never hangs on timeout; ack
-		// value reflects whether the packet was actually stored. See
-		// doc/ringbuf-bugs.md #2.
-		auxAckMsg := MsgPakInfoInit(
-			buff := ADR(auxAckBuf),
-			buffer_size := SIZEOF(auxAckBuf),
-			useLargeElementCountField := TRUE
-		);
-		MsgPakInfoClear(auxAckMsg);
-		auxAckMsg.ele_count := 2;
-		auxAckMsg.whead := auxAckPacker.PackString(pStart := auxAckMsg.whead, psValue := ADR('id'));
-		auxAckMsg.whead := auxAckPacker.PackDINT(pStart := auxAckMsg.whead, diValue := id);
-		auxAckMsg.whead := auxAckPacker.PackString(pStart := auxAckMsg.whead, psValue := ADR('ack'));
-		auxAckMsg.whead := auxAckPacker.PackBool(pStart := auxAckMsg.whead, bValue := auxPacketStored);
-		MsgPakInfoWrapup(auxAckMsg);
-		fbMyServer.Send(BUFFER_PTR := auxAckMsg.buf, BUFFER_LEN := auxAckMsg.buf_size);
+		// value reflects whether the packet was actually stored. Route via
+		// the reMP reply ring so a failed Send() gets retried next scan
+		// instead of being silently lost (doc/ringbuf-bugs.md #2, #8).
+		IF (GVL.reMP_info_ridx.space() = 0) THEN
+			GVL.reMP_info_ridx.consumeTail();
+			GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+		END_IF;
+		tmp_MsgPakInfo_ptr := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+		MsgPakInfoClear(tmp_MsgPakInfo_ptr^);
+		tmp_MsgPakInfo_ptr^.ele_count := 2;
+		tmp_MsgPakInfo_ptr^.whead := auxAckPacker.PackString(pStart := tmp_MsgPakInfo_ptr^.whead, psValue := ADR('id'));
+		tmp_MsgPakInfo_ptr^.whead := auxAckPacker.PackDINT(pStart := tmp_MsgPakInfo_ptr^.whead, diValue := id);
+		tmp_MsgPakInfo_ptr^.whead := auxAckPacker.PackString(pStart := tmp_MsgPakInfo_ptr^.whead, psValue := ADR('ack'));
+		tmp_MsgPakInfo_ptr^.whead := auxAckPacker.PackBool(pStart := tmp_MsgPakInfo_ptr^.whead, bValue := auxPacketStored);
+		MsgPakInfoWrapup(tmp_MsgPakInfo_ptr^);
+		GVL.reMP_info_ridx.pushHead();
 
 
 	ELSE
@@ -156,12 +162,24 @@ IF GVL.reMP_info_ridx.size()>0 THEN
 	// connection re-establishes, or be flushed by the reset path if not.
 	IF fbMyServer.Send(BUFFER_PTR := tmp_MsgPakInfo_ptr^.buf, BUFFER_LEN := tmp_MsgPakInfo_ptr^.buf_size) THEN
 		GVL.reMP_info_ridx.consumeTail();
+		send_retry_count := 0;
 	ELSIF NOT fbMyServer.CLIENT.xActive THEN
 		// Connection is down -- retrying forever is pointless. Drop the
 		// backlog so we don't replay stale replies to a future client.
 		WHILE GVL.reMP_info_ridx.size() > 0 DO
 			GVL.reMP_info_ridx.consumeTail();
 		END_WHILE;
+		send_retry_count := 0;
+	ELSE
+		// xActive=TRUE but Send keeps failing -> TX stall / half-open.
+		// Drop the head packet after SEND_MAX_RETRIES cycles so the ring
+		// doesn't fill up behind a stuck packet. See doc/ringbuf-bugs.md #7.
+		send_retry_count := send_retry_count + 1;
+		IF send_retry_count >= SEND_MAX_RETRIES THEN
+			GVL.reMP_info_ridx.consumeTail();
+			GVL.SendStallDropCount := GVL.SendStallDropCount + 1;
+			send_retry_count := 0;
+		END_IF;
 	END_IF;
 END_IF
 

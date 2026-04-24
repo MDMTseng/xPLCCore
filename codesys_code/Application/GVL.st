@@ -72,4 +72,10 @@ VAR_GLOBAL
 	OverlenDropCount : UDINT := 0;
 	ReMpDropCount    : UDINT := 0;
 
+	(* Send-stall drop counter (ringbuf-bugs.md #7). Bumped when the
+	   reply-ring head packet has been retried SEND_MAX_RETRIES cycles
+	   while the socket still reports xActive=TRUE -- i.e. a half-open
+	   or TX-backpressured peer that would otherwise block the ring. *)
+	SendStallDropCount : UDINT := 0;
+
 END_VAR
