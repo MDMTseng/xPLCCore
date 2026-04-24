@@ -5,12 +5,20 @@ import { ControlPage } from './components/ControlPage';
 import type { COMCtrlObj } from './types';
 import { useTcpStringConnection } from './hooks/useTcpStringConnection';
 import { t, type UILang } from './i18n';
-import { hasHarnessAction, dispatchHarnessAction, listHarnessActions } from './harness/registry';
+import { hasHarnessAction, dispatchHarnessAction, listHarnessActions, registerHarnessAction, unregisterHarnessAction } from './harness/registry';
 
 // Bump when shipping changes to the TCP/msgpack dispatcher or PLC protocol.
 // Shown as a pill next to the app title so you can tell at a glance whether
 // the dev server reloaded.
-const __UI_BUILD_TAG__ = 'v0.4.0-harness-registry';
+const __UI_BUILD_TAG__ = 'v0.5.0-heartbeat-reconnect';
+
+// A3 (UI half): heartbeat cadence + stale detection.
+// Send SYS/PING every HEARTBEAT_INTERVAL_MS. If no successful pong arrives
+// within HEARTBEAT_STALE_MS, the channel is treated as stale and exposed
+// via the harness `get_heartbeat_status` action. 3x interval gives us two
+// lost-ping tolerance before flagging stale.
+const HEARTBEAT_INTERVAL_MS = 1000;
+const HEARTBEAT_STALE_MS = 3500;
 
 type AppPacket = {
   tl: string;
@@ -597,24 +605,44 @@ export const PluginHello: React.FC<{
     return false;
   }, [tcpClearAfterSend]);
 
-  // Periodic keepalive to PLC over MsgPack TCP channel
+  // A3 (UI half): heartbeat to PLC via SYS/PING.
+  // Old code sent {type:'M', cmd:'KEEPALIVE'} which falls through the motion
+  // dispatcher ELSE and silently NAKs. SYS/PING hits a real handler that
+  // stamps GVL.LastUiPingMs and replies {pong:true, runtime_ms}, giving the
+  // PLC a heartbeat supervisor hook and us a latency measurement.
   const keepaliveTimerRef = useRef<any>(null);
+  const lastPongMsRef = useRef<number>(0);
+  const lastPingLatencyMsRef = useRef<number>(0);
+  const plcRuntimeMsRef = useRef<number>(0);
   useEffect(() => {
     if (tcpConnected) {
       if (!keepaliveTimerRef.current) {
+        // Reset staleness tracking on fresh connection so get_heartbeat_status
+        // doesn't report stale based on a previous session's last pong.
+        lastPongMsRef.current = Date.now();
         keepaliveTimerRef.current = window.setInterval(() => {
           try {
-            // Only send keepalive if no other traffic was sent in this period
             if (!sentFlagRef.current) {
-              // Fire-and-forget keepalive; no need to await tracking
-              sendTcpMsgPack({ type: 'M', cmd: 'KEEPALIVE' }, false);
+              const sentAt = Date.now();
+              const p = sendTcpMsgPack({ type: 'SYS', cmd: 'PING' }, true, HEARTBEAT_STALE_MS) as Promise<any>;
+              if (p && typeof (p as any).then === 'function') {
+                p.then((reply: any) => {
+                  if (reply && reply.pong) {
+                    lastPongMsRef.current = Date.now();
+                    lastPingLatencyMsRef.current = lastPongMsRef.current - sentAt;
+                    plcRuntimeMsRef.current = Number(reply.runtime_ms ?? 0);
+                  }
+                }).catch(() => {
+                  // PING timed out or socket errored — leave lastPongMsRef
+                  // untouched so staleness will latch after HEARTBEAT_STALE_MS.
+                });
+              }
             }
-            // reset flag for next interval window
             sentFlagRef.current = false;
           } catch (e) {
-            console.error('Keepalive send error:', e);
+            console.error('PING send error:', e);
           }
-        }, 1000);
+        }, HEARTBEAT_INTERVAL_MS);
       }
     } else if (keepaliveTimerRef.current) {
       clearInterval(keepaliveTimerRef.current);
@@ -626,6 +654,66 @@ export const PluginHello: React.FC<{
         clearInterval(keepaliveTimerRef.current);
         keepaliveTimerRef.current = null;
       }
+    };
+  }, [tcpConnected, sendTcpMsgPack]);
+
+  // A4 (UI half): on fresh socket connect, fetch a full PLC snapshot so the
+  // renderer can reconcile its view (state, buffer, last movement id) instead
+  // of "reload and pray." Harness subscribers can peek via get_machine_state.
+  const lastMachineSnapshotRef = useRef<any>(null);
+  useEffect(() => {
+    if (!tcpConnected) {
+      lastMachineSnapshotRef.current = null;
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const reply = await (sendTcpMsgPack({ type: 'SYS', cmd: 'GET_MACHINE_STATE' }, true, HEARTBEAT_STALE_MS) as Promise<any>);
+        if (!cancelled && reply) {
+          lastMachineSnapshotRef.current = { ...reply, fetched_at: Date.now() };
+          console.log('[A4] reconnect snapshot', reply);
+          try {
+            window.dispatchEvent(new CustomEvent('plc:machine-state', { detail: lastMachineSnapshotRef.current }));
+          } catch (_) {}
+        }
+      } catch (e) {
+        console.warn('[A4] GET_MACHINE_STATE on reconnect failed', e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [tcpConnected, sendTcpMsgPack]);
+
+  // Heartbeat / snapshot harness actions for tests and reconnect flows.
+  useEffect(() => {
+    registerHarnessAction('ping', async () => {
+      const sentAt = Date.now();
+      const reply = await (sendTcpMsgPack({ type: 'SYS', cmd: 'PING' }, true, HEARTBEAT_STALE_MS) as Promise<any>);
+      return { reply, latency_ms: Date.now() - sentAt };
+    });
+    registerHarnessAction('get_machine_state', async () => {
+      const reply = await (sendTcpMsgPack({ type: 'SYS', cmd: 'GET_MACHINE_STATE' }, true, HEARTBEAT_STALE_MS) as Promise<any>);
+      lastMachineSnapshotRef.current = { ...reply, fetched_at: Date.now() };
+      return reply;
+    });
+    registerHarnessAction('get_heartbeat_status', () => {
+      const now = Date.now();
+      const last = lastPongMsRef.current;
+      const since = last ? now - last : null;
+      return {
+        connected: tcpConnected,
+        last_pong_ms: last || null,
+        ms_since_last_pong: since,
+        latency_ms: lastPingLatencyMsRef.current || null,
+        plc_runtime_ms: plcRuntimeMsRef.current || null,
+        stale: since !== null && since > HEARTBEAT_STALE_MS,
+        snapshot: lastMachineSnapshotRef.current,
+      };
+    });
+    return () => {
+      unregisterHarnessAction('ping');
+      unregisterHarnessAction('get_machine_state');
+      unregisterHarnessAction('get_heartbeat_status');
     };
   }, [tcpConnected, sendTcpMsgPack]);
 

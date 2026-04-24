@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { COMCtrlObj } from '../types';
 import { CalibPage } from './CalibPage';
 import { MiscControlsPage } from './MiscControlsPage';
@@ -22,8 +22,35 @@ export const ControlPage: React.FC<{
 
   const [tab, setTab] = useState<"Welcome" | "Calib" | "Operation">("Welcome");
   const [plcReady, setPlcReady] = useState(false);
+  const [lastReconcile, setLastReconcile] = useState<{reason: string; at: number; snapshot: any} | null>(null);
 
-  useHarnessAction('get_tab', () => ({ tab, plcReady, allCoreLinksConnected: true }), [tab, plcReady]);
+  // A4 reconciliation: on every reconnect snapshot (dispatched by PluginHello),
+  // if the PLC isn't Ready or the coord system is unconfigured, force the UI back
+  // to Welcome so the operator must re-run homing / SetCoord before entering Calib
+  // or Operation.
+  useEffect(() => {
+    const handler = (ev: Event) => {
+      const snap = (ev as CustomEvent).detail;
+      if (!snap) return;
+      const st = String(snap.st_str ?? '');
+      const coordSet = snap.coord_set === true;
+      let reason: string | null = null;
+      if (st === 'Error') reason = 'plc_error';
+      else if (st !== 'Ready') reason = 'plc_not_ready';
+      else if (!coordSet) reason = 'coord_not_configured';
+      if (reason) {
+        setTab('Welcome');
+        setLastReconcile({ reason, at: Date.now(), snapshot: snap });
+        console.log('[A4] ControlPage forced to Welcome:', reason, snap);
+      } else {
+        setLastReconcile({ reason: 'ok', at: Date.now(), snapshot: snap });
+      }
+    };
+    window.addEventListener('plc:machine-state', handler as EventListener);
+    return () => window.removeEventListener('plc:machine-state', handler as EventListener);
+  }, []);
+
+  useHarnessAction('get_tab', () => ({ tab, plcReady, allCoreLinksConnected: true, lastReconcile }), [tab, plcReady, lastReconcile]);
   useHarnessAction('set_tab', (payload: any) => {
     const target = String(payload?.tab ?? '');
     if (target !== 'Welcome' && target !== 'Calib' && target !== 'Operation') {

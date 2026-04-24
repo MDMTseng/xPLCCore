@@ -71,7 +71,7 @@ export const OperationPage: React.FC<{
 
         {
             await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": 11 })
-            await sendTcpMsgPack({ "type": "M", "cmd": "WAIT_FOR_MOTION_STOP" })
+            await sendTcpMsgPack({ "type": "M", "cmd": "WAIT_FOR_MOTION_STOP", "timeout_ms": 30000 })
             await sendTcpMsgPack({ "type": "M", "cmd": "SetCoord1" })//set coord1 (realworld coordinate instead of machine coordinate)
     
             await delay(100);
