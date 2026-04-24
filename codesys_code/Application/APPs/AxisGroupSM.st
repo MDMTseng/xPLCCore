@@ -133,6 +133,14 @@ PROGRAM AxisGroupSM
         // polling GA_EV. Event packets carry `kind='event'` and no `id`.
         EventPacketPointer: POINTER TO MsgPakInfo;
 
+        // Edge-detect state for COORD_SET and MOVE_DONE push events.
+        // Both emit into the same reMP reply-ring as ST_CHG, same
+        // `kind='event'` envelope, so the UI can consume them through
+        // the existing `plc:event` dispatch without polling.
+        PrevCoordSet: BOOL := FALSE;
+        PrevMotionBufferSizeForEvent: ULINT := 0;
+        PrevCompletedMovementId: ULINT := 0;
+
 
 
 
@@ -283,6 +291,29 @@ PROGRAM AxisGroupSM
             END_IF;
             PrevAxisGroupState := TO_INT(AxisGroupManagerFb._eState);
         END_IF;
+
+        // COORD_SET push event: FALSE->TRUE edge on GVL.CoordSystemConfigured.
+        // Fires after SetCoord0 / SetCoord1 completes so the UI doesn't have
+        // to poll GET_MACHINE_STATE to learn the coord gate just opened.
+        // Envelope matches ST_CHG: kind='event', name='COORD_SET'.
+        IF (GVL.CoordSystemConfigured AND NOT PrevCoordSet) THEN
+            IF (GVL.reMP_info_ridx.space() = 0) THEN
+                GVL.reMP_info_ridx.consumeTail();
+                GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+            END_IF;
+            EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+            MsgPakInfoClear(EventPacketPointer^);
+            EventPacketPointer^.ele_count := 3;
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('event'));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('name'));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('COORD_SET'));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('runtime_ms'));
+            EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
+            MsgPakInfoWrapup(EventPacketPointer^);
+            GVL.reMP_info_ridx.pushHead();
+        END_IF;
+        PrevCoordSet := GVL.CoordSystemConfigured;
     END_IF;
 
 
@@ -392,6 +423,36 @@ PROGRAM AxisGroupSM
             PrevMotionStateId := CurrentMovementId;
             PrevMotionStateProgress := CurrentMovementIdProgress;
         END_IF;
+
+        // MOVE_DONE push event: MotionBufferSize transition >0 -> 0 with a
+        // non-zero LastAcceptedMovementId means the queued motion drained.
+        // The UI can gate "ready for next step" on this event instead of
+        // polling movement_id via GET_MACHINE_STATE at high frequency.
+        // Envelope matches ST_CHG: kind='event', name='MOVE_DONE'.
+        IF (PrevMotionBufferSizeForEvent > 0
+            AND MotionBufferSize = 0
+            AND GroupReadStatusFb.LastAcceptedMovementId <> 0
+            AND GroupReadStatusFb.LastAcceptedMovementId <> PrevCompletedMovementId) THEN
+            IF (GVL.reMP_info_ridx.space() = 0) THEN
+                GVL.reMP_info_ridx.consumeTail();
+                GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+            END_IF;
+            EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+            MsgPakInfoClear(EventPacketPointer^);
+            EventPacketPointer^.ele_count := 4;
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('event'));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('name'));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('MOVE_DONE'));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('movement_id'));
+            EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := TO_LINT(GroupReadStatusFb.LastAcceptedMovementId));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('runtime_ms'));
+            EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
+            MsgPakInfoWrapup(EventPacketPointer^);
+            GVL.reMP_info_ridx.pushHead();
+            PrevCompletedMovementId := GroupReadStatusFb.LastAcceptedMovementId;
+        END_IF;
+        PrevMotionBufferSizeForEvent := MotionBufferSize;
 
         ShouldReturn := FALSE;
         CommandAck := FALSE;

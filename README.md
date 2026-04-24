@@ -103,6 +103,8 @@ id-based reply dispatcher.
 | `name` | Fields | When |
 |---|---|---|
 | `ST_CHG` | `st, st_str, from, runtime_ms` | Any FSM transition, including those triggered autonomously by the PLC (e.g., A3 heartbeat supervisor flipping to `Error`). |
+| `COORD_SET` | `runtime_ms` | `GVL.CoordSystemConfigured` goes FALSE→TRUE (after `SetCoord0`/`SetCoord1`). Lets the UI unblock G1-dependent workflows without polling. |
+| `MOVE_DONE` | `movement_id, runtime_ms` | Motion buffer drained: a queued move just finished and no more are pending. `movement_id` is `LastAcceptedMovementId`. |
 
 ### Event codes (`GA_EV`)
 
