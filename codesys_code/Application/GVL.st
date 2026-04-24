@@ -85,4 +85,33 @@ VAR_GLOBAL
 	   UI is sending motion while the PLC is still powering/homing. *)
 	GroupNotReadyNakCount : UDINT := 0;
 
+	(* --- UI heartbeat (solidification.md W1 A3).
+	   UI pings via SYS/PING every ~500ms; PLC stamps LastUiPingMs with the
+	   current RuntimeMs and bumps UiPingCount. A supervisor can later compare
+	   (RuntimeMs - LastUiPingMs) against a staleness threshold to e.g.
+	   freeze motion if the UI has gone dark mid-cycle. Diagnostic only
+	   until such a supervisor is wired. 0 = never pinged yet. *)
+	LastUiPingMs : LINT := 0;
+	UiPingCount  : UDINT := 0;
+
+	(* Supervisor threshold: once the UI has pinged at least once, if no
+	   further PING arrives within UI_HEARTBEAT_TIMEOUT_MS while the FSM is
+	   Ready, the AxisGroupSM supervisor latches an error and drives the FSM
+	   to Error (recoverable via EV_RESET -> UnInited). Zero would disable
+	   the watchdog; keep > HEARTBEAT_STALE_MS in PluginHello.tsx (currently
+	   3500ms) so the UI flags stale first, giving it a chance to reconnect
+	   before the PLC halts motion. *)
+	UI_HEARTBEAT_TIMEOUT_MS : LINT := 5000;
+	UiHeartbeatStaleCount   : UDINT := 0;
+
+	(* Post-homing coord-system gate.
+	   Clear on UnInited entry, set by SetCoord0 / SetCoord1 handlers.
+	   ProcessMotionPacket refuses G1 motion (NAK `err='coord_not_configured'`)
+	   while this is FALSE. Prevents the "forgot to set coord1 after homing and
+	   machine-coord G1 crashes into something" failure mode. Surfaced in the
+	   SYS/GET_MACHINE_STATE reply so the UI can prompt the operator on
+	   reconnect. *)
+	CoordSystemConfigured : BOOL := FALSE;
+	CoordNotConfiguredNakCount : UDINT := 0;
+
 END_VAR

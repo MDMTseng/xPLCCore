@@ -118,6 +118,15 @@ PROGRAM AxisGroupSM
 
         PrevAxisGroupState: INT := -1; // Force initial StateString update
 
+        // A2: PLC-side timeout for BLOCK_FOR_* packets.
+        // Without this a BLOCK packet sits in minfo_buf forever if the
+        // condition (motion stop / digital input) never becomes true,
+        // which hangs the UI until reconnect. Packet carries optional
+        // `timeout_ms` (absent or 0 = wait forever = legacy behavior).
+        BlockStartMs: LINT := 0;
+        BlockCommandId: DINT := 0;
+        BlockTimeoutMs: LINT := 0;
+
 
 
 
@@ -293,6 +302,18 @@ PROGRAM AxisGroupSM
             GVL.LastErrorSource := 'Supervisor:GroupReadPosition';
             GVL.LastErrorID := TO_DWORD(GroupReadPositionFb.ErrorID);
             AxisGroupManagerFb.Transition(E_RobotEvent.EV_ERROR);
+        ELSIF (AxisGroupManagerFb._eState = E_RobotState.Ready
+               AND GVL.LastUiPingMs > 0
+               AND (RuntimeMs - GVL.LastUiPingMs) > GVL.UI_HEARTBEAT_TIMEOUT_MS) THEN
+            // W1 A3 (PLC supervisor): UI went silent while we were accepting
+            // its commands. Drop to Error so MotionBufferSize freezes and any
+            // in-flight motion winds down via the Error-state GroupDisable +
+            // Reset cycle. Operator recovers via EV_RESET -> UnInited -> ...
+            // when the UI reconnects.
+            GVL.LastErrorSource := 'Supervisor:UiHeartbeatStale';
+            GVL.LastErrorID := TO_DWORD(RuntimeMs - GVL.LastUiPingMs);
+            GVL.UiHeartbeatStaleCount := GVL.UiHeartbeatStaleCount + 1;
+            AxisGroupManagerFb.Transition(E_RobotEvent.EV_ERROR);
         END_IF;
     END_IF;
 
@@ -397,6 +418,39 @@ PROGRAM AxisGroupSM
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(GVL.LastErrorSource));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_id'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.LastErrorID));
+            ELSIF (CommandType = 'PING') THEN
+                // A3: UI heartbeat. Stamp last-seen and bump counter; reply with runtime.
+                GVL.LastUiPingMs := RuntimeMs;
+                GVL.UiPingCount  := GVL.UiPingCount + 1;
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 2;
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('pong'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := TRUE);
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('runtime_ms'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := RuntimeMs);
+            ELSIF (CommandType = 'GET_MACHINE_STATE') THEN
+                // A4: Full-snapshot read for UI reconnect. Doesn't change FSM.
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                StateString := TO_STRING(AxisGroupManagerFb._eState);
+                ResponsePacketPointer^.ele_count := 8;
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('st'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := AxisGroupManagerFb._eState);
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('st_str'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(StateString));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_src'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(GVL.LastErrorSource));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_id'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.LastErrorID));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('motion_buffer_size'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := TO_LINT(MotionBufferSize));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('movement_id'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := TO_LINT(GroupReadPositionFb.MovementId));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('runtime_ms'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := RuntimeMs);
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('coord_set'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := GVL.CoordSystemConfigured);
             ELSE
                 // Unknown SYS command -- emit NAK so the TS caller doesn't hang on timeout.
                 ShouldReturn := TRUE;
@@ -768,25 +822,40 @@ PROGRAM AxisGroupSM
             MsgPakInfoClear(ResponsePacketPointer^);
 
             IF (GroupReadStatusFb.Error = TRUE OR GroupReadStatusFb.GroupErrorStop) THEN
-                ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
+                // Include an `err` string so the UI's NAK handler gets a readable
+                // reason instead of the generic "nak (id=..., cmd=...)" fallback.
+                ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 2;
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
+                IF (GroupReadStatusFb.GroupErrorStop) THEN
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('group_error_stop'));
+                ELSE
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('group_read_status_error'));
+                END_IF;
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ERROR_CODE'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := GroupReadStatusFb.ErrorID);
-
-                IF (GroupReadStatusFb.GroupErrorStop) THEN
-                    ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('MISC'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('GroupErrorStop'));
-                END_IF;
 
                 ShouldReturn := TRUE;
                 CommandAck := FALSE;
                 GVL.minfo_buf_ridx.consumeTail();
 
-            ELSIF (CommandType = 'BLOCK_FOR_MOTION_STOP') THEN
+            ELSIF (CommandType = 'BLOCK_FOR_MOTION_STOP' OR CommandType = 'WAIT_FOR_MOTION_STOP') THEN
+                // First scan we see this CommandId, latch start time and timeout.
+                IF (CommandId <> BlockCommandId) THEN
+                    BlockCommandId := CommandId;
+                    BlockStartMs := RuntimeMs;
+                    BlockTimeoutMs := MessageUnpackerFb.TryReadINT64('timeout_ms', 0);
+                END_IF;
+
                 IF (GroupReadPositionFb.MovementId = 0) THEN
                     ShouldReturn := TRUE;
                     CommandAck := TRUE;
-
+                    GVL.minfo_buf_ridx.consumeTail();
+                ELSIF (BlockTimeoutMs > 0 AND (RuntimeMs - BlockStartMs) >= BlockTimeoutMs) THEN
+                    ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('block_timeout'));
+                    ShouldReturn := TRUE;
+                    CommandAck := FALSE;
                     GVL.minfo_buf_ridx.consumeTail();
                 END_IF;
 
@@ -795,10 +864,22 @@ PROGRAM AxisGroupSM
                 InputPinGroup := TO_UINT(MessageUnpackerFb.TryReadINT64('group', 0));
                 InputPinState := TO_UINT(MessageUnpackerFb.TryReadINT64('state', 0));
 
+                IF (CommandId <> BlockCommandId) THEN
+                    BlockCommandId := CommandId;
+                    BlockStartMs := RuntimeMs;
+                    BlockTimeoutMs := MessageUnpackerFb.TryReadINT64('timeout_ms', 0);
+                END_IF;
+
                 IF DigitalInputPointer <> 0 AND ((DigitalInputPointer[InputPinGroup] AND InputPinMask) = (InputPinState AND InputPinMask)) THEN
                     ShouldReturn := TRUE;
                     CommandAck := TRUE;
-
+                    GVL.minfo_buf_ridx.consumeTail();
+                ELSIF (BlockTimeoutMs > 0 AND (RuntimeMs - BlockStartMs) >= BlockTimeoutMs) THEN
+                    ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('block_timeout'));
+                    ShouldReturn := TRUE;
+                    CommandAck := FALSE;
                     GVL.minfo_buf_ridx.consumeTail();
                 END_IF;
             ELSIF (CommandType = 'GET_DIGITAL_INPUT') THEN
@@ -878,6 +959,7 @@ PROGRAM AxisGroupSM
                 CoordTransform.B := 0.0;
                 CoordTransform.C := 0.0;
                 ApplyCoordTransform := TRUE;
+                GVL.CoordSystemConfigured := TRUE;
 
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
@@ -891,6 +973,7 @@ PROGRAM AxisGroupSM
                 CoordTransform.B := 0.0;
                 CoordTransform.C := 0.0;
                 ApplyCoordTransform := TRUE;
+                GVL.CoordSystemConfigured := TRUE;
 
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
@@ -1112,6 +1195,19 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
 
 
             ELSIF (CommandType = 'G1') THEN
+                // Post-homing coord-system gate. Refuse G1 motion until the
+                // operator has called SetCoord0 or SetCoord1 since the last
+                // UnInited entry. Prevents machine-coord crashes when the UI
+                // (or a test script) skips the SetCoord call after homing.
+                IF (NOT GVL.CoordSystemConfigured) THEN
+                    ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('coord_not_configured'));
+                    GVL.CoordNotConfiguredNakCount := GVL.CoordNotConfiguredNakCount + 1;
+                    ShouldReturn := TRUE;
+                    CommandAck := FALSE;
+                    GVL.minfo_buf_ridx.consumeTail();
+                ELSE
                 MotionPose.c.X := MessageUnpackerFb.TryReadREAL('X', MotionPose.c.X);
                 MotionPose.c.Y := MessageUnpackerFb.TryReadREAL('Y', MotionPose.c.Y);
                 MotionPose.c.Z := MessageUnpackerFb.TryReadREAL('Z', MotionPose.c.Z);
@@ -1171,6 +1267,7 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
                 ELSE
                     RetryMotionCommandCooldown := RETRY_COOLDOWN_G1_MS;
                 END_IF;
+                END_IF; // GVL.CoordSystemConfigured gate
 
             ELSIF (CommandType = 'getDigitalInputFlipCount') THEN
                 ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 2; // raw + fc

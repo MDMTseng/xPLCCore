@@ -20,6 +20,10 @@ CASE _eState OF
             GVL.LastErrorSource := '';
             GVL.LastErrorID     := 0;
 
+            // Reset the coord-system gate: after any reset, operator must
+            // re-call SetCoord0/SetCoord1 before G1 motion is accepted.
+            GVL.CoordSystemConfigured := FALSE;
+
             // Reset Group FBs
             SMC_GroupDisable(AxisGroup:=_agAxisGroup, Execute:=FALSE);
             SMC_GroupReset(AxisGroup:=_agAxisGroup, Execute:=FALSE);
@@ -176,9 +180,22 @@ CASE _eState OF
         IF(uidx=-1)THEN
             GroupPower_Flag := TRUE;
             bReelPowerReq   := TRUE;
+            // Per-axis SMC_Homing (in FB_Homing) leaves the axis group in
+            // ErrorStop once axes return to group control. Without a reset
+            // pulse here, the very first motion packet after homing hits
+            // the GroupErrorStop gate in AxisGroupSM.ProcessMotionPacket
+            // and is NAKed. Hold Execute=TRUE for stateCD scans then drop.
+            SMC_GroupReset(AxisGroup:=_agAxisGroup, Execute:=FALSE);
+            stateCD := 50;
         ELSIF(uidx=0)THEN
             GroupPower_Flag := TRUE;
             bReelPowerReq   := TRUE;
+            IF stateCD > 0 THEN
+                SMC_GroupReset(AxisGroup:=_agAxisGroup, Execute:=TRUE);
+                stateCD := stateCD - 1;
+            ELSE
+                SMC_GroupReset(AxisGroup:=_agAxisGroup, Execute:=FALSE);
+            END_IF
             IF(SMC_GroupPower_0.Error OR fbPowerReel.Error) THEN
                 IF SMC_GroupPower_0.Error THEN
                     GVL.LastErrorSource := 'Ready:SMC_GroupPower';
