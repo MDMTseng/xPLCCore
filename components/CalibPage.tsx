@@ -5,6 +5,7 @@ import { Modal } from '../Modal';
 import type { COMCtrlObj } from '../types';
 import { delay } from '../utils/async';
 import { t, type UILang } from '../i18n';
+import { useHarnessAction } from '../harness/registry';
 
 
 import { Splitter } from 'antd';
@@ -1769,6 +1770,70 @@ export const CalibPage: React.FC<{
   _this.stepMode=stepMode;
   _this.tossPauseMode=tossPauseMode;
 
+  useHarnessAction('get_running_state', () => ({
+    runningState,
+    stepMode,
+    tossPauseMode,
+    isRunning: _this.isRunning === true,
+    calibLoaded: calibParams != null,
+    packInfoString,
+    packSpeedInfo,
+    currentError: _this.current_error,
+  }), [runningState, stepMode, tossPauseMode, packInfoString, packSpeedInfo]);
+
+  useHarnessAction('set_step_mode', (payload: any) => {
+    const on = payload?.on;
+    const target = typeof on === 'boolean' ? on : !stepMode;
+    if (target === false && stepMode === true) {
+      _this.stepMode_resolve?.();
+      _this.stepMode_resolve = undefined;
+    }
+    setStepMode(target);
+    return { stepMode: target };
+  }, [stepMode]);
+
+  useHarnessAction('set_toss_pause', (payload: any) => {
+    const on = payload?.on;
+    const target = typeof on === 'boolean' ? on : !tossPauseMode;
+    if (target === false && tossPauseMode === true) {
+      _this.stepMode_resolve?.();
+      _this.stepMode_resolve = undefined;
+    }
+    setTossPauseMode(target);
+    return { tossPauseMode: target };
+  }, [tossPauseMode]);
+
+  useHarnessAction('resume_cycle', async () => {
+    let curTime = Date.now();
+    while (_this.current_error != undefined) {
+      _this.current_error = undefined;
+      await delay(500);
+      if (Date.now() - curTime > 10000) {
+        return { resumed: false, reason: 'current_error_not_clearing' };
+      }
+    }
+    setRunningState('no error');
+    _this.stepMode_resolve?.();
+    _this.stepMode_resolve = undefined;
+    return { resumed: true };
+  }, []);
+
+  useHarnessAction('run_cycle', async () => {
+    const btn = _this.runButtonEl as HTMLButtonElement | undefined;
+    if (!btn) throw new Error('run_cycle: RUN button not mounted');
+    if (_this.isRunning === true) return { started: false, reason: 'already_running' };
+    btn.click();
+    return { started: true };
+  }, []);
+
+  useHarnessAction('stop_cycle', async () => {
+    _this.run_cycle_stop = true;
+    _this.stepMode_resolve?.();
+    _this.stepMode_resolve = undefined;
+    setTimeout(() => { _this.isRunning = false; }, 3000);
+    return { stop_requested: true };
+  }, []);
+
   type PlanSegmentType = 'pack' | 'empty';
   type PlanSegment = { type: PlanSegmentType; count: number; key: string };
 
@@ -2303,9 +2368,9 @@ export const CalibPage: React.FC<{
         <Divider style={{ margin: '4px 0' }} />
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-          <button onClick={async() =>{
+          <button ref={(el) => { _this.runButtonEl = el; }} onClick={async() =>{
         _this.run_cycle_stop=false;
-        
+
         _this.current_error=undefined;
 
         let loop_count=0;

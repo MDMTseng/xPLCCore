@@ -2,6 +2,7 @@ import React, { useCallback, useState } from 'react';
 import type { COMCtrlObj } from '../types';
 import { delay } from '../utils/async';
 import { t, type UILang } from '../i18n';
+import { useHarnessAction } from '../harness/registry';
 
 import { Divider } from 'antd';
 enum PlcMotionEvent {
@@ -109,6 +110,34 @@ export const OperationPage: React.FC<{
 
 
   const sendTcpMsgPack = COMCtrlObj.sendTcpMsgPack;
+
+  useHarnessAction('get_motion_status', () => ({
+    plcMotionStatus,
+    plcLastError,
+  }), [plcMotionStatus, plcLastError]);
+
+  useHarnessAction('init_plc_motion', async (payload: any) => {
+    const loopCount = Number(payload?.loop_count ?? 20);
+    const delayMs = Number(payload?.delay_ms ?? 500);
+    setPlcLastError(null);
+    const ret = await init_plc_motion(loopCount, delayMs, (status_str: string, err_src: string, err_id: number) => {
+      setPlcMotionStatus(status_str);
+      if (err_src) setPlcLastError({ src: err_src, id: err_id });
+    });
+    return { reached_ready: ret === true };
+  }, [init_plc_motion]);
+
+  useHarnessAction('enter_error', async () => {
+    await sendTcpMsgPack({ type: 'SYS', cmd: 'GA_EV', ev: PlcMotionEvent.EV_ERROR });
+    return { sent: true };
+  }, [sendTcpMsgPack]);
+
+  useHarnessAction('ga_ev', async (payload: any) => {
+    const ev = Number(payload?.ev);
+    if (!Number.isFinite(ev)) throw new Error('ga_ev: missing numeric ev');
+    const ret = await sendTcpMsgPack({ type: 'SYS', cmd: 'GA_EV', ev });
+    return { reply: ret };
+  }, [sendTcpMsgPack]);
   return (
     <div>
       <Divider />

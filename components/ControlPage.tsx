@@ -4,6 +4,7 @@ import { CalibPage } from './CalibPage';
 import { MiscControlsPage } from './MiscControlsPage';
 import { OperationPage } from './OperationPage';
 import { t, type UILang } from '../i18n';
+import { useHarnessAction } from '../harness/registry';
 
 export const ControlPage: React.FC<{
   env_path: string,
@@ -19,8 +20,21 @@ export const ControlPage: React.FC<{
   uiLang,
 }) => {
 
-  const [tab, setTab] = useState("Welcome");
+  const [tab, setTab] = useState<"Welcome" | "Calib" | "Operation">("Welcome");
   const [plcReady, setPlcReady] = useState(false);
+
+  useHarnessAction('get_tab', () => ({ tab, plcReady, allCoreLinksConnected: true }), [tab, plcReady]);
+  useHarnessAction('set_tab', (payload: any) => {
+    const target = String(payload?.tab ?? '');
+    if (target !== 'Welcome' && target !== 'Calib' && target !== 'Operation') {
+      throw new Error(`set_tab: unknown tab '${target}'`);
+    }
+    if ((target === 'Calib' || target === 'Operation') && !plcReady) {
+      throw new Error(`set_tab: tab '${target}' requires plcReady`);
+    }
+    setTab(target);
+    return { tab: target };
+  }, [plcReady]);
   const tabs: Array<{ id: "Welcome" | "Calib" | "Operation"; label: string; subtitle: string; requiresReady: boolean }> = [
     {
       id: 'Welcome',

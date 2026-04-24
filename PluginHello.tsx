@@ -5,11 +5,12 @@ import { ControlPage } from './components/ControlPage';
 import type { COMCtrlObj } from './types';
 import { useTcpStringConnection } from './hooks/useTcpStringConnection';
 import { t, type UILang } from './i18n';
+import { hasHarnessAction, dispatchHarnessAction, listHarnessActions } from './harness/registry';
 
 // Bump when shipping changes to the TCP/msgpack dispatcher or PLC protocol.
 // Shown as a pill next to the app title so you can tell at a glance whether
 // the dev server reloaded.
-const __UI_BUILD_TAG__ = 'v0.3.0-harness';
+const __UI_BUILD_TAG__ = 'v0.4.0-harness-registry';
 
 type AppPacket = {
   tl: string;
@@ -801,7 +802,18 @@ export const PluginHello: React.FC<{
       case 'wait_ms':
         await new Promise((res) => setTimeout(res, Number(payload.ms ?? 0)));
         return { waited_ms: Number(payload.ms ?? 0) };
+      case 'list_actions':
+        return {
+          builtins: ['ping', 'get_state', 'connect_tcp', 'disconnect_tcp', 'send_tcp_msgpack', 'wait_ms', 'list_actions', 'reload'],
+          registered: listHarnessActions(),
+        };
+      case 'reload':
+        setTimeout(() => { try { window.location.reload(); } catch {} }, 50);
+        return { reloading: true };
       default:
+        if (hasHarnessAction(action)) {
+          return await dispatchHarnessAction(action, payload);
+        }
         throw new Error(`unknown harness action: ${action}`);
     }
   }, [tcpConnected, tcpHost, tcpPort, sendTcpMsgPack]);
