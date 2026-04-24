@@ -78,4 +78,11 @@ VAR_GLOBAL
 	   or TX-backpressured peer that would otherwise block the ring. *)
 	SendStallDropCount : UDINT := 0;
 
+	(* Count of motion packets NAKed because the FSM wasn't Ready when the
+	   packet was dequeued. Drives the host-authority NAK loop in the
+	   CheckAxisGroupReady block of AxisGroupSM; see solidification.md W1 A1.
+	   Diagnostic only -- sustained growth in production usually means the
+	   UI is sending motion while the PLC is still powering/homing. *)
+	GroupNotReadyNakCount : UDINT := 0;
+
 END_VAR
