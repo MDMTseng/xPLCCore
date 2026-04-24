@@ -356,6 +356,12 @@ today's code.
 [`solidification.md`](./solidification.md) (W1: A1–A4; W2: A5;
 W7: A6). Don't tackle in ID order — follow the workstream phasing.
 
+### B — Bugs discovered post-review
+
+| # | Area | Issue | Status |
+|---|---|---|---|
+| B1 | `APPs/AxisGroupSM.st` `SetCoord1` dispatch | **SetCoord1 in virtual-motors Ready state stalls Comm task for ~5s, causing A3 supervisor trip.** Reproduced 2026-04-25 via direct TCP: after driving UnInited→Ready with SetCoord1 sent immediately after, the PLC emits no replies for ~4.6s, then flushes all queued packets at once — SetCoord1 and any PINGs that landed during the stall come back NAK'd as `group_not_ready`, followed by an ST_CHG to Error with `err_src='Supervisor:UiHeartbeatStale', err_id≈5001`. Runtime clock advances normally during the stall (confirmed via `runtime_ms` in the ST_CHG and flushed pongs), so the supervisor task runs but the dispatch/Comm task is blocked. Likely cause: `SetCoordTransformFb(Execute:=TRUE, CoordSystem:=MCS)` inside the motion processing block does not terminate cleanly under SM3 virtual kinematics, blocking until supervisor trips Error, at which point the motion buffer drains. Queued PINGs getting `group_not_ready` is anomalous — PING is a SYS command and shouldn't land in the motion buffer; suggests packets received during the stall are being parked raw and then re-dispatched through the motion drain path. | **Open** — needs IDE-side investigation with online watch on `SetCoordTransformFb.Busy/Done/Error/ErrorID` at sub-second sampling. Host-side repro script at [`codesys_scripts/setcoord_repro.py`](../codesys_scripts/setcoord_repro.py). Workaround for now: don't call `SetCoord1` in virtual-motors mode; `SetCoord0` (identity transform) is expected to work but untested against this repro. |
+
 ### P3 — Readability / architecture
 
 | # | Target | Action | Status |
