@@ -436,6 +436,19 @@ export const PluginHello: React.FC<{
             // console.log("Successfully parsed object:", obj);
 
             const message = obj as any; // Cast for convenience
+
+            // Server-initiated event packets (PLC push notifications).
+            // Shape: {kind:'event', name, ...payload} -- no `id`, not matched
+            // to any request in RX_lookup. Broadcast as a window CustomEvent
+            // so interested components (ControlPage, dashboards) can react
+            // without polling GA_EV. ST_CHG is emitted on every FSM transition.
+            if (message && message.kind === 'event') {
+              try {
+                window.dispatchEvent(new CustomEvent('plc:event', { detail: message }));
+              } catch (_) {}
+              continue;
+            }
+
             if (message && message.id) {
               if (message.id in _this.RX_lookup) {
                 const entry = _this.RX_lookup[message.id];

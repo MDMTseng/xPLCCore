@@ -24,30 +24,42 @@ export const ControlPage: React.FC<{
   const [plcReady, setPlcReady] = useState(false);
   const [lastReconcile, setLastReconcile] = useState<{reason: string; at: number; snapshot: any} | null>(null);
 
-  // A4 reconciliation: on every reconnect snapshot (dispatched by PluginHello),
-  // if the PLC isn't Ready or the coord system is unconfigured, force the UI back
-  // to Welcome so the operator must re-run homing / SetCoord before entering Calib
-  // or Operation.
+  // A4 reconciliation: two event sources feed the same reconcile function.
+  //   `plc:machine-state` - full snapshot on reconnect (includes coord_set).
+  //   `plc:event`          - PLC push; ST_CHG events arrive mid-session, but
+  //                          ST_CHG payloads don't carry coord_set, so we
+  //                          treat a non-Ready transition as "move to Welcome"
+  //                          regardless of coord. Ready transitions we leave
+  //                          alone -- a later reconnect / explicit snapshot
+  //                          handles the coord-set gate.
   useEffect(() => {
-    const handler = (ev: Event) => {
-      const snap = (ev as CustomEvent).detail;
-      if (!snap) return;
-      const st = String(snap.st_str ?? '');
-      const coordSet = snap.coord_set === true;
+    const reconcile = (source: string, payload: any, hasCoord: boolean) => {
+      if (!payload) return;
+      const st = String(payload.st_str ?? '');
       let reason: string | null = null;
       if (st === 'Error') reason = 'plc_error';
       else if (st !== 'Ready') reason = 'plc_not_ready';
-      else if (!coordSet) reason = 'coord_not_configured';
+      else if (hasCoord && payload.coord_set !== true) reason = 'coord_not_configured';
       if (reason) {
         setTab('Welcome');
-        setLastReconcile({ reason, at: Date.now(), snapshot: snap });
-        console.log('[A4] ControlPage forced to Welcome:', reason, snap);
+        setLastReconcile({ reason, at: Date.now(), snapshot: payload });
+        console.log(`[A4/${source}] ControlPage forced to Welcome:`, reason, payload);
       } else {
-        setLastReconcile({ reason: 'ok', at: Date.now(), snapshot: snap });
+        setLastReconcile({ reason: 'ok', at: Date.now(), snapshot: payload });
       }
     };
-    window.addEventListener('plc:machine-state', handler as EventListener);
-    return () => window.removeEventListener('plc:machine-state', handler as EventListener);
+
+    const snapHandler = (ev: Event) => reconcile('snap', (ev as CustomEvent).detail, true);
+    const evtHandler = (ev: Event) => {
+      const msg = (ev as CustomEvent).detail;
+      if (msg && msg.name === 'ST_CHG') reconcile('stchg', msg, false);
+    };
+    window.addEventListener('plc:machine-state', snapHandler as EventListener);
+    window.addEventListener('plc:event', evtHandler as EventListener);
+    return () => {
+      window.removeEventListener('plc:machine-state', snapHandler as EventListener);
+      window.removeEventListener('plc:event', evtHandler as EventListener);
+    };
   }, []);
 
   useHarnessAction('get_tab', () => ({ tab, plcReady, allCoreLinksConnected: true, lastReconcile }), [tab, plcReady, lastReconcile]);

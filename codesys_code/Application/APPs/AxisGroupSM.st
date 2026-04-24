@@ -127,6 +127,12 @@ PROGRAM AxisGroupSM
         BlockCommandId: DINT := 0;
         BlockTimeoutMs: LINT := 0;
 
+        // Push-notification (server-initiated event) packet pointer.
+        // Used by the state-change detector to emit ST_CHG events into the
+        // reMP reply-ring so the UI learns about FSM transitions without
+        // polling GA_EV. Event packets carry `kind='event'` and no `id`.
+        EventPacketPointer: POINTER TO MsgPakInfo;
+
 
 
 
@@ -248,6 +254,33 @@ PROGRAM AxisGroupSM
         PreviousInputEvent := InputEvent;
         IF TO_INT(AxisGroupManagerFb._eState) <> PrevAxisGroupState THEN
             StateString := TO_STRING(AxisGroupManagerFb._eState);
+            // Push an ST_CHG event into the reply-ring so the UI doesn't
+            // have to poll GA_EV to learn the FSM moved. Skip PrevAxisGroupState=-1
+            // which is the cold-boot sentinel (no "from" state to report).
+            IF (PrevAxisGroupState >= 0) THEN
+                IF (GVL.reMP_info_ridx.space() = 0) THEN
+                    GVL.reMP_info_ridx.consumeTail();
+                    GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+                END_IF;
+                EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+                MsgPakInfoClear(EventPacketPointer^);
+                EventPacketPointer^.ele_count := 6;
+                EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
+                EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('event'));
+                EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('name'));
+                EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('ST_CHG'));
+                EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('st'));
+                EventPacketPointer^.whead := MessagePackerFb.PackDINT(pStart := EventPacketPointer^.whead, diValue := AxisGroupManagerFb._eState);
+                EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('st_str'));
+                EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR(StateString));
+                EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('from'));
+                EventPacketPointer^.whead := MessagePackerFb.PackDINT(pStart := EventPacketPointer^.whead, diValue := TO_DINT(PrevAxisGroupState));
+                EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('runtime_ms'));
+                EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
+                MsgPakInfoWrapup(EventPacketPointer^);
+                GVL.reMP_info_ridx.pushHead();
+                GVL.StateChangeEventCount := GVL.StateChangeEventCount + 1;
+            END_IF;
             PrevAxisGroupState := TO_INT(AxisGroupManagerFb._eState);
         END_IF;
     END_IF;
@@ -410,7 +443,11 @@ PROGRAM AxisGroupSM
                 ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := AxisGroupManagerFb._eState);
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('st_str'));
                 StateString := TO_STRING(AxisGroupManagerFb._eState);
-                PrevAxisGroupState := TO_INT(AxisGroupManagerFb._eState);
+                // NOTE: PrevAxisGroupState is intentionally NOT updated here.
+                // The ST_CHG push-event detector above at line ~255 owns that
+                // variable; pre-updating it would suppress the ST_CHG event
+                // for any transition triggered via SYS/GA_EV (verified live
+                // 2026-04-24: UnInited->Powering was silently swallowed).
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(StateString));
                 // Error latch: empty string + 0 when no error has been recorded
                 // since the last EV_RESET -> UnInited cycle.

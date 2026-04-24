@@ -114,4 +114,15 @@ VAR_GLOBAL
 	CoordSystemConfigured : BOOL := FALSE;
 	CoordNotConfiguredNakCount : UDINT := 0;
 
+	(* Server-initiated event packets (push notifications).
+	   AxisGroupSM emits an `ST_CHG` event into reMP_info_ridx on every
+	   FSM state change (detected by PrevAxisGroupState diff). Packet shape:
+	   `{kind:'event', name:'ST_CHG', st, st_str, from, runtime_ms}` with no
+	   `id` field (unsolicited). StateChangeEventCount is the diagnostic
+	   counter so we can verify the push loop is running without sniffing the
+	   socket. Events share the reply-ring with request replies; if the client
+	   is disconnected or backlogged, existing ring-overflow handling evicts
+	   the oldest, matching the reply-drop policy. *)
+	StateChangeEventCount : UDINT := 0;
+
 END_VAR
