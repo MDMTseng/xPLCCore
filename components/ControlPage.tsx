@@ -68,12 +68,9 @@ export const ControlPage: React.FC<{
     if (target !== 'Welcome' && target !== 'Calib' && target !== 'Operation') {
       throw new Error(`set_tab: unknown tab '${target}'`);
     }
-    if ((target === 'Calib' || target === 'Operation') && !plcReady) {
-      throw new Error(`set_tab: tab '${target}' requires plcReady`);
-    }
     setTab(target);
     return { tab: target };
-  }, [plcReady]);
+  }, []);
   const tabs: Array<{ id: "Welcome" | "Calib" | "Operation"; label: string; subtitle: string; requiresReady: boolean }> = [
     {
       id: 'Welcome',
