@@ -89,6 +89,14 @@ G-code motion is additionally gated by the coord system: if the host
 has not called `SetCoord0` or `SetCoord1` since the last `UnInited`
 entry, G1/G2/G3 NAK with `err:'coord_not_configured'`.
 
+Every packet may carry an optional `protocol_version` field. The
+PluginHello client stamps it automatically (currently `1`). If present
+and it disagrees with the PLC's compiled-in `GVL.PROTOCOL_VERSION`, the
+PLC NAKs with `{err:'protocol_version_mismatch', err_got:<got>, id, ack:false}`
+before any dispatch. An absent field is treated as legacy and allowed
+through so scripted tests keep working; bump both sides together when
+the wire format changes.
+
 > If you craft test packets by hand, remember **`type:"SYS"` is
 > required** for PING/GA_EV/GET_MACHINE_STATE. Without it they land
 > in the motion buffer and come back NAK'd. See

@@ -204,6 +204,11 @@ PROGRAM AxisGroupSM
 
     DBG_PIN: UINT;
 
+    // W1 A5 per-packet protocol version gate. ProtocolVersionGot=0 means
+    // absent (legacy, allowed); anything else must equal GVL.PROTOCOL_VERSION
+    // or the packet is NAK'd before dispatch.
+    ProtocolVersionGot: LINT;
+
 
     DBG_BLOCK : BOOL:=TRUE;
 
@@ -471,6 +476,40 @@ PROGRAM AxisGroupSM
             CommandId := TO_DINT(MessageUnpackerFb.TryReadINT64('id', - 1));
             PacketType := MessageUnpackerFb.TryReadString('type', '');
             CommandType := MessageUnpackerFb.TryReadString('cmd', '');
+            ProtocolVersionGot := MessageUnpackerFb.TryReadINT64('protocol_version', 0);
+
+            // W1 A5: if the client declared a version and it doesn't match,
+            // NAK before any dispatch (SYS / motion / drain paths). 0 (absent
+            // / legacy) is allowed through. This keeps scripted test helpers
+            // working while giving real clients a hard gate when we bump.
+            IF (ProtocolVersionGot <> 0 AND TO_UDINT(ProtocolVersionGot) <> GVL.PROTOCOL_VERSION) THEN
+                IF (GVL.reMP_info_ridx.space() = 0) THEN
+                    GVL.reMP_info_ridx.consumeTail();
+                    GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+                END_IF;
+                ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+                MsgPakInfoClear(ResponsePacketPointer^);
+                ResponsePacketPointer^.ele_count := 4;
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('protocol_version_mismatch'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_got'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := ProtocolVersionGot);
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('id'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := CommandId);
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := FALSE);
+                MsgPakInfoWrapup(ResponsePacketPointer^);
+                GVL.reMP_info_ridx.pushHead();
+
+                GVL.minfo_buf_ridx.consumeTail();
+                GVL.ProtocolVersionMismatchCount := GVL.ProtocolVersionMismatchCount + 1;
+
+                // Neutralise downstream dispatch: clear the fields so neither
+                // SYS branch nor motion-accept/drain picks it up this scan.
+                PacketType := '';
+                CommandType := '';
+                ResponsePacketPointer := 0;
+            END_IF;
         END_IF;
     END_IF;
 

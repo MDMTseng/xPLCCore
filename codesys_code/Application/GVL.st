@@ -125,4 +125,16 @@ VAR_GLOBAL
 	   the oldest, matching the reply-drop policy. *)
 	StateChangeEventCount : UDINT := 0;
 
+	(* W1 A5 protocol version.
+	   AxisGroupSM's packet dispatcher reads `protocol_version` off every
+	   incoming packet. If present AND different from PROTOCOL_VERSION, the
+	   packet is NAK'd with err='protocol_version_mismatch', err_got=<value>.
+	   Absent field is treated as legacy (no version) and allowed through for
+	   backward compatibility with scripted test helpers. Bump both this
+	   constant and the UI-side PROTOCOL_VERSION in PluginHello.tsx together
+	   whenever the wire format changes in a way old consumers can't handle.
+	   ProtocolVersionMismatchCount is the diagnostic counter. *)
+	PROTOCOL_VERSION : UDINT := 1;
+	ProtocolVersionMismatchCount : UDINT := 0;
+
 END_VAR

@@ -20,6 +20,12 @@ const __UI_BUILD_TAG__ = 'v0.5.0-heartbeat-reconnect';
 const HEARTBEAT_INTERVAL_MS = 1000;
 const HEARTBEAT_STALE_MS = 3500;
 
+// W1 A5 protocol version. Stamped on every outbound packet by sendTcpMsgPack.
+// PLC NAKs with err='protocol_version_mismatch' if this disagrees with its
+// compiled-in GVL.PROTOCOL_VERSION. Bump together with the PLC side whenever
+// the wire format changes in a way that old consumers can't handle.
+const PROTOCOL_VERSION = 1;
+
 type AppPacket = {
   tl: string;
   target_id: number;
@@ -597,6 +603,7 @@ export const PluginHello: React.FC<{
 
 
 
+      if (data.protocol_version === undefined) data.protocol_version = PROTOCOL_VERSION;
       const packed = encode(data) as Uint8Array;
       // Write binary MsgPack payload using Buffer from runtime
       const buf = BufferCtor ? BufferCtor.from(packed) : packed;
