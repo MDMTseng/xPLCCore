@@ -1,2 +1,17 @@
-node_modules
-build
+node_modules/
+build/
+dist/
+
+# Claude Code local state
+.claude/
+
+# CODESYS watcher runtime state (ephemeral job queue + build/status artifacts)
+codesys_scripts/build.log
+codesys_scripts/jobs/inbox/
+codesys_scripts/jobs/done/
+codesys_scripts/jobs/watcher.status
+
+# OS / editor
+Thumbs.db
+.DS_Store
+*.swp
