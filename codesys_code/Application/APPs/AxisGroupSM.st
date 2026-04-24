@@ -363,6 +363,13 @@ PROGRAM AxisGroupSM
 
         
         IF (PacketType = 'SYS') THEN
+            // reMP overflow guard: if the reply ring is full, drop the oldest
+            // queued reply to make room. getHead() returning -1 would index
+            // reMP_info_arr[-1] and fault the task. See doc/ringbuf-bugs.md #4.
+            IF (GVL.reMP_info_ridx.space() = 0) THEN
+                GVL.reMP_info_ridx.consumeTail();
+                GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+            END_IF;
             ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]); // prepare for return data buffer
 
             MsgPakInfoClear(ResponsePacketPointer^);
@@ -567,7 +574,11 @@ PROGRAM AxisGroupSM
 
 
             IF (TriggerErrorCode <> 0) THEN
-                
+                // reMP overflow guard (see doc/ringbuf-bugs.md #4).
+                IF (GVL.reMP_info_ridx.space() = 0) THEN
+                    GVL.reMP_info_ridx.consumeTail();
+                    GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+                END_IF;
                 ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]); // prepare for return data buffer
                 MsgPakInfoClear(ResponsePacketPointer^);
                 ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 3;
@@ -617,8 +628,12 @@ PROGRAM AxisGroupSM
                         IoTriggerCount := IoTriggerCount + 1;
 
                     FlyEventActType.ACK_SRC_ID://send ack with source command id
+                        // reMP overflow guard (see doc/ringbuf-bugs.md #4).
+                        IF (GVL.reMP_info_ridx.space() = 0) THEN
+                            GVL.reMP_info_ridx.consumeTail();
+                            GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+                        END_IF;
 
-                        
                         ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]); // prepare for return data buffer
                         MsgPakInfoClear(ResponsePacketPointer^);
 
@@ -712,6 +727,11 @@ PROGRAM AxisGroupSM
             ShouldReturn := FALSE;
             CommandAck := FALSE;
 
+            // reMP overflow guard (see doc/ringbuf-bugs.md #4).
+            IF (GVL.reMP_info_ridx.space() = 0) THEN
+                GVL.reMP_info_ridx.consumeTail();
+                GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+            END_IF;
             ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]); // prepare for return data buffer
             MsgPakInfoClear(ResponsePacketPointer^);
 

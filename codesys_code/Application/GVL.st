@@ -58,4 +58,18 @@ VAR_GLOBAL
 	LastBusRestartMs       : LINT := 0;
 	BUS_RESTART_COOLDOWN_MS : LINT := 30000;
 
+	(* --- Ring-buffer safety (ringbuf-bugs.md, Bundle 1).
+	   Slots in minfo_buf / aux*_info_buf are 256 bytes: 1 length byte +
+	   255 payload. Anything over MAX_SLOT_PAYLOAD would wrap via
+	   DINT_TO_BYTE and silently corrupt the slot, so the TCP ingress drops
+	   the packet and bumps OverlenDropCount instead.
+	   ReMpDropCount counts reply-ring (reMP_info_ridx) drops: when the
+	   ring is full, the oldest queued reply is consumed to make room.
+	   Both counters are diagnostic only -- sustained growth means the
+	   client is slower than the PLC can pack, or something is spamming
+	   oversized packets. *)
+	MAX_SLOT_PAYLOAD : DINT := 255;
+	OverlenDropCount : UDINT := 0;
+	ReMpDropCount    : UDINT := 0;
+
 END_VAR
