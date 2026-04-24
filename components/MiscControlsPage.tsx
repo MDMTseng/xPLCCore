@@ -38,8 +38,9 @@ export const MiscControlsPage: React.FC<{
 
 }) => {
   const [plcMotionStatus, setPlcMotionStatus] = useState("None");
+  const [plcLastError, setPlcLastError] = useState<{src: string, id: number} | null>(null);
   const [isJoggingModalOpen, setIsJoggingModalOpen] = useState(false);
-  const init_plc_motion = useCallback(async (loop_count: number = 20, delay_ms: number = 500,latest_state_cb:(status_str:string)=>void) => {
+  const init_plc_motion = useCallback(async (loop_count: number = 20, delay_ms: number = 500,latest_state_cb:(status_str:string, err_src:string, err_id:number)=>void) => {
     let event = PlcMotionEvent.EV_NONE;
     let Counter = 0;
     while (true) {//feed event to enter ready state
@@ -53,7 +54,11 @@ export const MiscControlsPage: React.FC<{
       event = PlcMotionEvent.EV_NONE;
       console.log(retInfo)
       let status_str = retInfo['st_str'];
-      latest_state_cb(status_str);
+      // err_src/err_id: published by the PLC on every SYS/GA_EV reply; cleared
+      // on UnInited entry, so capture it the scan we see it.
+      const err_src: string = retInfo['err_src'] ?? '';
+      const err_id: number = retInfo['err_id'] ?? 0;
+      latest_state_cb(status_str, err_src, err_id);
       if (status_str == "Powered") {
         event = PlcMotionEvent.EV_GROUP_ENABLE
       }
@@ -135,6 +140,23 @@ export const MiscControlsPage: React.FC<{
           </span>
         </div>
 
+        {plcLastError && (
+          <div
+            style={{
+              marginTop: 10,
+              border: '1px solid #fca5a5',
+              borderRadius: 10,
+              padding: '8px 10px',
+              background: '#fef2f2',
+              color: '#991b1b',
+              fontSize: 12,
+              fontWeight: 600,
+            }}
+          >
+            Last error: {plcLastError.src} (id={plcLastError.id})
+          </div>
+        )}
+
         <div
           style={{
             marginTop: 12,
@@ -162,9 +184,13 @@ export const MiscControlsPage: React.FC<{
               cursor: 'pointer',
             }}
             onClick={async () => {
-              let ret = await init_plc_motion(30, 500, (status_str: string) => {
-                console.log(status_str);
+              setPlcLastError(null);
+              let ret = await init_plc_motion(30, 500, (status_str: string, err_src: string, err_id: number) => {
+                console.log(status_str, err_src, err_id);
                 setPlcMotionStatus(status_str);
+                // Latch the last non-empty error so it stays visible after the
+                // auto EV_RESET clears GVL.LastErrorSource on UnInited entry.
+                if (err_src) setPlcLastError({ src: err_src, id: err_id });
               });
               if (ret === true) {
                 onPlcReadyChange?.(true);
