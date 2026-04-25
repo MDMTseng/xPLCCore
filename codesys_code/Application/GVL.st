@@ -137,4 +137,16 @@ VAR_GLOBAL
 	PROTOCOL_VERSION : UDINT := 1;
 	ProtocolVersionMismatchCount : UDINT := 0;
 
+	(* TCP server stability counters (FB_TcpMsgPakServer).
+	   IdleResetCount: connection forced to reset because no bytes arrived
+	   for IDLE_TIMEOUT while CLIENT.xActive=TRUE -- catches half-open
+	   sockets after host crash / cable yank where the peer never sends
+	   FIN/RST. Without the reset, the single-connection slot stays
+	   occupied and the next host can't reconnect.
+	   ReadErrorResetCount, ParserErrorResetCount: existing reset triggers
+	   that previously had no diagnostic surface. *)
+	IdleResetCount         : UDINT := 0;
+	ReadErrorResetCount    : UDINT := 0;
+	ParserErrorResetCount  : UDINT := 0;
+
 END_VAR

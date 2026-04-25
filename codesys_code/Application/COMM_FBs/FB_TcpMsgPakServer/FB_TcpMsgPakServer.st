@@ -20,7 +20,7 @@ END_VAR
 
 VAR CONSTANT
     MAX_BUFFER_SIZE         : UDINT := 2048;
-    IDLE_TIMEOUT            : TIME  := T#10S;  // Reset connection if no bytes received for this duration (handles cable unplug / silent crash).
+    IDLE_TIMEOUT            : TIME  := T#7S;   // Reset connection if no bytes received for this duration (handles cable unplug / silent crash). Sized > AxisGroupSM A3 supervisor (5s) so the FSM trips Error first; just after, this reclaims the socket so a new host can reconnect without waiting for a TCP keepalive.
 END_VAR
 
 VAR
@@ -85,12 +85,16 @@ IF (xLastConnectionActive AND NOT CLIENT.xActive) OR CLIENT.xError THEN
     xResetConnection := TRUE;
 END_IF
 
-// Idle watchdog — detects silent disconnections (cable unplug, client crash without RST).
-// The timer is fed whenever bytes arrive. If IDLE_TIMEOUT elapses with an active but silent
-// connection, it is treated the same as any other disconnection.
+// Idle watchdog -- detects silent disconnections (cable unplug, client crash
+// without RST, frozen renderer). The timer is fed whenever bytes arrive.
+// If IDLE_TIMEOUT elapses with the socket still reporting xActive=TRUE,
+// force a reset so the single-connection slot is released for the next host.
+// AxisGroupSM's A3 heartbeat supervisor trips Error before this fires (5s
+// vs 7s) so the FSM is already safely halted by the time the socket churns.
 fbIdleWatchdog(IN := CLIENT.xActive AND NOT xResetConnection, PT := IDLE_TIMEOUT);
-IF fbIdleWatchdog.Q THEN
-    //xResetConnection := TRUE;
+IF fbIdleWatchdog.Q AND NOT xResetConnection THEN
+    xResetConnection := TRUE;
+    GVL.IdleResetCount := GVL.IdleResetCount + 1;
 END_IF
 
 // --- 4. Connection reset state machine ---
@@ -143,6 +147,9 @@ IF PKT_ALLOW_NEXT THEN
             udiCount => udiBytesReceived
         );
         IF eReadErrorID <> NBS.ERROR.NO_ERROR THEN
+            IF NOT xResetConnection THEN
+                GVL.ReadErrorResetCount := GVL.ReadErrorResetCount + 1;
+            END_IF;
             xResetConnection := TRUE;
         ELSIF udiBytesReceived > 0 THEN
             fbIdleWatchdog(IN := FALSE);  // Feed the watchdog — connection is alive.
@@ -159,6 +166,9 @@ IF PKT_ALLOW_NEXT THEN
             fbMsgPakParser(in_byte := tmpParserPtr[iParseIdx]);
 
             IF fbMsgPakParser.e_error <> E_MsgPakLevelParser_ERROR.NONE THEN
+                IF NOT xResetConnection THEN
+                    GVL.ParserErrorResetCount := GVL.ParserErrorResetCount + 1;
+                END_IF;
                 xResetConnection := TRUE;
                 EXIT;
             END_IF
