@@ -10,6 +10,8 @@ codesys_scripts/build.log
 codesys_scripts/jobs/inbox/
 codesys_scripts/jobs/done/
 codesys_scripts/jobs/watcher.status
+codesys_scripts/jobs/daemon.status
+codesys_scripts/jobs/daemon.rpc.log
 
 # OS / editor
 Thumbs.db
