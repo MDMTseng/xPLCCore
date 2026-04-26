@@ -6,6 +6,10 @@ file organizes the work by **outcome across both sides**, not by
 
 Per-side detail still lives in:
 
+- [`architecture.md`](./architecture.md) — **integrated snapshot of
+  what the system is right now** (component map, concurrency, safety
+  contract, generic-PLC principle, diagnostic surfaces). Read this
+  first if you're new to the tree.
 - [`plc.md`](./plc.md) — PLC item
   tables (P0–P3, A1–A6) + machine sequence + timing diagram.
 - [`calibpage.md`](./calibpage.md) — renderer
@@ -50,7 +54,7 @@ the machine stays in a known-safe state and resumes cleanly.
 | PLC | Protocol version field enforced; NAK mismatched version | new, see W3 | **Done 2026-04-25** — PLC reads `protocol_version` off every packet; if present and != `GVL.PROTOCOL_VERSION` (currently 1), packet is NAK'd pre-dispatch with `err='protocol_version_mismatch', err_got=<got>`. Absent is legacy-allowed. Host half: `PluginHello.sendTcpMsgPack` stamps `protocol_version: 1` on every outbound packet. Counter: `GVL.ProtocolVersionMismatchCount`. |
 | Host | Heartbeat tx (every N ms, interval TBD — probably 200 ms) | A3 (host half) | **Done 2026-04-24** — 1s interval, 3.5s stale threshold, exposed via `get_heartbeat_status` harness action. Interval can be tuned by adjusting `HEARTBEAT_INTERVAL_MS` / `HEARTBEAT_STALE_MS` in `PluginHello.tsx`. |
 | Host | On reconnect: query `GET_MACHINE_STATE`, reconcile renderer state, resume or prompt operator | A4 (host half) | **Done 2026-04-24** — snapshot auto-fetched on reconnect, cached in `lastMachineSnapshotRef`, broadcast on `window` as `plc:machine-state` event. `ControlPage` force-routes tab to `Welcome` when `st_str != 'Ready'` or `coord_set=false`. Reconcile result exposed via `get_tab` harness action as `lastReconcile`. |
-| Host | Delete host-side checks that the PLC now enforces | — | Open |
+| Host | Delete host-side checks that the PLC now enforces | — | **Done 2026-04-26** — `init_plc_motion` leans on `CoordSystemConfigured` being PLC-enforced (no host-side coord guard); `BLOCK_FOR_MOTION_STOP` aliases `WAIT_FOR_MOTION_STOP` so the host doesn't need a name shim; group-not-ready handling moved to PLC NAK. **Audit sweep (2026-04-26):** grepped for `coord_set` / `CoordSet` / `isReady` / `group_ready` / `GroupEnabled` / connection guards. Findings: all remaining host state checks are either (a) UI affordance (`ControlPage.tsx` tab disable + reconcile-to-Welcome banner — display-only, doesn't replace PLC enforcement), (b) host driving the start sequence forward (`init_plc_motion`'s event walker), (c) renderer-internal locks (`isRunning`, `BurnRunning`, `calibParams==null`), or (d) liveness on the host's own sockets (`tcpConnected`, `tcp2Status`). No dead enforcement-duplicate guards remain. |
 
 **Acceptance tests:**
 
@@ -68,29 +72,28 @@ the machine stays in a known-safe state and resumes cleanly.
 
 ---
 
-### W2 — Material-flow autonomy
+### W2 — Material-flow autonomy ~~(deferred)~~ **Rejected 2026-04-25**
 
-**Outcome:** low-material detection and recovery don't depend on a
-healthy renderer loop.
+**Status: rejected.** The user wants the PLC to stay generic — motion,
+IO, safety supervisors only. Material-flow is domain/business logic
+and belongs in the renderer. The renderer-side watchdog at
+[CalibPage.tsx:809](../components/CalibPage.tsx#L809) stays.
 
-| Side | Item | Ref |
-|---|---|---|
-| PLC | Watch `ReelLacking` input; auto-transition to `WaitingForMaterial` at safe pause point | A5 (PLC half) |
-| PLC | `FEED` command, only accepted in `WaitingForMaterial`; transitions back to `Ready` on success | A5 (PLC half) |
-| PLC | Timeout in `WaitingForMaterial` — stays parked, doesn't fault | A5 |
-| Host | Delete renderer-side input watchdog loop ([CalibPage.tsx:809](../components/CalibPage.tsx#L809)); replace with "when PLC state = WaitingForMaterial, send FEED" | solidify.md #5 (supersedes) |
-| Host | Show `WaitingForMaterial` clearly in UI with operator-clear error strings | depends on W5 |
+Tradeoff accepted: if the renderer dies, material flow stops. The
+W1 host-authority safety contract still ensures the *machine* stays
+safe (PLC's heartbeat supervisor halts motion when UI goes silent),
+which is what matters. "Material won't be fed without a live UI" is
+a known operational constraint, not a safety issue.
 
-**Acceptance tests:**
+If we ever revisit, the original sketch was:
+- PLC watches `ReelLacking` input, auto-transitions to a
+  `WaitingForMaterial` state at a safe pause point.
+- New `FEED` command, only accepted in `WaitingForMaterial`,
+  transitions back to `Ready` on success.
+- Renderer becomes the FEED issuer, not the watchdog.
 
-- Physically block the feeder output while running; machine pauses
-  at a clean stop, UI shows "waiting for material," no motion
-  fault.
-- Clear blockage; UI confirms `FEED` issued; machine resumes; no
-  loss of reel position or `movement_id` continuity.
-
-**Dependencies:** W1 (needs heartbeat + reconnect before we can
-trust state to be recoverable).
+Don't pick this up without revisiting the generic-PLC preference
+first.
 
 ---
 
@@ -102,12 +105,13 @@ runtime-NAK on the other.
 
 | Side | Item | Ref |
 |---|---|---|
-| Shared | `protocol.md` — authoritative list of commands, params, return shapes. Lives in repo root. | new |
-| Shared | Version field in envelope (both send + check) | used by W1 |
-| Host | `protocol.ts` — typed builders (`cmd.G1({X, Y, Z, A})`, etc.) for every command in `protocol.md`. Replace renderer's hand-built MsgPack literals. | new, complements solidify.md #2 |
-| PLC | Commands listed in `protocol.md` ↔ ST dispatcher in sync. Walk the dispatch chain, diff against `protocol.md`, fix mismatches. | P3 #13 (partially) |
-| PLC | Dispatcher NAKs unknown commands cleanly with a diagnostic response (not silent drop). | new |
-| PLC | MsgPack library correctness + symmetry fixes (Phase A/B in [`msgpack.md`](./msgpack.md)). Needed before the protocol tightens — today `map 32` / `array 32` / `bin` / `ext` are silent footguns on the read side. | msgpack.md Phase A–B |
+| Shared | [`protocol.md`](./protocol.md) — authoritative list of commands, params, return shapes, error strings, push events. | **Done 2026-04-26** |
+| Shared | Version field in envelope (both send + check) | **Done 2026-04-25** (W1 A5) |
+| Host | [`lib/protocol.ts`](../lib/protocol.ts) — typed builders (`cmd.G1({X, Y, Z, A})`, etc.) for every command in `protocol.md`. | **Done 2026-04-26** — module published, all current commands covered. Builder return type now carries a phantom reply-shape (`Envelope<R>`); opt-in `send<R>(fn, env)` helper recovers typed replies (e.g. `await send(sendTcpMsgPack, cmd.GetMachineState())` → `MachineState`). Plain `await sendTcpMsgPack(cmd.X(...))` calls continue to work unchanged. |
+| Host | Replace every `sendTcpMsgPack({...literal...})` call with `cmd.X(...)`. Grep for raw MsgPack object literals returns empty. | **Done 2026-04-26** — all active call sites migrated across `CalibPage.tsx`, `MiscControlsPage.tsx`, `OperationPage.tsx`, `JoggingPad.tsx`, `PluginHello.tsx`, `DiagPanel.tsx`. Remaining literal matches are in JSX block comments only. `tsc --noEmit` clean. |
+| PLC | Commands listed in `protocol.md` ↔ ST dispatcher in sync. | **Done 2026-04-26** — table cross-checked against `AxisGroupSM.st` while writing protocol.md. |
+| PLC | Dispatcher NAKs unknown commands cleanly with a diagnostic response (not silent drop). | **Done 2026-04-25** (`missing_type_field` for missing `type`; generic `ack:false` for unknown `cmd`). |
+| PLC | MsgPack library correctness + symmetry fixes (Phase A/B in [`msgpack.md`](./msgpack.md)). | **Done 2026-04-26** — UnpackNext/SkipValue bounds-checked, PackLINT compact. |
 
 **Acceptance tests:**
 
@@ -130,15 +134,15 @@ state machine. Cycle time unchanged.
 
 | Side | Item | Ref |
 |---|---|---|
-| Host | Extract named step functions (triggers return Promises) | solidify.md #1 |
-| Host | `trig(cam, light, opts)` helper wrapping M4 bitmask | #2 |
-| Host | Type `_this` ref | #3 |
-| Host | `Number.isNaN` cleanup | #4 |
-| Host | Input watchdog → standalone (interim before W2 deletes it) | #5 |
-| Host | Config extraction (`IO_Pins`, check IDs, locations) | #6 |
-| Host | Delete commented-out experiments | #7 |
-| Host | Data-drive NG classification | #8 |
-| Host | State machine rewrite | #9 |
+| Host | Extract named step functions (triggers return Promises) | solidify.md #1 — Open. Structural refactor of ~2400-line `runAllObjects`; needs cycle-time baseline on hardware before pulling stages out. |
+| Host | `trig(cam, light, opts)` helper wrapping M4 bitmask | #2 — **Done 2026-04-26**. `camTrig(camPinIdx, lightPinIdx, opts)` in `CalibPage.tsx`; 4 static cam+light sites migrated. 3 dynamic-mask sites compose pin masks at runtime, left in-place. |
+| Host | Type `_this` ref | #3 — **Done 2026-04-26**. `RunCtx` type at `CalibPage.tsx`; covers loop control, vision-handoff promises, production-plan walker, throughput counters, revisit state, jog helper. Index signature retained for ad-hoc debug fields. |
+| Host | `Number.isNaN` cleanup | #4 — **Done 2026-04-26**. Replaced 5 `x==x`/`x!=x` patterns with explicit `Number.isNaN(x)`. |
+| Host | Input watchdog → standalone (interim before W2 deletes it) | #5 — **Done 2026-04-26**. Extracted from anonymous IIFE into named local `inputWatchdog()`. Same call shape (`inputWatchdog()` invoked once at start of run). |
+| Host | Config extraction (`IO_Pins`, check IDs, locations) | #6 — **Done 2026-04-26**. Module-scope: `IO_Pins as const`, `FFeederCheckID/SideCheckID/BTMCheckID/TOPCheckID`, `SAFE_Z`, `OBJECT_HEIGHT`, `PICK_Z_LIFT`, `INSP/SLOT/TOSS_0/1/2/WAIT_FLEXFEEDER` locations under shared `XYZ` type. |
+| Host | Delete commented-out experiments | #7 — Open. Deferred: repo not under version control, bulk deletion is irreversible; needs explicit go-ahead. |
+| Host | Data-drive NG classification | #8 — Open. Needs NG-taxonomy decision (which codes, retry vs. abort vs. operator-prompt). Blocks W5 SQLite schema. |
+| Host | State machine rewrite | #9 — Open. Gates Phase 4. Needs cycle-time baseline on hardware as the acceptance criterion. |
 | PLC | Nothing direct. But stages #1 and #8 may expose gaps in what the PLC currently reports — add readbacks as needed. | — |
 
 **Acceptance tests:**
@@ -165,8 +169,10 @@ doing, what it did, and why it rejected parts. No more guessing.
 | Host | Structured logging wrapper (cycle / state / level tags) → JSON lines on disk. Kill `console.log`. | new |
 | Host | Live counters panel: pack count, NG by reason, recent cycle-time trend. | new |
 | Host | i18n: Chinese strings in control flow ([CalibPage.tsx:854](../components/CalibPage.tsx#L854)) become IDs; UI translates. | new |
-| PLC | Expose error detail in `GET_MACHINE_STATE` (axis that faulted, SMC error code). Today errors are "Error state" with no categorization. | follow-on from W1 A4 |
-| PLC | Optional: push structured events on state change instead of host polling. Not required; cheaper than every-N-ms polls. | optional |
+| PLC | Expose error detail in `GET_MACHINE_STATE` (axis that faulted, SMC error code). Today errors are "Error state" with no categorization. | **Partial 2026-04-25** — added `axes_err_mask` (bit i = axis i `bError`) and `axes_state` (packed `nAxisState` per axis) to the SYS/`GET_MACHINE_STATE` reply. UI can now identify which axis faulted. **Open follow-on:** SMC error code per axis — `nErrorID`/`LastError` are not exposed on this DS402 drive type (verified via probe); needs either drive-specific SDO reads or per-axis `MC_ReadAxisError` FB instances. |
+| PLC | Optional: push structured events on state change instead of host polling. Not required; cheaper than every-N-ms polls. | **Done 2026-04-25** — `ST_CHG`, `COORD_SET`, `MOVE_DONE` server-push events emitted into `reMP_info_ridx` with the same envelope (`kind:'event', name, ..., runtime_ms`). Host dispatches via `window` `plc:event`. |
+| PLC | `SYS/GET_DIAG` — single-call dump of comm-stability counters for UI dashboard | **Done 2026-04-26** — 17-field reply (drop/NAK/reset counters + `ping_max_gap_ms`). Resettable via `SYS/RESET_DBG_INFO`. |
+| Host | UI diagnostic panel that polls `GET_DIAG` and surfaces drop/NAK/reset counters + Δ/poll | **Done 2026-04-26** — `components/DiagPanel.tsx` mounted at the bottom of the Welcome tab (MiscControlsPage). Toggleable poll (500ms / 1s / 2s / 5s), warn-coloring on non-zero drop/NAK/reset rows, manual refresh + reset-counters buttons. |
 
 **Acceptance tests:**
 
@@ -213,9 +219,9 @@ integration is an explicit decision.
 
 | Side | Item | Ref |
 |---|---|---|
-| Shared | `vision_contract.md` — who decides pass/fail, who owns part-ID, who commands the bin actuator, trigger timing tolerances. | codesys_code/README.md A6 |
-| Host | Today's flow documented as-is first. | new |
-| Future | Possibly direct vision ↔ PLC M4 triggers for sub-cycle latency. Decide based on measurement. | deferred |
+| Shared | [`vision_contract.md`](./vision_contract.md) — who decides pass/fail, who owns part-ID, who commands the bin actuator, trigger timing tolerances. | **Phase-1 done 2026-04-26** — as-is documented (channels, IDs, trigger timing diagram, pass/fail interpretation, bin path). Open questions section enumerates what's still unanswered. |
+| Host | Today's flow documented as-is first. | **Done 2026-04-26** — see vision_contract.md sections 1–6. |
+| ~~Future~~ | ~~Possibly direct vision ↔ PLC M4 triggers for sub-cycle latency.~~ | **Rejected 2026-04-26** — PLC stays vision-blind; vision must route through the host. Same generic-PLC reasoning as W2. |
 
 **Acceptance tests:**
 
