@@ -1,14 +1,19 @@
 # CalibPage solidification plan
 
-Findings from a review of [CalibPage.tsx](../components/CalibPage.tsx) (3088 lines, single
+Findings from a review of [CalibPage.tsx](../components/CalibPage.tsx) (~3200 lines, single
 component, `runAllObjects` ~1000 lines of nested closures). This file is
 the working list for making the main loop less clunky without changing
 runtime behavior. Update the **Status** column as items land.
 
 Scope: the renderer-side main production loop. PLC, vision, and
 architecture decisions are out of scope — see
-[`plc.md`](./plc.md) and chat
-history.
+[`plc.md`](./plc.md), [`vision_contract.md`](./vision_contract.md),
+[`architecture.md`](./architecture.md), and chat history.
+
+PLC command literals in this file are now built via the typed
+`cmd.*` builders from [`lib/protocol.ts`](../lib/protocol.ts)
+(`cmd.G1({...})`, `cmd.M4({...})`, etc.). Hand-rolled `{type:'M', cmd:...}`
+literals should not appear in new code.
 
 ---
 
@@ -74,14 +79,14 @@ to.
 
 | # | Fix | Risk | Payoff | Status |
 |---|---|---|---|---|
-| 1 | **Extract named step functions.** `pickFromFeeder`, `inspectSide`, `inspectBottom`, `inspectTopSlot`, `evaluateInspection`, `placeOrReject`. Closure-captured locals become explicit parameters. Main loop shrinks from ~550 lines to ~60. | Low (mechanical cut-and-paste) | Huge | Open |
-| 2 | **`trig(cam, light, opts)` helper** wrapping the `M4` bitmask soup for camera+light pulses. One function, all call sites use it. | Low | High | Open |
-| 3 | **Type the `_this` ref.** `type RunCtx = { isRunning: boolean; runCycleStop: boolean; currentError?: {...} }` and `useRef<RunCtx>({...})`. Catches half the latent bugs just by typing. | Low | Medium | Open |
-| 4 | **Replace `x !== x` with `Number.isNaN(x)`** (3 occurrences). | Zero | Readability | Open |
-| 5 | **Split input watchdog into a standalone function** returning `{ stop(), latest() }`. Use `AbortController` or returned closure instead of `_this.run_cycle_stop`. Note: long-term this watchdog should move into the PLC (see [`plc.md`](./plc.md) item A5); the renderer-side split is an interim cleanup. | Low-medium | Medium | Open |
-| 6 | **Move `IO_Pins`, check IDs, `tossLocation_*`, `safe_z`, `inspLocation_withObject` to a `constants.ts`** with `as const`. Kills magic scattered across the file. | Low | Medium | Open |
-| 7 | **Delete or archive commented-out experiments.** Git remembers if you need them. | Zero | Readability | Open |
-| 8 | **Data-drive NG classification.** Single `evaluateInspection(results): { ok: true } \| { ok: false, reason: string, bin: TossLocation }`. Replaces scattered `tossReasons.push + ETC_NG_Location = ...`. | Medium | High (this is where bugs hide) | Open |
+| 1 | **Extract named step functions.** `pickFromFeeder`, `inspectSide`, `inspectBottom`, `inspectTopSlot`, `evaluateInspection`, `placeOrReject`. Closure-captured locals become explicit parameters. Main loop shrinks from ~550 lines to ~60. | Low (mechanical cut-and-paste) | Huge | Open (refactor — held) |
+| 2 | **`camTrig(cam, light, opts)` helper** wrapping the `M4` bitmask soup for camera+light pulses. One function, all call sites use it. | Low | High | **Done 2026-04-26** |
+| 3 | **Type the `_this` ref.** `type RunCtx = { isRunning: boolean; runCycleStop: boolean; currentError?: {...} }` and `useRef<RunCtx>({...})`. Catches half the latent bugs just by typing. | Low | Medium | **Done 2026-04-26** |
+| 4 | **Replace `x !== x` with `Number.isNaN(x)`**. | Zero | Readability | **Done 2026-04-26** |
+| 5 | **Split input watchdog into a standalone function.** Lifted out of the IIFE into a named `inputWatchdog()` async function; stop signal still rides on `_this.run_cycle_stop` for now. Long-term this watchdog should move into the PLC (see [`plc.md`](./plc.md) item A5). | Low-medium | Medium | **Done 2026-04-26** (renderer-side lift) |
+| 6 | **Unify location/IO constants.** Toss / wait / safe-Z locations now share a single `XYZ` type and module-scope `const` declarations; check IDs are module-scope. Extraction into a separate `constants.ts` file is still open. | Low | Medium | **Partial 2026-04-26** (in-file unified; separate file deferred) |
+| 7 | **Delete or archive commented-out experiments.** Removed `VP_regTcpMsgPromise`, `number2bitString`, `postInspPromise`, dead `Flex`/`Splitter`/`PointXYZA` imports/types, and unused `let X = await Y` capture sites. | Zero | Readability | **Done 2026-04-26** |
+| 8 | **Data-drive NG classification.** Single `evaluateInspection(results): { ok: true } \| { ok: false, reason: string, bin: TossLocation }`. Replaces scattered `tossReasons.push + ETC_NG_Location = ...`. | Medium | High (this is where bugs hide) | Open (needs product input on taxonomy) |
 | 9 | **Reducer / explicit state-machine rewrite** of the main loop. Biggest payoff, biggest disruption. Do not attempt until #1–#8 are done — by then the right state shape is obvious instead of guessed. | High | Huge, later | Deferred |
 
 ---
@@ -130,4 +135,9 @@ async function inspectBottom(): Promise<BtmData> {
 
 ## Recently completed
 
-_(empty — add entries here as fixes land)_
+- **2026-04-26** — Fixes #2, #3, #4, #5, #7 landed; #6 partial (in-file
+  unified, separate constants module deferred). All call sites of
+  hand-rolled `{type:'M', cmd:...}` in CalibPage now route through
+  `cmd.*` builders from [`lib/protocol.ts`](../lib/protocol.ts).
+  Camera+light strobe pulses go through the new `camTrig(camPin,
+  lightPin, opts)` helper. `npx tsc --noEmit` clean throughout.

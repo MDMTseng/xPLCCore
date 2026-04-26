@@ -7,13 +7,18 @@ math, push/consume returns) is correct; the holes are all in the usage.
 Severity ordering is by blast radius (silent corruption > client hang >
 latent crash > cleanup).
 
+> **Drift note (2026-04-26):** AxisGroupSM.st has grown substantially
+> since this doc was written; the file:line citations below are stale
+> and need re-verification before acting on any item. Some fixes have
+> landed in-tree (e.g. the SYS-dispatcher path of #4 now has the overflow
+> guard at [AxisGroupSM.st:555-558](../codesys_code/Application/APPs/AxisGroupSM.st#L555),
+> bumping `GVL.ReMpDropCount`). A full audit pass is W7 work.
+
 ## High
 
 ### 1. 255-byte payload silent truncation
-**Where:** Every producer that writes a length byte into slot[0]:
-- `Application/APPs/TCP_MSGPAK_Server.st:119` (minfo)
-- `Application/APPs/TCP_MSGPAK_Server.st:76, 85, 94` (aux0/1/2)
-- `Application/APPs/TCP_Server.st:173` (minfo)
+**Where:** Producer that writes a length byte into slot[0]:
+- [`TCP_MSGPAK_Server.st:140`](../codesys_code/Application/APPs/TCP_MSGPAK_Server.st#L140) (the only remaining `tmp_ptr[0] := DINT_TO_BYTE(...)` site as of 2026-04-26 — aux paths and `TCP_Server.st` are no longer wired)
 
 All do `tmp_ptr[0] := DINT_TO_BYTE(curPacketLen)` with no range check.
 Slot capacity is 256 bytes (1 len + 255 data). Packets > 255 bytes wrap
@@ -43,8 +48,12 @@ accepting AUX packets even when aux rings are full, which feeds #2.
 the NAK in #2 so AUX backpressure surfaces to the client.
 
 ### 4. `reMP_info_ridx` overflow is silent AND pre-indexes via getHead()
-**Where:** Every `pushHead()` on the reply ring:
-- `Application/APPs/AxisGroupSM.st:413, 511, 586, 641, 1153`
+**Where:** Every `getHead()`-then-pushHead pair on the reply ring. As of
+2026-04-26 there are 12 such sites in AxisGroupSM.st (lines 302, 333,
+469, 528, 559, 751, 783, 877, 913, 996, 1051, 1177). Status varies:
+the SYS-dispatcher site at [line 559](../codesys_code/Application/APPs/AxisGroupSM.st#L559)
+is preceded by an explicit `space()=0 → consumeTail()` guard ([553-558](../codesys_code/Application/APPs/AxisGroupSM.st#L553));
+the others have not been individually audited.
 
 Each callsite does
 ```

@@ -152,18 +152,18 @@ Leverage ÷ risk. Stop-the-world issues first, structural last.
 
 | # | Fix | Risk | Payoff | Status |
 |---|---|---|---|---|
-| 1 | **Add `map 32` / `array 32` branches to `FindValueByPath`** (finding #2). Mirror the `SkipValue` layout. Without this, any large-container payload is silently unreadable by path. | Low | High | Open |
-| 2 | **Add `bin` / `ext` advancement in `UnpackNext`** (finding #5). Even if we don't plan to use them, the parser must not desync on them. Return `MP_UNKNOWN` but advance `pCurrent` past the payload. | Low | High | Open |
-| 3 | **Bounds-check length fields** in `UnpackNext` and `SkipValue` (finding #6). One helper `CheckRemaining(pPos, need): BOOL` called before each length-prefixed advance. | Low | High | Open |
-| 4 | **Compact integer encoding in `PackDINT` / `PackLINT`** (finding #12). Route through a single `PackInt(LINT)` that picks fixint / int 8 / 16 / 32 / 64. Strict decoders stop misbehaving; bandwidth drops. | Low-medium | Medium | Open |
-| 5 | **Add `array 32` / `map 32` and `str 32` to the packers** (finding #13, #16). Symmetric to #1. | Low | Medium | Open |
+| 1 | **Add `map 32` / `array 32` branches to `FindValueByPath`** (finding #2). Mirror the `SkipValue` layout. Without this, any large-container payload is silently unreadable by path. | Low | High | **Done (pre-2026-04-26)** — `FindValueByPath` already handles `16#DF` (map 32) and `16#DD` (array 32) at lines 47–52, 96–101, with a `> 16#FFFF` cap. |
+| 2 | **Add `bin` / `ext` advancement in `UnpackNext`** (finding #5). Even if we don't plan to use them, the parser must not desync on them. Return `MP_UNKNOWN` but advance `pCurrent` past the payload. | Low | High | **Done (pre-2026-04-26)** — `UnpackNext` handles `16#C4–C6` (bin), `16#D4–D8` (fixext), `16#C7–C9` (ext) and emits `MP_BINARY`. `SkipValue` covers the same set. |
+| 3 | **Bounds-check length fields** in `UnpackNext` and `SkipValue` (finding #6). One helper `CheckRemaining(pPos, need): BOOL` called before each length-prefixed advance. | Low | High | **Done 2026-04-26** — every length-driven advance (str 8/16/32, fixstr, bin 8/16/32, ext 8/16/32) in both `UnpackNext` and `SkipValue` now clamps `udiLength` against `(pStart + udiSize) - pPos` before advancing. Inlined the `if-clamp` pattern (no helper) to keep call-site obvious. |
+| 4 | **Compact integer encoding in `PackDINT` / `PackLINT`** (finding #12). Route through a single `PackInt(LINT)` that picks fixint / int 8 / 16 / 32 / 64. Strict decoders stop misbehaving; bandwidth drops. | Low-medium | Medium | **Done 2026-04-26** — `PackDINT` already compact (fixint / int 8 / 16 / 32). `PackLINT` rewritten to mirror it (fixint / int 8 / 16 / 32 / 64). No shared helper; both files own the same ladder so each can be read in isolation. Verified live (GET_DIAG round-trip OK after change). |
+| 5 | **Add `array 32` / `map 32` and `str 32` to the packers** (finding #13, #16). Symmetric to #1. | Low | Medium | Open — `PackArrayHeader` / `PackMapHeader` signatures take `UINT` (caps at 65535); needs widening to UDINT to support `16#DD` / `16#DF`. `PackString` similarly caps at 65535 (no `16#DB`). All breaking signature changes, defer with #10. |
 | 6 | **Unify the marker-dispatch ladder** (finding #1). Extract a `DecodeScalar(pPos, OUT eKind, OUT liValue, OUT rValue, OUT pStr, OUT uiLen, OUT udiAdvance): BOOL` primitive. `TryReadREAL` / `INT64` / `UINT64` become thin casts. `UnpackNext` delegates. One source of truth for marker parsing. | Medium | High | Open |
 | 7 | **Consistent truncation/error contract** (finding #7). Pick one: NAK-equivalent (return FALSE and a reason) vs. silent-default. My pick: every `TryRead*` that hit a too-big/wrong-type returns the supplied `default` *and* sets an `eLastError` on the FB the caller can inspect. | Medium | Medium | Open |
 | 8 | **Pointer-level key-match in `FindValueByPath`** (finding #3). Replace the temp-FB + string-copy with `KeyEquals(pPos, sKey): BOOL`. Wins map-read cost and removes the reason for finding #9. | Medium | Medium | Open |
 | 9 | **Cursor API on maps / arrays** (finding #4). `BeginMap(sPath): BOOL` + `NextField(OUT pKey, OUT pValue): BOOL`. Optional, but the W3 protocol rewrite will appreciate it when we start having records with 10+ fields. | Medium | Medium | Deferred until W3 |
 | 10 | **Buffer-size on `Pack*`** (finding #14). Breaking signature change. Do it once, together, with a `TCtx_Packer` record holding `pCur, pEnd, bOverflow`. Chain calls become `ctx.PackDINT(x); ctx.PackString(s)`. | Medium | High (safety) | Open |
-| 11 | **Delete dead code + fix typos** (findings #17, #18). | Zero | Readability | Open |
-| 12 | **Round-trip test FB** (finding #20). `FB_MsgPackTests` with a dozen pack→unpack→verify cases, runnable from PLC_PRG on demand. Gates every future change. | Low | High | Open |
+| 11 | **Delete dead code + fix typos** (findings #17, #18). | Zero | Readability | **Done 2026-04-26** — `SwapREAL.st` removed (PackREAL uses `Swap32To` directly); `PackDINT` doc comment was already corrected in the compact-encoding rewrite. |
+| 12 | **Round-trip test FB** (finding #20). `FB_MsgPackTests` with a dozen pack→unpack→verify cases, runnable from PLC_PRG on demand. Gates every future change. | Low | High | Open — `FB_MsgPackTests` exists ([GVL.st:28](../codesys_code/Application/GVL.st#L28) `bRunMsgPackTests`) but the test set isn't comprehensive yet. Belongs before #6/#10. |
 
 ---
 
@@ -201,4 +201,13 @@ Wait until W3 (`protocol.md`) clarifies the record shapes.
 
 ## Recently completed
 
-_(empty — add entries here as fixes land)_
+- **2026-04-26** — Phase A landed: #1 (`map 32`/`array 32` in
+  `FindValueByPath`), #2 (`bin`/`ext` advance in `UnpackNext`), #3
+  (length-bounds clamp in `UnpackNext` + `SkipValue`), #11
+  (`SwapREAL.st` deleted, `PackDINT` doc typo fixed). Phase B partial:
+  #4 (`PackDINT` + `PackLINT` compact encoding mirroring fixint /
+  int 8 / 16 / 32 / 64). Verified live with `GET_DIAG` round-trip.
+  Wire format unchanged from the host's perspective (host's
+  `@msgpack/msgpack` already accepted both compact and overlong forms).
+- **Status table embeds per-row landing dates** for the Phase A/B items
+  above; this section is the rolled-up summary.
