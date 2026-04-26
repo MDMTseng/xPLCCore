@@ -2,16 +2,13 @@ METHOD consumeTail : BOOL
 VAR_INPUT
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
-    // Check for initialization and if there are items to consume
-    IF (_count = 0) THEN
-        consumeTail := FALSE; // Cannot consume, buffer is empty or not ready
+    IF size() = 0 THEN
+        consumeTail := FALSE; // Buffer empty
         RETURN;
     END_IF;
-    
-    // Advance the tail pointer, wrapping around if necessary
-    _tail := (_tail + 1) MOD _capacity;
-    
-    // Decrement the number of items in the buffer
-    _count := _count - 1;
-    
+
+    // Consumer-only write; producer observes the new tail and learns a
+    // slot freed up.
+    _tail := (_tail + 1) MOD _cap2;
+
     consumeTail := TRUE;

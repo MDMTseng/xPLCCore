@@ -14,11 +14,30 @@
                 |           |
              Oldest Data   Next Write Slot
 
-    - Empty State: The internal count of elements is 0.
-    - Full State:  The internal count of elements equals the buffer's capacity.
+    SPSC lock-free safety (added 2026-04-27):
+    - Producer task is the only writer of _head (via pushHead).
+    - Consumer task is the only writer of _tail (via consumeTail).
+    - size() / space() are *derived* from _head and _tail; no _count
+      RMW that both sides would race on.
+    - _head / _tail count modulo (2 * _capacity) to disambiguate empty
+      from full without sacrificing a slot. Slot index is recovered as
+      (_head MOD _capacity) / (_tail MOD _capacity).
+    - UINT reads/writes are single-instruction on the underlying CPU
+      (16-bit aligned), so a stale cross-task read produces a
+      conservative miss (false-full at the producer, false-empty at the
+      consumer) that self-corrects on the next scan.
+    - clear() writes both _head and _tail and is therefore NOT
+      preemption-safe; only call it from a single-task context (init or
+      offline-only), never from inside a producer/consumer loop.
 
-    Author:         Gemini
-    Version:        1.0
+    NOT MPSC-safe: if two tasks both push (or both consume) on the same
+    instance, getHead() can return the same slot to both producers and
+    pushHead() can race on _head. The reMP_info_ridx in this project is
+    pushed from both AxisGroupSM (replies) and TCP_MSGPAK_Server (AUX
+    acks); see doc/ringbuf-bugs.md for the open MPSC item.
+
+    Author:         Gemini (initial), refactored to SPSC lock-free 2026-04-27
+    Version:        2.0
 *)
 FUNCTION_BLOCK FB_RingBufferIndex
 VAR_INPUT
@@ -26,10 +45,11 @@ END_VAR
 VAR_OUTPUT
 END_VAR
 VAR
-    // Internal state variables
-    _head           : UINT:=0;   // Index for the next write operation
-    _tail           : UINT:=0;   // Index for the next read operation
-    _capacity       : UINT:=0;   // Total size of the buffer, set by init()
-    _count          : UINT:=0;   // Current number of items in the buffer
+    // Internal state variables. _head is producer-owned; _tail is
+    // consumer-owned. Each is updated by a single task only.
+    _head           : UINT := 0;   // Next write position, mod _cap2.
+    _tail           : UINT := 0;   // Next read position,  mod _cap2.
+    _capacity       : UINT := 0;   // User-visible capacity (set by init()).
+    _cap2           : UINT := 0;   // _capacity * 2, precomputed for size math.
 END_VAR
 (* =========== IMPLEMENTATION =========== *)

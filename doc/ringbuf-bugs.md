@@ -5,9 +5,11 @@ callsites around `FB_RingBufferIndex`. The FB itself (head/tail/count wrap
 math, push/consume returns) is correct; the holes are all in the usage.
 
 > **Status sweep 2026-04-27:** all High items closed; #5/#6 closed by POU
-> deletion; #7/#8 closed in [TCP_MSGPAK_Server.st](../codesys_code/Application/APPs/TCP_MSGPAK_Server.st).
+> deletion; #7/#8 closed in [TCP_MSGPAK_Server.st](../codesys_code/Application/APPs/TCP_MSGPAK_Server.st);
+> #11 closed by SPSC lock-free refactor of FB_RingBufferIndex.
 > Remaining open: #3 (closed-with-rationale), #9 (defensive-only, no fix
-> needed), #10 (observation). See per-item notes for current state.
+> needed), #10 (observation), **#12 reMP MPSC race (new, deferred)**.
+> See per-item notes for current state.
 
 ## High
 
@@ -83,6 +85,49 @@ existing -1 makes misuse instantly diagnosable.
 by either `space() > 0` or an explicit overflow path that
 `consumeTail()`s the oldest entry first. Grep
 `getHead\(\)` to audit.
+
+### 11. `FB_RingBufferIndex` had a cross-task `_count` race — **Closed 2026-04-27**
+The original implementation stored `_count : UINT` and both
+`pushHead` (producer task) and `consumeTail` (consumer task)
+read-modify-wrote it. EC_Task (prio 0) preempts Comm task (prio 20),
+so a `_count := _count + 1` could land between Comm's
+`_count := _count - 1` load and store, losing the decrement (or
+gaining a phantom item). Window is small (a few CPU instructions per
+RMW) which is why the bug never surfaced in production.
+
+**Fix:** dropped `_count` entirely. `size()` is now derived from
+`_head`/`_tail`, with each side counting modulo `2 * _capacity` so
+empty (`head == tail`) and full (`size == capacity`) are
+unambiguous. Each task writes only its own pointer; UINT writes are
+atomic on the underlying CPU, so a stale cross-task read produces a
+conservative miss (false-full / false-empty) that self-corrects on the
+next scan. See [FB_RingBufferIndex.st](../codesys_code/Application/COMM_FBs/FB_RingBufferIndex/FB_RingBufferIndex.st)
+header for the full SPSC argument.
+
+`clear()` writes both pointers and is **not** preemption-safe — only
+call it from a single-task context. The legacy in-loop `clear()` in
+the AxisGroupSM not-Ready drain was already removed when that path
+became per-packet NAK.
+
+### 12. `reMP_info_ridx` is MPSC, FB only guarantees SPSC — **Open**
+Both `AxisGroupSM` (replies) and `TCP_MSGPAK_Server` (AUX acks) call
+`pushHead` on the same `reMP_info_ridx` instance. The lock-free FB
+fix (#11) is SPSC-only: two concurrent `pushHead`s can both
+`getHead()` the same slot index and the second `_head` advance can
+land before the first, producing a torn slot or a lost packet. Same
+window as #11 (a few instructions); never observed live, but real.
+
+**Fix options** (all defer-worthy until measured):
+- Give `TCP_MSGPAK_Server` its own `aux_reply_ridx`; the send loop
+  drains both rings each scan. Comm task becomes sole producer of
+  `aux_reply` and sole consumer of both. AxisGroupSM stays sole
+  producer of `reMP_info_ridx`. Both pure SPSC.
+- Move AUX-ack staging into AxisGroupSM via a Comm→EC handoff ring
+  (also SPSC). Adds one EC scan of latency.
+- Disable preemption around `pushHead`; CODESYS doesn't expose a
+  clean lightweight mutex for this.
+
+Pick when this becomes load-bearing or when AUX traffic ramps up.
 
 ### 10. Ring capacities — **Observation only**
 minfo=6, aux[0..2]=6, reply=32. 32-slot reply ring measured to absorb
