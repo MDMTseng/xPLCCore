@@ -242,16 +242,16 @@ PROGRAM AxisGroupSM
     // quickly while something downstream blocks).
     GVL.AxisGroupSMScans := GVL.AxisGroupSMScans + 1;
 
-    // Per-axis SourceErrorID latch (W5 PLC half follow-on). Cyclic copy so
-    // GET_MACHINE_STATE stays a pure read. ErrorIdent.SourceErrorID is the
-    // standard SM3 diagnostic field; verify online via
-    // probe_axis_errorident.py before deploying. If the field name turns
-    // out to differ on this drive type, only these four assignments need
-    // editing -- the GVL storage and the wire packing stay the same.
-    GVL.LastAxesErrorIDs[0] := IoConfig_Globals.EAxis0.ErrorIdent.SourceErrorID;
-    GVL.LastAxesErrorIDs[1] := IoConfig_Globals.EAxis1.ErrorIdent.SourceErrorID;
-    GVL.LastAxesErrorIDs[2] := IoConfig_Globals.EAxis2.ErrorIdent.SourceErrorID;
-    GVL.LastAxesErrorIDs[3] := reelpullmotor.ErrorIdent.SourceErrorID;
+    // Per-axis drive-interface error latch (W5 PLC half follow-on).
+    // Cyclic copy so GET_MACHINE_STATE stays a pure read. Field probed
+    // live: ErrorIdent.* doesn't exist on SM_Drive_GenericDSP402;
+    // uiDriveInterfaceError is the DS402 fault-code mirror and is the
+    // only diagnostic field that resolves on these axes. See
+    // codesys_scripts/jobs/templates/probe_axis_errorident2.py.
+    GVL.LastAxesErrorIDs[0] := IoConfig_Globals.EAxis0.uiDriveInterfaceError;
+    GVL.LastAxesErrorIDs[1] := IoConfig_Globals.EAxis1.uiDriveInterfaceError;
+    GVL.LastAxesErrorIDs[2] := IoConfig_Globals.EAxis2.uiDriveInterfaceError;
+    GVL.LastAxesErrorIDs[3] := reelpullmotor.uiDriveInterfaceError;
 
     //InitRuntime();
     IF TRUE THEN
@@ -657,15 +657,16 @@ PROGRAM AxisGroupSM
                     OR (TO_DINT(IoConfig_Globals.EAxis1.nAxisState) * 256)
                     OR (TO_DINT(IoConfig_Globals.EAxis2.nAxisState) * 65536)
                     OR (TO_DINT(reelpullmotor.nAxisState) * 16777216));
-                // axes_err_id : msgpack array of 4 DWORDs (SM3 SourceErrorID
-                // per axis, latched cyclically into GVL.LastAxesErrorIDs).
-                // Same axis ordering as axes_err_mask bits 0..3.
+                // axes_err_id : msgpack array of 4 ints (DS402
+                // uiDriveInterfaceError per axis, latched cyclically into
+                // GVL.LastAxesErrorIDs). Same axis ordering as axes_err_mask
+                // bits 0..3. UINT zero-extends cleanly into DINT for wire.
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('axes_err_id'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackArrayHeader(pStart := ResponsePacketPointer^.whead, uiCount := 4);
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.LastAxesErrorIDs[0]));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.LastAxesErrorIDs[1]));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.LastAxesErrorIDs[2]));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.LastAxesErrorIDs[3]));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := UINT_TO_DINT(GVL.LastAxesErrorIDs[0]));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := UINT_TO_DINT(GVL.LastAxesErrorIDs[1]));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := UINT_TO_DINT(GVL.LastAxesErrorIDs[2]));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := UINT_TO_DINT(GVL.LastAxesErrorIDs[3]));
             ELSIF (CommandType = 'RESET_DBG_INFO') THEN
                 // SYS-side reset: clears comm-stability counters without
                 // requiring FSM=Ready (the motion-side RESET_DBG_INFO at the

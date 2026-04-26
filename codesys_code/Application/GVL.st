@@ -180,17 +180,24 @@ VAR_GLOBAL
 	DBG_SetCoordLastErrorID       : DWORD := 0;
 	DBG_SetCoordExecuteFallMs     : LINT := 0;
 
-	(* Per-axis SourceErrorID latch. Cyclic-side reader in AxisGroupSM copies
-	   `<axis>.ErrorIdent.SourceErrorID` once per scan into this array so the
-	   pure-read GET_MACHINE_STATE handler can return per-axis diagnostic
-	   codes without itself touching the axis FBs. Index layout matches the
-	   bit layout of `axes_err_mask`:
+	(* Per-axis DS402 drive-interface error latch. Cyclic-side reader in
+	   AxisGroupSM copies `<axis>.uiDriveInterfaceError` once per scan into
+	   this array so the pure-read GET_MACHINE_STATE handler can return
+	   per-axis diagnostic codes without touching the axis FBs.
+
+	   Field choice (probed live 2026-04-27 via probe_axis_errorident*.py):
+	   ErrorIdent.* (the SM3 generic struct) does not resolve on these
+	   SM_Drive_GenericDSP402 axes; uiDriveInterfaceError is the DS402
+	   drive-interface error mirror and is the only real diagnostic-code
+	   field that exists on this drive type. wCommunicationState also
+	   resolves but is a state code, not a fault code.
+
+	   Index layout matches the bit layout of axes_err_mask:
 	     [0] = IoConfig_Globals.EAxis0
 	     [1] = IoConfig_Globals.EAxis1
 	     [2] = IoConfig_Globals.EAxis2
 	     [3] = reelpullmotor
-	   0 = no fault since clear (matches SM3 semantics). Verify via
-	   probe_axis_errorident.py before trusting the values in production. *)
-	LastAxesErrorIDs : ARRAY[0..3] OF DWORD;
+	   0 = no fault. *)
+	LastAxesErrorIDs : ARRAY[0..3] OF UINT;
 
 END_VAR
