@@ -1,14 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Divider, Flex, Popconfirm, Popover, Typography } from 'antd';
+import { Button, Divider, Popconfirm, Popover, Typography } from 'antd';
 import { JoggingPad } from '../JoggingPad';
 import { Modal } from '../Modal';
 import type { COMCtrlObj } from '../types';
 import { delay } from '../utils/async';
 import { t, type UILang } from '../i18n';
 import { useHarnessAction } from '../harness/registry';
+import { cmd } from '../lib/protocol';
 
 
-import { Splitter } from 'antd';
 import {
   buildCalibrationModel,
   predictRobotCoordinates,
@@ -19,33 +19,66 @@ import {
 const fsPromises = (window as any).require('fs/promises');
 
 
-let IO_Pins={
-  I:{
-    ReelLacking:8,//256
-    PackedReelNoProtrusion:11,//2048
-    ReelTapeHTension:9,//512
-    ReelPressRollerInPlace:10,//1024
-
+// Module-scope config. `as const` keeps the literal types so `IO_Pins.O.X`
+// is `number` (specifically the literal), not widened. Single source of
+// truth for the I/O bitmap; if you add a pin, add it here, not at the
+// call site.
+const IO_Pins = {
+  I: {
+    ReelLacking: 8,                 // 256
+    PackedReelNoProtrusion: 11,     // 2048
+    ReelTapeHTension: 9,            // 512
+    ReelPressRollerInPlace: 10,     // 1024
   },
-  O:{
-    Nozzle_suck:0,
-    Nozzle_blow:1,
-
-    CAM_Top_SideLight:3,
-    FlexVib_brake:5,
-    ReelAdv:6,
-    ReelWheelFeed:7,
-
-    CAM_Side:8,
-    CAM_Side_Light0:9,
-    CAM_Btm:10,
-    CAM_Btm_Light0:11,
-    CAM_FlexFeeder:12,
-    CAM_FlexFeeder_Light0:13,
-    CAM_Top:14,
-    CAM_Top_Light0:15,
+  O: {
+    Nozzle_suck: 0,
+    Nozzle_blow: 1,
+    CAM_Top_SideLight: 3,
+    FlexVib_brake: 5,
+    ReelAdv: 6,
+    ReelWheelFeed: 7,
+    CAM_Side: 8,
+    CAM_Side_Light0: 9,
+    CAM_Btm: 10,
+    CAM_Btm_Light0: 11,
+    CAM_FlexFeeder: 12,
+    CAM_FlexFeeder_Light0: 13,
+    CAM_Top: 14,
+    CAM_Top_Light0: 15,
   },
+} as const;
+
+// Vision check IDs — match the IDs the vision plugin replies with.
+const FFeederCheckID = 104500;
+const SideCheckID    = 114500;
+const BTMCheckID     = 124500;
+const TOPCheckID     = 134500;
+
+// Cartesian setpoints (mm). Calibrated for the current cell layout; if
+// the machine is repositioned, recalibrate and update here.
+const SAFE_Z = 12;
+const OBJECT_HEIGHT = 2.4 + 1;
+const PICK_Z_LIFT = 2.2;
+
+// camTrig — camera+light strobe pulse. Both pins go high simultaneously,
+// PLC auto-resets after reset_ms. Always strobes for the same duration on
+// both channels, matching the strobe-driver hardware.
+function camTrig(camPinIdx: number, lightPinIdx: number, opts: {
+  reset_ms: number;
+  motion_progress?: number;
+  motion_id_offset?: number;
+}) {
+  const mask = (1 << camPinIdx) | (1 << lightPinIdx);
+  return cmd.M4({ pin: mask, state: mask, ...opts });
 }
+
+type XYZ = { X: number; Y: number; Z: number };
+const INSP_LOCATION: XYZ = { X: 15.618, Y: 10.330, Z: 0.7 + 0.4 };
+const SLOT_LOCATION: XYZ = { X: 41.7,   Y: -79.752, Z: -11.400 };
+const TOSS_LOCATION_0: XYZ = { X: -61.074, Y: 60.775, Z: 9 };
+const TOSS_LOCATION_1: XYZ = { X: -31,     Y: 8.7,    Z: 5 };
+const TOSS_LOCATION_2: XYZ = { X: -63.321, Y: 9.870,  Z: 5 };
+const WAIT_FLEXFEEDER_LOCATION: XYZ = { X: -46.350, Y: 30.181, Z: SAFE_Z };
 
 
 
@@ -66,7 +99,51 @@ export const CalibPage: React.FC<{
   const [isJoggingModalOpen, setIsJoggingModalOpen] = useState(false);
   const [latestObjArr, setLatestObjArr] = useState<{x:number,y:number,angle_deg:number,surround_clear:number,center_clear:number}[]>([]);
   const [calibParams, setCalibParams] = useState<CalibrationParameters | null>(null);
-  const _this = useRef<any>({}).current;
+  // RunCtx — mutable scratch shared across the runAllObjects pipeline,
+  // input watchdog, and harness callbacks. Lives outside React state on
+  // purpose: most fields are write-then-read inside a single async tick
+  // and don't drive renders. Anything that DOES drive UI goes through
+  // setState; this ref only holds in-flight loop state.
+  type RunCtx = {
+    // Loop control
+    isRunning?: boolean;
+    run_cycle_stop?: boolean;
+    current_error?: { errorString: string; raw?: any; fc?: any } | undefined;
+    BurnRunning?: boolean;
+    BurnRunningStopTrigger?: boolean;
+    runButtonEl?: HTMLElement | null;
+    stepMode?: boolean;
+    tossPauseMode?: boolean;
+    stepMode_resolve?: ((value?: any) => void) | undefined;
+    // Vision-result handoff (Promise pendings filled by RX callback)
+    FFeederCheckData_Promise?: { resolve: (v: any) => void; reject: (e: any) => void };
+    TOPCheckData?: any;
+    TOPCheckData_Promise?: { resolve: (v: any) => void; reject: (e: any) => void };
+    SideCheckData?: any;
+    SideCheckData_Promise?: { resolve: (v: any) => void; reject: (e: any) => void };
+    BTMCheckData?: any;
+    BTMCheckData_Promise?: { resolve: (v: any) => void; reject: (e: any) => void };
+    // Production-plan walker (initialised before the loop reads them).
+    production_plan?: number[];
+    production_plan_original?: number[];
+    production_plan_stageIndex?: number;
+    // Throughput / counters
+    lastPackCount?: number;
+    packCountOffset?: number;
+    packTimestamps?: number[];
+    speedStartTime?: number;
+    // Revisit (manual recheck) state
+    revisit_idx?: number;
+    revisit_obj_idx?: number;
+    SL_sens_alpha?: number;
+    // Jogging helper (set in MiscControlsPage but typed here so the
+    // shared shape is single-source)
+    jog_base_location?: any;
+    // Catch-all for adhoc debug fields used in commented experiments;
+    // remove once those are deleted (W4 #7).
+    [k: string]: any;
+  };
+  const _this = useRef<RunCtx>({}).current;
   const sendTcpMsgPack = COMCtrlObj.sendTcpMsgPack;
   const VP_sendTcpMsgPack = COMCtrlObj.VP_sendTcpMsgPack;
   const FlexVibCtrl = COMCtrlObj.FlexVibCtrl;
@@ -80,10 +157,7 @@ export const CalibPage: React.FC<{
 
   const [stepMode, setStepMode] = useState<boolean>(false);
   const [tossPauseMode, setTossPauseMode] = useState<boolean>(false);
-  let FFeederCheckID=104500;
-  let SideCheckID=114500;
-  let BTMCheckID=124500;
-  let TOPCheckID=134500;
+  // Check IDs are now module-level constants (FFeederCheckID, etc.).
 
   const loadCalibData = useCallback(async () => {
     const filePath = `${env_path}/calib.json`;
@@ -190,16 +264,20 @@ export const CalibPage: React.FC<{
   let dea = acc
 
   let cor = 45
-  let safe_z = 12;
-  let objectHeight = 2.4+1;
-
-  //objectHeight=2;
+  // Cartesian setpoints come from module-scope constants now (W4 #6).
+  // Local aliases preserve the existing names so the body of this
+  // function reads the same.
+  const safe_z = SAFE_Z;
+  const objectHeight = OBJECT_HEIGHT;
+  const pickZ_lift = PICK_Z_LIFT;
+  const inspLocation = INSP_LOCATION;
+  const inspLocation_withObject = { ...inspLocation, Z: inspLocation.Z + objectHeight };
+  const slotLocation = SLOT_LOCATION;
+  const tossLocation_0 = TOSS_LOCATION_0;
+  const tossLocation_1 = TOSS_LOCATION_1;
 
   function getFeedSpeedConfig(speed:number=25){
-
-
     let jerk = speed * 400
-
     let acc = speed * 100
     let dea = acc
     return {
@@ -210,22 +288,13 @@ export const CalibPage: React.FC<{
     }
   }
 
-  
-  let inspLocation = {X: 15.618, Y: 10.330, Z: 0.7+0.4};
-  let pickZ_lift=2.2;
-  let inspLocation_withObject = {...inspLocation,Z:inspLocation.Z+objectHeight};
-  let slotLocation = {X: 41.7, Y: -79.752, Z: -11.400};
-  
-  let tossLocation_0 = {X: -61.074, Y: 60.775,Z:9};
-  let tossLocation_1 = {X: -31, Y: 8.7,Z:5};
-  let tossLocation_2 = {X: -63.321, Y: 9.870, Z:5};
+  const tossLocation_2 = TOSS_LOCATION_2;
 
-  let wait_flexfeeder_location={X: -46.350, Y: 30.181, Z: safe_z};
+  const wait_flexfeeder_location = WAIT_FLEXFEEDER_LOCATION;
 
 
   
   type PointXYZ={X:number,Y:number,Z:number};
-  type PointXYZA=PointXYZ & {A:number};
 
   let objn00_location:PointXYZ={...slotLocation};
   let objn10_location:PointXYZ={...slotLocation,X: -39.466, Y: -81.380};
@@ -402,25 +471,6 @@ export const CalibPage: React.FC<{
   //     "mmpp": 0.012407
   // }
 
-  const VP_regTcpMsgPromise=async(id:number,timeout:number=5000):Promise<any>=>{
-    let promise=new Promise((resolve,reject)=>{
-      COMCtrlObj.VP_regTcpMsgCB(id,undefined);
-      COMCtrlObj.VP_regTcpMsgCB(id, (data: any) => {
-        
-      COMCtrlObj.VP_regTcpMsgCB(id,undefined);
-        resolve(data);
-      });
-  
-      setTimeout(()=>{
-        reject(new Error("Timeout"));
-      },timeout);
-    });
-
-    return promise;
-  }
- 
-
-  
   type NozzleCheckData={status:number,obj_pose:{x:number,y:number,ang:number,status:number},nozzle_pose:{x:number,y:number,ang:number,status:number},mmpp:number};
   const checkNozzleLocation=async(offset:{X:number,Y:number}={X:0,Y:0}):Promise<NozzleCheckData>=>{
 
@@ -429,18 +479,18 @@ export const CalibPage: React.FC<{
 
 
     //move to safe_z
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z,"A":0,F:speed,Cor:cor,ACC:acc,DEA:dea,JERK:jerk })
+    await sendTcpMsgPack(cmd.G1({ "Z": safe_z,"A":0,F:speed,Cor:cor,ACC:acc,DEA:dea,JERK:jerk }))
     //move to inspLocation
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X": inspLocation.X+offset.X,"Y":inspLocation.Y+offset.Y,"A":0 })
+    await sendTcpMsgPack(cmd.G1({ "X": inspLocation.X+offset.X,"Y":inspLocation.Y+offset.Y,"A":0 }))
 
     //drop Z to inspLocation.Z
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z":inspLocation.Z,"A":0 })
+    await sendTcpMsgPack(cmd.G1({ "Z":inspLocation.Z,"A":0 }))
     
-    await sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.CAM_Btm_Light0|1<<IO_Pins.O.CAM_Btm, "state": 1<<IO_Pins.O.CAM_Btm_Light0|1<<IO_Pins.O.CAM_Btm, reset_ms:50 })
-    sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.001 })
+    await sendTcpMsgPack(camTrig(IO_Pins.O.CAM_Btm, IO_Pins.O.CAM_Btm_Light0, { reset_ms: 50 }))
+    sendTcpMsgPack(cmd.G4(0.001))
 
     // safeZ
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z,"A":0 })
+    await sendTcpMsgPack(cmd.G1({ "Z": safe_z,"A":0 }))
 
 
     return await rep_promise as NozzleCheckData;
@@ -453,12 +503,12 @@ export const CalibPage: React.FC<{
 
     //move to safe_z
     let mult=0.1;
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z,"A":0,F:speed*mult,Cor:cor*mult,ACC:acc*mult,DEA:dea*mult,JERK:jerk*mult })
+    await sendTcpMsgPack(cmd.G1({ "Z": safe_z,"A":0,F:speed*mult,Cor:cor*mult,ACC:acc*mult,DEA:dea*mult,JERK:jerk*mult }))
     //move to inspLocation
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X": slotLocation.X,"Y":slotLocation.Y,"A":0 })
+    await sendTcpMsgPack(cmd.G1({ "X": slotLocation.X,"Y":slotLocation.Y,"A":0 }))
 
     //drop Z to inspLocation.Z
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z":slotLocation.Z,"A":0 })
+    await sendTcpMsgPack(cmd.G1({ "Z":slotLocation.Z,"A":0 }))
     
     // safeZ
     // await sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 2 })
@@ -483,7 +533,7 @@ export const CalibPage: React.FC<{
       let scale=1.0;
 
       let R=100*scale;
-      await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z,"A":0,F:speed*mult,Cor:R*10,ACC:acc*mult,DEA:dea*mult,JERK:jerk*mult })
+      await sendTcpMsgPack(cmd.G1({ "Z": safe_z,"A":0,F:speed*mult,Cor:R*10,ACC:acc*mult,DEA:dea*mult,JERK:jerk*mult }))
       
   
       for(let i=0;_this.BurnRunningStopTrigger==false;i++){
@@ -495,10 +545,10 @@ export const CalibPage: React.FC<{
         let loc2={X: R*Math.cos(theta), Y: R*Math.sin(theta)};
   
   
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X": loc0.X,"Y":loc0.Y})
+        await sendTcpMsgPack(cmd.G1({ "X": loc0.X,"Y":loc0.Y}))
   
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X": loc1.X,"Y":loc1.Y})
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X": loc2.X,"Y":loc2.Y})
+        await sendTcpMsgPack(cmd.G1({ "X": loc1.X,"Y":loc1.Y}))
+        await sendTcpMsgPack(cmd.G1({ "X": loc2.X,"Y":loc2.Y}))
   
         
         //await delay(500);
@@ -508,7 +558,7 @@ export const CalibPage: React.FC<{
     else
     {
       mult=0.7;
-      await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z,"A":0,F:speed*mult,Cor:15,ACC:acc*mult,DEA:dea*mult,JERK:jerk*mult })
+      await sendTcpMsgPack(cmd.G1({ "Z": safe_z,"A":0,F:speed*mult,Cor:15,ACC:acc*mult,DEA:dea*mult,JERK:jerk*mult }))
       for(let i=0;_this.BurnRunningStopTrigger==false;i++){
         //move to safe_z
         let scale=Math.random()*0.7+0.3;
@@ -527,20 +577,20 @@ export const CalibPage: React.FC<{
     
         }
   
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X": loc1.X,"Y":loc1.Y})
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z":slotLocation.Z})
-        await sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.01 })
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z":safe_z })
+        await sendTcpMsgPack(cmd.G1({ "X": loc1.X,"Y":loc1.Y}))
+        await sendTcpMsgPack(cmd.G1({ "Z":slotLocation.Z}))
+        await sendTcpMsgPack(cmd.G4(0.01))
+        await sendTcpMsgPack(cmd.G1({ "Z":safe_z }))
   
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X": loc2.X,"Y":loc2.Y})
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z":slotLocation.Z})
-        await sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.01 })
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z":safe_z })
+        await sendTcpMsgPack(cmd.G1({ "X": loc2.X,"Y":loc2.Y}))
+        await sendTcpMsgPack(cmd.G1({ "Z":slotLocation.Z}))
+        await sendTcpMsgPack(cmd.G4(0.01))
+        await sendTcpMsgPack(cmd.G1({ "Z":safe_z }))
   
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X": loc3.X,"Y":loc3.Y})
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z":slotLocation.Z})
-        await sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.01 })
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z":safe_z })
+        await sendTcpMsgPack(cmd.G1({ "X": loc3.X,"Y":loc3.Y}))
+        await sendTcpMsgPack(cmd.G1({ "Z":slotLocation.Z}))
+        await sendTcpMsgPack(cmd.G4(0.01))
+        await sendTcpMsgPack(cmd.G1({ "Z":safe_z }))
   
   
         
@@ -562,13 +612,8 @@ export const CalibPage: React.FC<{
   }
 
 
-  function number2bitString(num:number):string{
-    return num.toString(2).padStart(16,'0');
-  }
-
-
   async function getDigitalInputFlipCount():Promise<{raw:number, fc:number[]}>{
-    let rep=await sendTcpMsgPack({ "type": "M", "cmd": "getDigitalInputFlipCount"});
+    let rep=await sendTcpMsgPack(cmd.GetDigitalInputFlipCount());
     return {raw:(rep.raw as number)??0, fc:(rep.fc as number[])??new Array(16).fill(0)};
   }
 
@@ -660,10 +705,10 @@ export const CalibPage: React.FC<{
        80, 1<<IO_Pins.O.CAM_Top_Light0|1<<IO_Pins.O.CAM_Top, 1<<IO_Pins.O.CAM_Top_Light0|1<<IO_Pins.O.CAM_Top,
        1, 1<<IO_Pins.O.CAM_Top_Light0|1<<IO_Pins.O.CAM_Top, 0,]
 
-      sendTcpMsgPack({ "type": "M", "cmd": "M4",
+      sendTcpMsgPack(cmd.M4({
         pin_op_seq:lastPinOpSeq
          ,"motion_id_offset":-1,"motion_progress":0
-      });
+      }));
 
       console.log("lastPinOpSeq",lastPinOpSeq);
 
@@ -689,10 +734,10 @@ export const CalibPage: React.FC<{
 
 
             
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z,"A":0,Cor:cor,...getFeedSpeedConfig(1000) })
+    await sendTcpMsgPack(cmd.G1({ "Z": safe_z,"A":0,Cor:cor,...getFeedSpeedConfig(1000) }))
     
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1","X":44,"Y":89})
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1","X":-20,"Y":-22,...getFeedSpeedConfig(1000 ) });
+    await sendTcpMsgPack(cmd.G1({"X":44,"Y":89}))
+    await sendTcpMsgPack(cmd.G1({"X":-20,"Y":-22,...getFeedSpeedConfig(1000 ) }));
 
     await runinng_checkpoint("go ready",{time:Date.now()});
     let nxt_adv_count=0;
@@ -714,7 +759,7 @@ export const CalibPage: React.FC<{
       // await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X": -5,Y:-50 })
       // await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z,"A":0})
       if(doShake){
-        await sendTcpMsgPack({ "type": "M", "cmd": "WAIT_FOR_TRIGGER_MOTION_PROGRESS" ,"motion_progress": 0});
+        await sendTcpMsgPack(cmd.WaitForTriggerMotionProgress({"motion_progress": 0}));
 
         if(doStorageFeed)
         {
@@ -725,7 +770,7 @@ export const CalibPage: React.FC<{
         await FVib(10,160);
   
         await delay(120);
-        await sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.FlexVib_brake, "state": 1<<IO_Pins.O.FlexVib_brake, "motion_id_offset": 0, "motion_progress": 0, "reset_ms": 700 })
+        await sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.FlexVib_brake, "state": 1<<IO_Pins.O.FlexVib_brake, "motion_id_offset": 0, "motion_progress": 0, "reset_ms": 700 }))
 
         console.log("FF_mode_counter",FF_mode_counter);
 
@@ -739,7 +784,7 @@ export const CalibPage: React.FC<{
       }
       else
       {
-        await sendTcpMsgPack({ "type": "M", "cmd": "WAIT_FOR_TRIGGER_MOTION_PROGRESS" ,"motion_progress": 1});
+        await sendTcpMsgPack(cmd.WaitForTriggerMotionProgress({"motion_progress": 1}));
         console.log("wait for motion progress 1");
       }
       //sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1, "state": 1, "motion_id_offset": 0, "motion_progress": 1, "reset_ms": 100 })
@@ -748,7 +793,7 @@ export const CalibPage: React.FC<{
       (async()=>{
         FlexVibCtrl.top_light_on();
         await delay(10);
-        await sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.CAM_FlexFeeder, "state": 1<<IO_Pins.O.CAM_FlexFeeder, reset_ms:50 });
+        await sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.CAM_FlexFeeder, "state": 1<<IO_Pins.O.CAM_FlexFeeder, reset_ms:50 }));
 
         await delay(50);
 
@@ -777,7 +822,7 @@ export const CalibPage: React.FC<{
 
 
      async function goCheckFlexFeederPlate():Promise<any>{
-      await sendTcpMsgPack({ "type": "M", "cmd": "WAIT_FOR_TRIGGER_MOTION_PROGRESS", "motion_id_offset": 0, "motion_progress": 0.02 });
+      await sendTcpMsgPack(cmd.WaitForTriggerMotionProgress({ "motion_id_offset": 0, "motion_progress": 0.02 }));
       let new_candidate_obj_arr=(await checkFlexFeederPlate(true,false)) as FlexFeeder_object_data_type[];
 
       if(new_candidate_obj_arr.length<25){
@@ -796,7 +841,7 @@ export const CalibPage: React.FC<{
 
     // return;
 
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z,"A":0,...getFeedSpeedConfig(2000) })
+    await sendTcpMsgPack(cmd.G1({ "Z": safe_z,"A":0,...getFeedSpeedConfig(2000) }))
     let slotCheckPromise_BK:ReturnType<typeof checkSlot_and_reelAdv> | undefined = undefined;
 
 
@@ -807,12 +852,13 @@ export const CalibPage: React.FC<{
     let latestInputObj:any = undefined;
 
     _this.current_error=undefined;
-    (async()=>{//input watchdog thread
-
+    // Input watchdog: independent 400ms poll thread. Reads digital-input
+    // flip-counters (catches sub-poll glitches), drives the press-roller
+    // re-feed pulse, and stamps _this.current_error so the main pipeline
+    // can abort at the next checkpoint. Runs until run_cycle_stop flips.
+    async function inputWatchdog(){
       let prevFc:number[]=new Array(16).fill(0);
       let ReelLackingCounter=0;
-
-
       let isFirstCycle=true;
       while(_this.run_cycle_stop!=true){
 
@@ -840,7 +886,7 @@ export const CalibPage: React.FC<{
         {
           if((ReelLackingCounter&0b1)==0)
           {
-            await sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.ReelWheelFeed, "state": 1<<IO_Pins.O.ReelWheelFeed, reset_ms:70 })
+            await sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.ReelWheelFeed, "state": 1<<IO_Pins.O.ReelWheelFeed, reset_ms:70 }))
           }
           ReelLackingCounter++;
         }
@@ -870,9 +916,8 @@ export const CalibPage: React.FC<{
         await delay(400);
       }
       console.log("input watchdog thread end",_this.isRunning,latestInputObj);
-
-
-    })();
+    }
+    inputWatchdog();
 
 
     // for(let i=0;_this.isRunning==true;i++)
@@ -917,8 +962,8 @@ export const CalibPage: React.FC<{
       }
       
       if(feederCheckPromise!=undefined){
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z})
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1",X:wait_flexfeeder_location.X,Y:wait_flexfeeder_location.Y })
+        await sendTcpMsgPack(cmd.G1({ "Z": safe_z}))
+        await sendTcpMsgPack(cmd.G1({X:wait_flexfeeder_location.X,Y:wait_flexfeeder_location.Y }))
      
         candidate_obj_arr=await feederCheckPromise;
         feederCheckPromise=undefined;
@@ -953,7 +998,7 @@ export const CalibPage: React.FC<{
 
       if(isZinSafeZone==false){
         
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z,"A":0 })
+        await sendTcpMsgPack(cmd.G1({ "Z": safe_z,"A":0 }))
       }
 
 
@@ -963,10 +1008,10 @@ export const CalibPage: React.FC<{
       isZinSafeZone=false;
       
       await runinng_checkpoint("go to predicted location",i);
-      await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X": predicted_location.X,"Y":predicted_location.Y,"A":-item.angle_deg})
+      await sendTcpMsgPack(cmd.G1({ "X": predicted_location.X,"Y":predicted_location.Y,"A":-item.angle_deg}))
 
       waitForReelVisualClearPromise=undefined;
-      let _waitForReelVisualClearPromise= sendTcpMsgPack({ "type": "M", "cmd": "WAIT_FOR_TRIGGER_MOTION_PROGRESS", "motion_id_offset": 0, "motion_progress": 0.01 });
+      let _waitForReelVisualClearPromise= sendTcpMsgPack(cmd.WaitForTriggerMotionProgress({ "motion_id_offset": 0, "motion_progress": 0.01 }));
 
       if (_waitForReelVisualClearPromise && typeof (_waitForReelVisualClearPromise as Promise<any>).then === "function") {
       //  waitForReelVisualClearPromise = _waitForReelVisualClearPromise as Promise<any>;
@@ -991,19 +1036,19 @@ export const CalibPage: React.FC<{
       }
       await runinng_checkpoint("_PACK_INFO_",{packCounter:packCounter});
       slotCheckPromise_BK=slotCheckPromise;
-      await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": predicted_location.Z+pickZ_lift })
+      await sendTcpMsgPack(cmd.G1({ "Z": predicted_location.Z+pickZ_lift }))
 
 
 
           
 
       
-      sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.Nozzle_suck, "state": 1<<IO_Pins.O.Nozzle_suck })//pick
-      sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.02 })
+      sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.Nozzle_suck, "state": 1<<IO_Pins.O.Nozzle_suck }))//pick
+      sendTcpMsgPack(cmd.G4(0.02))
 
 
 
-      await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z })
+      await sendTcpMsgPack(cmd.G1({ "Z": safe_z }))
 
       
       if(candidate_obj_arr.length==0){//no available object, shake and check flex feeder plate
@@ -1021,35 +1066,34 @@ export const CalibPage: React.FC<{
 
       let inspBasAngle=90;
 
-      await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X":inspLocation_withObject.X,"Y":inspLocation_withObject.Y,"Z": inspLocation_withObject.Z+1,"A":inspBasAngle  })
+      await sendTcpMsgPack(cmd.G1({ "X":inspLocation_withObject.X,"Y":inspLocation_withObject.Y,"Z": inspLocation_withObject.Z+1,"A":inspBasAngle  }))
 
       await runinng_checkpoint("SideCam check",i);
       let sideCam_repReg=waitForSideCheckData();
-      await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z":inspLocation_withObject.Z})
-      sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.CAM_Side|1<<IO_Pins.O.CAM_Side_Light0, "state": 1<<IO_Pins.O.CAM_Side|1<<IO_Pins.O.CAM_Side_Light0, reset_ms:5,"motion_id_offset": 0, "motion_progress":1, })
+      await sendTcpMsgPack(cmd.G1({ "Z":inspLocation_withObject.Z}))
+      sendTcpMsgPack(camTrig(IO_Pins.O.CAM_Side, IO_Pins.O.CAM_Side_Light0, { reset_ms: 5, motion_id_offset: 0, motion_progress: 1 }))
 
 
 
-      let postInspPromise:Promise<any> | null = null;
       if(true){
         let angOffset=0;
 
         await runinng_checkpoint("[STEP]go to BTM insp",i);
-        sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.01 })
+        sendTcpMsgPack(cmd.G4(0.01))
         let btm_check_rep_promise= waitForBTMCheckData();
-        await sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.CAM_Btm_Light0|1<<IO_Pins.O.CAM_Btm, "state": 1<<IO_Pins.O.CAM_Btm_Light0|1<<IO_Pins.O.CAM_Btm, reset_ms:4 })
+        await sendTcpMsgPack(camTrig(IO_Pins.O.CAM_Btm, IO_Pins.O.CAM_Btm_Light0, { reset_ms: 4 }))
         // sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.03 })
         // await sendTcpMsgPack({ "type": "M", "cmd": "M4","group":1, "pin": (1<<3) | (1<<2), "state":(1<<3) | (1<<2),reset_ms:4 })
-        sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.001 })
+        sendTcpMsgPack(cmd.G4(0.001))
 
 
         
         // await sendTcpMsgPack({ "type": "M", "cmd": "G1", "A":inspBasAngle+5 })//twist a bit to align the hole
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "A":inspBasAngle })
+        await sendTcpMsgPack(cmd.G1({ "A":inspBasAngle }))
 
         // sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.05 })
         
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": inspLocation_withObject.Z+1})
+        await sendTcpMsgPack(cmd.G1({ "Z": inspLocation_withObject.Z+1}))
         
 
 
@@ -1083,7 +1127,7 @@ export const CalibPage: React.FC<{
         if(btm_check_rep_data.status!=1 || sideCam_rep_data.status!=1)//check failed
         {
 
-          await sendTcpMsgPack({ "type": "M", "cmd": "G1","Z": safe_z})//GO TO THE SECOND SLOT LOCATION IN ADVANCE TO SPEED UP
+          await sendTcpMsgPack(cmd.G1({"Z": safe_z}))//GO TO THE SECOND SLOT LOCATION IN ADVANCE TO SPEED UP
 
           tossReasons.push("BTM or SideCam check failed");
           ETC_NG_Location=tossLocation_0;
@@ -1106,7 +1150,7 @@ export const CalibPage: React.FC<{
         // 
 
 
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1","A":inspBasAngle+angOffset})
+        await sendTcpMsgPack(cmd.G1({"A":inspBasAngle+angOffset}))
 
         await runinng_checkpoint("[STEP]",i);
         if(tossReasons.length==0){
@@ -1117,10 +1161,10 @@ export const CalibPage: React.FC<{
           let light_pin=1<<IO_Pins.O.CAM_Side_Light0;
 
           let trigPin=light_pin|cam_pin;
-          await sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": trigPin, "state":trigPin,reset_ms:5, "motion_progress":1, })
+          await sendTcpMsgPack(cmd.M4({ "pin": trigPin, "state":trigPin,reset_ms:5, "motion_progress":1}))
 
           // await runinng_checkpoint("[TOSS] object angle",{angOffset:angOffset});
-          await sendTcpMsgPack({ "type": "M", "cmd": "G1",X:slotLocation.X+slotDist, Y:slotLocation.Y, "Z": safe_z})//GO TO THE SECOND SLOT LOCATION IN ADVANCE TO SPEED UP
+          await sendTcpMsgPack(cmd.G1({X:slotLocation.X+slotDist, Y:slotLocation.Y, "Z": safe_z}))//GO TO THE SECOND SLOT LOCATION IN ADVANCE TO SPEED UP
 
           let sideCam_rectified_repData = await waitTime(sideCam_rectified_repReg,"SideCam rectified report")  ;//WAIT: SideCam rectified report
 
@@ -1161,7 +1205,7 @@ export const CalibPage: React.FC<{
 
 
         nxt_adv_count=0;
-        let saveImgName:string|undefined[]=[undefined,undefined,undefined];
+        let saveImgName:(string|undefined)[]=[undefined,undefined,undefined];
         {
           for(let i=0;i<isSlotOKArr.length;i++){
             if(isSlotOKArr[i]==1&&isSlotClearArr[i]==0){//slot has object and object is right
@@ -1179,7 +1223,7 @@ export const CalibPage: React.FC<{
         let targetPickSlotIdx=NaN;
 
         {
-          targetPlaceSlotIdx=isSlotClearArr.findIndex((clear: number, idx: number) => clear === 1); //first 0 value index
+          targetPlaceSlotIdx=isSlotClearArr.findIndex((clear: number) => clear === 1); //first 0 value index
           
           targetPickSlotIdx=isSlotClearArr.findIndex((clear: number, idx: number) => clear === 0 && isSlotOKArr[idx] === 0); //first SlotClear==0 && SlotOK==0 value index
           if(targetPlaceSlotIdx==-1){
@@ -1195,13 +1239,13 @@ export const CalibPage: React.FC<{
           console.log("targetPlaceSlotIdx",targetPlaceSlotIdx);
           console.log("targetPickSlotIdx",targetPickSlotIdx);
 
-          if(targetPickSlotIdx==targetPickSlotIdx)
+          if(!Number.isNaN(targetPickSlotIdx))
           {
             TOP_NG_Location=tossLocation_1;
           }
         }
 
-        if(targetPickSlotIdx==targetPickSlotIdx)
+        if(!Number.isNaN(targetPickSlotIdx))
         {
           saveImgName[targetPickSlotIdx]="NG_pick_"+Date.now();
         }
@@ -1219,24 +1263,24 @@ export const CalibPage: React.FC<{
           
           // await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X":location.X,"Y":location.Y, "A":location.A,"abort":true})
           
-          await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X":location.X,"Y":location.Y, "Z":  location.Z+5,"A":location.A})
+          await sendTcpMsgPack(cmd.G1({ "X":location.X,"Y":location.Y, "Z":  location.Z+5,"A":location.A}))
           
           await runinng_checkpoint("[STEP] place object",i);
           // sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 2 })//DBG
-          await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z":  location.Z})
+          await sendTcpMsgPack(cmd.G1({ "Z":  location.Z}))
   
   
           // let repReg=VP_sendTcpMsgPack("SideCheck");
           // let ret_str_arr_data = await repReg;
           // console.log(ret_str_arr_data);
   
-          await sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.01 })
-          await sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.Nozzle_suck, "state":0 })//suck off
-          await sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.Nozzle_blow, "state": 1<<IO_Pins.O.Nozzle_blow, reset_ms:20 })//vacuum break
+          await sendTcpMsgPack(cmd.G4(0.01))
+          await sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.Nozzle_suck, "state":0 }))//suck off
+          await sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.Nozzle_blow, "state": 1<<IO_Pins.O.Nozzle_blow, reset_ms:20 }))//vacuum break
           // await sendTcpMsgPack({ "type": "M", "cmd": "G1", "A":(location.A??0)+5 })
-          await sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.02 })
+          await sendTcpMsgPack(cmd.G4(0.02))
           
-          await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z });
+          await sendTcpMsgPack(cmd.G1({ "Z": safe_z }));
         }
 
 
@@ -1298,7 +1342,7 @@ export const CalibPage: React.FC<{
 
           console.log("slotHoleOffset",slotHoleOffset);
         }
-        if(slotHoleOffset.X!=slotHoleOffset.X)
+        if(Number.isNaN(slotHoleOffset.X))
         {
 
           tossReasons.push("slotHoleOffset is NaN");
@@ -1325,7 +1369,7 @@ export const CalibPage: React.FC<{
 
 
 
-        if(targetPlaceSlotIdx!=targetPlaceSlotIdx)
+        if(Number.isNaN(targetPlaceSlotIdx))
         {
 
           tossReasons.push("no slot to place");
@@ -1358,7 +1402,7 @@ export const CalibPage: React.FC<{
         }
 
 
-        if(sideCam_rep_data.status==1 && targetPlaceSlotIdx==targetPlaceSlotIdx && compensationIsNG==false && tossReasons.length==0){
+        if(sideCam_rep_data.status==1 && !Number.isNaN(targetPlaceSlotIdx) && compensationIsNG==false && tossReasons.length==0){
           
           
           await runinng_checkpoint("place object",i);
@@ -1382,7 +1426,7 @@ export const CalibPage: React.FC<{
           //console.log("toss object",sideCam_rep_data.status,targetPlaceSlotIdx,compensationIsNG);
           console.log("toss object",tossReasons);
 
-          await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X":ETC_NG_Location.X,"Y":ETC_NG_Location.Y,"Z": safe_z })
+          await sendTcpMsgPack(cmd.G1({ "X":ETC_NG_Location.X,"Y":ETC_NG_Location.Y,"Z": safe_z }))
           // await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": tossLocation.Z })
           if(ETC_NG_Location==tossLocation_0)//drop back to feeder
           {
@@ -1402,11 +1446,11 @@ export const CalibPage: React.FC<{
           // let ret_str_arr_data = await repReg;
           // console.log(ret_str_arr_data);
   
-          sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.01 })
-          sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.Nozzle_suck, "state":0 })//suck off
+          sendTcpMsgPack(cmd.G4(0.01))
+          sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.Nozzle_suck, "state":0 }))//suck off
           // await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": -18.9 })
-          sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.Nozzle_blow, "state": 1<<IO_Pins.O.Nozzle_blow, reset_ms:5 })//vacuum break
-          sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.01 })
+          sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.Nozzle_blow, "state": 1<<IO_Pins.O.Nozzle_blow, reset_ms:5 }))//vacuum break
+          sendTcpMsgPack(cmd.G4(0.01))
 
           // await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z })
           isZinSafeZone=true;
@@ -1416,23 +1460,23 @@ export const CalibPage: React.FC<{
         let ng_x_pick_offset=targetPickSlotIdx*slotDist;
         console.log("ng_x_pick_offset",ng_x_pick_offset,"compensationIsNG",compensationIsNG);
 
-        if(ng_x_pick_offset==ng_x_pick_offset && compensationIsNG==false)//not NaN
+        if(!Number.isNaN(ng_x_pick_offset) && compensationIsNG==false)
         {
 
           
           await runinng_checkpoint("[NG PICK] object",{ng_x_pick_offset:ng_x_pick_offset,compensationIsNG:compensationIsNG});
           // await runinng_checkpoint("go to NG location and pick",i);
-          await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X":slotLocation.X+ng_x_pick_offset+slotHoleOffset.X,"Y":slotLocation.Y+slotHoleOffset.Y })//go NG location
+          await sendTcpMsgPack(cmd.G1({ "X":slotLocation.X+ng_x_pick_offset+slotHoleOffset.X,"Y":slotLocation.Y+slotHoleOffset.Y }))//go NG location
         
-          await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z":  slotLocation.Z-0.5})
-          sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.01 })
-          sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.Nozzle_suck, "state": 1<<IO_Pins.O.Nozzle_suck })//pick NG
-          sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.1 })
-          await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z });
+          await sendTcpMsgPack(cmd.G1({ "Z":  slotLocation.Z-0.5}))
+          sendTcpMsgPack(cmd.G4(0.01))
+          sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.Nozzle_suck, "state": 1<<IO_Pins.O.Nozzle_suck }))//pick NG
+          sendTcpMsgPack(cmd.G4(0.1))
+          await sendTcpMsgPack(cmd.G1({ "Z": safe_z }));
 
           {//go to toss location
             // await runinng_checkpoint("go to toss location",i);
-            await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X":TOP_NG_Location.X,"Y":TOP_NG_Location.Y,"Z": safe_z })
+            await sendTcpMsgPack(cmd.G1({ "X":TOP_NG_Location.X,"Y":TOP_NG_Location.Y,"Z": safe_z }))
             // await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": tossLocation.Z })
     
             if(TOP_NG_Location==tossLocation_0)//drop back to feeder
@@ -1452,11 +1496,11 @@ export const CalibPage: React.FC<{
             // let ret_str_arr_data = await repReg;
             // console.log(ret_str_arr_data);
     
-            sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.01 })
-            sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.Nozzle_suck, "state":0 })//suck off
+            sendTcpMsgPack(cmd.G4(0.01))
+            sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.Nozzle_suck, "state":0 }))//suck off
             // await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": -18.9 })
-            sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.Nozzle_blow, "state": 1<<IO_Pins.O.Nozzle_blow, reset_ms:5 })//vacuum break
-            sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.01 })
+            sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.Nozzle_blow, "state": 1<<IO_Pins.O.Nozzle_blow, reset_ms:5 }))//vacuum break
+            sendTcpMsgPack(cmd.G4(0.01))
             isZinSafeZone=true;
           }
         }
@@ -1484,7 +1528,7 @@ export const CalibPage: React.FC<{
 
     }
 
-    await sendTcpMsgPack({ "type": "M", "cmd": "WAIT_FOR_TRIGGER_MOTION_PROGRESS" });
+    await sendTcpMsgPack(cmd.WaitForTriggerMotionProgress({}));
     let end_time=Date.now();
     console.log("time",end_time-start_time,packCounter);
     console.log("time per pack",(end_time-start_time)/packCounter);
@@ -1514,9 +1558,9 @@ export const CalibPage: React.FC<{
     let _acc=acc*alpha;
     let _dea=dea*alpha;
     let _cor=cor*alpha;
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "F":_speed,Cor:_cor,ACC:_acc,DEA:_dea,JERK:_jerk });
+    await sendTcpMsgPack(cmd.G1({ "F":_speed,Cor:_cor,ACC:_acc,DEA:_dea,JERK:_jerk }));
     //lift Z to safe_z
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z,"A":0 });
+    await sendTcpMsgPack(cmd.G1({ "Z": safe_z,"A":0 }));
 
 
 
@@ -1534,17 +1578,17 @@ export const CalibPage: React.FC<{
       Z:(objn10_location.Z-objn00_location.Z)*-pickObjIndex/10 + objn00_location.Z};
 
     //go to objnN_location
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X":objnN_location.X,"Y":objnN_location.Y,"A":0 });
+    await sendTcpMsgPack(cmd.G1({ "X":objnN_location.X,"Y":objnN_location.Y,"A":0 }));
     //drop Z to objnN_location.Z
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z":objnN_location.Z,"A":0 });
+    await sendTcpMsgPack(cmd.G1({ "Z":objnN_location.Z,"A":0 }));
 
     //SUCK
     
-    await sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.01 })
-    await sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.Nozzle_suck, "state":1<<IO_Pins.O.Nozzle_suck })//suck off
+    await sendTcpMsgPack(cmd.G4(0.01))
+    await sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.Nozzle_suck, "state":1<<IO_Pins.O.Nozzle_suck }))//suck off
 
     //lift Z to safe_z
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z,"A":0 });
+    await sendTcpMsgPack(cmd.G1({ "Z": safe_z,"A":0 }));
 
 
 
@@ -1554,9 +1598,9 @@ export const CalibPage: React.FC<{
 
 
     //goto inspLocation
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X":inspLocation_withObject.X,"Y":inspLocation_withObject.Y,"A":0 });
+    await sendTcpMsgPack(cmd.G1({ "X":inspLocation_withObject.X,"Y":inspLocation_withObject.Y,"A":0 }));
     //drop Z to inspLocation.Z
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z":inspLocation_withObject.Z,"A":0 });
+    await sendTcpMsgPack(cmd.G1({ "Z":inspLocation_withObject.Z,"A":0 }));
 
     ////////////////////STAGE 2:do inspection
 
@@ -1568,14 +1612,14 @@ export const CalibPage: React.FC<{
     // await sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.01 })
     
     let sideCam_repReg=waitForSideCheckData();
-    await sendTcpMsgPack({ "type": "M", "cmd": "M4","pin": sideShotPin, "state":sideShotPin,reset_ms:5, "motion_progress": 1, })
+    await sendTcpMsgPack(cmd.M4({"pin": sideShotPin, "state":sideShotPin,reset_ms:5, "motion_progress": 1}))
 
     //BTM Check
-    await sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.02 })
+    await sendTcpMsgPack(cmd.G4(0.02))
 
 
     let btmCam_repReg=waitForBTMCheckData();
-    await sendTcpMsgPack({ "type": "M", "cmd": "M4","pin": BTMShotPin, "state":BTMShotPin,reset_ms:5 })
+    await sendTcpMsgPack(cmd.M4({"pin": BTMShotPin, "state":BTMShotPin,reset_ms:5 }))
 
     let sideCam_rep_data = await sideCam_repReg ;//WAIT: SideCam report
     console.log("sideCam_repData",sideCam_rep_data);
@@ -1603,13 +1647,13 @@ export const CalibPage: React.FC<{
     //SIDE Check with angle compensated
     let sideCam_rectified_rep_promise=waitForSideCheckData();
 
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", 
+    await sendTcpMsgPack(cmd.G1({ 
       "X":inspLocation_withObject.X-armOffset.X,
       "Y":inspLocation_withObject.Y-armOffset.Y,
-      "A":inspBasAngle+angOffset})
+      "A":inspBasAngle+angOffset}))
     //lift Z to safe_z
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z,"A":0 });
-    await sendTcpMsgPack({ "type": "M", "cmd": "M4","pin": sideShotPin, "state":sideShotPin,reset_ms:5, "motion_progress": 0 })
+    await sendTcpMsgPack(cmd.G1({ "Z": safe_z,"A":0 }));
+    await sendTcpMsgPack(cmd.M4({"pin": sideShotPin, "state":sideShotPin,reset_ms:5, "motion_progress": 0 }))
  
 
 
@@ -1622,30 +1666,30 @@ export const CalibPage: React.FC<{
       Y:(objn10_location.Y-objn00_location.Y)*-placeObjIndex/10 + objn00_location.Y,
       Z:(objn10_location.Z-objn00_location.Z)*-placeObjIndex/10 + objn00_location.Z};
     //goto placeLocation
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X":objPlace_location.X,"Y":objPlace_location.Y,"A":0 });
+    await sendTcpMsgPack(cmd.G1({ "X":objPlace_location.X,"Y":objPlace_location.Y,"A":0 }));
     //drop Z to objPlace_location.Z
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z":objPlace_location.Z,"A":0 });
+    await sendTcpMsgPack(cmd.G1({ "Z":objPlace_location.Z,"A":0 }));
 
     //PLACE
 
 
-    await sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.01 })
-    await sendTcpMsgPack({ "type": "M", "cmd": "M4","pin": 1<<IO_Pins.O.Nozzle_suck, "state":0})//suck off
+    await sendTcpMsgPack(cmd.G4(0.01))
+    await sendTcpMsgPack(cmd.M4({"pin": 1<<IO_Pins.O.Nozzle_suck, "state":0}))//suck off
 
 
     // await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": -18.9 })
-    await sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.Nozzle_blow, "state": 1<< IO_Pins.O.Nozzle_blow,reset_ms:5 })
+    await sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.Nozzle_blow, "state": 1<< IO_Pins.O.Nozzle_blow,reset_ms:5 }))
 
 
 
 
     //lift Z to safe_z
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z,"A":0 });
+    await sendTcpMsgPack(cmd.G1({ "Z": safe_z,"A":0 }));
 
 
     //TODO move to wait location
 
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X":safeLocation.X,"Y":safeLocation.Y,"A":0 });
+    await sendTcpMsgPack(cmd.G1({ "X":safeLocation.X,"Y":safeLocation.Y,"A":0 }));
 
     
     //check top
@@ -1676,10 +1720,10 @@ export const CalibPage: React.FC<{
        40, pin_down_light|pin_cam_trigger, pin_down_light|pin_cam_trigger,
        1, pin_down_light|pin_cam_trigger, 0,]
 
-      sendTcpMsgPack({ "type": "M", "cmd": "M4",
+      sendTcpMsgPack(cmd.M4({
         pin_op_seq:lastPinOpSeq
          ,"motion_id_offset":-1,"motion_progress":0
-      });
+      }));
 
       console.log("lastPinOpSeq",lastPinOpSeq);
 
@@ -1692,7 +1736,7 @@ export const CalibPage: React.FC<{
     }
 
 
-    await sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.01 })
+    await sendTcpMsgPack(cmd.G4(0.01))
 
     let topcam_check_report_promise= checkSlot_and_reelAdv();
 
@@ -1704,47 +1748,47 @@ export const CalibPage: React.FC<{
 
     ////////////////////STAGE 3:put it back
     //goto placeLocation to pick 
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X":objPlace_location.X,"Y":objPlace_location.Y,"A":0 });
+    await sendTcpMsgPack(cmd.G1({ "X":objPlace_location.X,"Y":objPlace_location.Y,"A":0 }));
 
   
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z":objPlace_location.Z,"A":0 });
+    await sendTcpMsgPack(cmd.G1({ "Z":objPlace_location.Z,"A":0 }));
 
     //SUCK pick
 
     
-    await sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.01 })
-    await sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.Nozzle_suck, "state":1<<IO_Pins.O.Nozzle_suck })//suck off
+    await sendTcpMsgPack(cmd.G4(0.01))
+    await sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.Nozzle_suck, "state":1<<IO_Pins.O.Nozzle_suck }))//suck off
 
 
     //lift Z to safe_z
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z,"A":0 });
+    await sendTcpMsgPack(cmd.G1({ "Z": safe_z,"A":0 }));
 
 
     //go to objnN_location
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X":objnN_location.X,"Y":objnN_location.Y,"A":0 });
+    await sendTcpMsgPack(cmd.G1({ "X":objnN_location.X,"Y":objnN_location.Y,"A":0 }));
     //drop Z to objnN_location.Z
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z":objnN_location.Z,"A":0 });
+    await sendTcpMsgPack(cmd.G1({ "Z":objnN_location.Z,"A":0 }));
 
     //place object
 
     
 
-    await sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.01 })
-    await sendTcpMsgPack({ "type": "M", "cmd": "M4","pin": 1<<IO_Pins.O.Nozzle_suck, "state":0})//suck off
+    await sendTcpMsgPack(cmd.G4(0.01))
+    await sendTcpMsgPack(cmd.M4({"pin": 1<<IO_Pins.O.Nozzle_suck, "state":0}))//suck off
 
 
     // await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": -18.9 })
-    await sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.Nozzle_blow, "state": 1<< IO_Pins.O.Nozzle_blow,reset_ms:5 })
+    await sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.Nozzle_blow, "state": 1<< IO_Pins.O.Nozzle_blow,reset_ms:5 }))
 
 
     
 
     
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z":safe_z,"A":0 });
+    await sendTcpMsgPack(cmd.G1({ "Z":safe_z,"A":0 }));
 
 
     //go back safeLocation
-    await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X":safeLocation.X,"Y":safeLocation.Y,"A":0 });
+    await sendTcpMsgPack(cmd.G1({ "X":safeLocation.X,"Y":safeLocation.Y,"A":0 }));
   
 
 
@@ -2440,20 +2484,21 @@ export const CalibPage: React.FC<{
               let adv_count=data.adv_count;
 
               console.log("pre production_plan",JSON.stringify(data),JSON.stringify(_this.production_plan));
+              const plan = _this.production_plan ?? (_this.production_plan = []);
               if(data.type=="empty"){
-                _this.production_plan[0]+=adv_count;
+                plan[0]+=adv_count;
                 _resolve();
               }
               else if(data.type=="pack"){
-                _this.production_plan[0]-=adv_count;
+                plan[0]-=adv_count;
                 _resolve();
               }
               else{
                 reject();
               }
-              if(_this.production_plan.length>0 && _this.production_plan[0]==0){
+              if(plan.length>0 && plan[0]==0){
                 _this.production_plan_stageIndex = (_this.production_plan_stageIndex ?? 0) + 1;
-                _this.production_plan.shift();
+                plan.shift();
               }
               setProductionPlanTick((x) => x + 1);
               console.log("production_plan",JSON.stringify(_this.production_plan));
@@ -2482,7 +2527,7 @@ export const CalibPage: React.FC<{
             else if(checkpoint_name=="cycle_start"){
 
               
-              if(_this.run_cycle_stop==true){
+              if((_this as any).run_cycle_stop==true){
                 reject();
                 return;
               }
@@ -2501,7 +2546,7 @@ export const CalibPage: React.FC<{
               _this.lastPackCount = data.packCounter;
               for (let i = 0; i < delta; i++) (_this.packTimestamps as number[]).push(now);
 
-              const elapsed = now - _this.speedStartTime;
+              const elapsed = now - (_this.speedStartTime ?? now);
               const adjustedCount = data.packCounter - (_this.packCountOffset ?? 0);
               const overallHr = elapsed > 0 ? adjustedCount / elapsed * 3600000 : 0;
 
@@ -2592,15 +2637,15 @@ export const CalibPage: React.FC<{
         },3000);
 
         if(_this.isRunning==false){
-          await sendTcpMsgPack({ "type": "M", "cmd": "G1","Z": safe_z,"A":0 })
+          await sendTcpMsgPack(cmd.G1({"Z": safe_z,"A":0 }))
   
-          await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X":tossLocation_0.X,"Y":tossLocation_0.Y })
+          await sendTcpMsgPack(cmd.G1({ "X":tossLocation_0.X,"Y":tossLocation_0.Y }))
   
-          await sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.1 })
+          await sendTcpMsgPack(cmd.G4(0.1))
   
-          await sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.Nozzle_suck, "state":0 })
+          await sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.Nozzle_suck, "state":0 }))
           // await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": -18.9 })
-          await sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.Nozzle_blow, "state": 1<<IO_Pins.O.Nozzle_blow, reset_ms:5 })
+          await sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.Nozzle_blow, "state": 1<<IO_Pins.O.Nozzle_blow, reset_ms:5 }))
         }
       }}>STOP</button>
         </div>
@@ -2651,17 +2696,17 @@ export const CalibPage: React.FC<{
 
             
       <button onClick={async() =>{
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "A": -700 });
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "A": 100 });
+        await sendTcpMsgPack(cmd.G1({ "A": -700 }));
+        await sendTcpMsgPack(cmd.G1({ "A": 100 }));
       }}>Zrot</button>
       
       <button onClick={async() =>{
 
         
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z });
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X":inspLocation_withObject.X,"Y":inspLocation_withObject.Y});
+        await sendTcpMsgPack(cmd.G1({ "Z": safe_z }));
+        await sendTcpMsgPack(cmd.G1({ "X":inspLocation_withObject.X,"Y":inspLocation_withObject.Y}));
         //drop Z to inspLocation.Z
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z":inspLocation_withObject.Z });
+        await sendTcpMsgPack(cmd.G1({ "Z":inspLocation_withObject.Z }));
 
 
         async function checkSlot_and_reelAdv():Promise<{is_clear:number[],is_OK:number[],post_check_advCount:number,locHole:{status:number,x:number,y:number,mmpp:number}}> { 
@@ -2690,10 +2735,10 @@ export const CalibPage: React.FC<{
           40, pin_down_light|pin_cam_trigger, pin_down_light|pin_cam_trigger,
           4, pin_down_light|pin_cam_trigger, 0,]
 
-          sendTcpMsgPack({ "type": "M", "cmd": "M4",
+          sendTcpMsgPack(cmd.M4({
             pin_op_seq:lastPinOpSeq
             ,"motion_id_offset":-1,"motion_progress":0
-          });
+          }));
 
           console.log("lastPinOpSeq",lastPinOpSeq);
 
@@ -2712,14 +2757,14 @@ export const CalibPage: React.FC<{
           
           //let topcam_check_report_promise= checkSlot_and_reelAdv();
           let sideCam_repReg=waitForSideCheckData();
-          await sendTcpMsgPack({ "type": "M", "cmd": "M4","pin": sideShotPin, "state":sideShotPin,reset_ms:5, "motion_progress": 1, })
+          await sendTcpMsgPack(cmd.M4({"pin": sideShotPin, "state":sideShotPin,reset_ms:5, "motion_progress": 1}))
           
 
           
           let btmCam_repReg=waitForBTMCheckData();
-          await sendTcpMsgPack({ "type": "M", "cmd": "M4","pin": BTMShotPin, "state":BTMShotPin,reset_ms:5 })
-          let sideCam_rep_data = await sideCam_repReg ;
-          let btmCam_rep_data = await btmCam_repReg ;
+          await sendTcpMsgPack(cmd.M4({"pin": BTMShotPin, "state":BTMShotPin,reset_ms:5 }))
+          await sideCam_repReg;
+          await btmCam_repReg;
 
           
           // let sideCam_repReg2=waitForSideCheckData();
@@ -2756,21 +2801,21 @@ export const CalibPage: React.FC<{
       
 
       <button onClick={async() =>{
-        await sendTcpMsgPack({ "type": "M", "cmd": "ReelGo","Distance":4*2, "F":5000,ACC:100000,DEA:10000,JERK:100000 });
+        await sendTcpMsgPack(cmd.ReelGo({"Distance":4*2, "F":5000,ACC:100000,DEA:10000,JERK:100000 }));
         await delay(100);
-        await sendTcpMsgPack({ "type": "M", "cmd": "ReelGo","Distance":4*2, "F":5000,ACC:100000,DEA:10000,JERK:100000 });
+        await sendTcpMsgPack(cmd.ReelGo({"Distance":4*2, "F":5000,ACC:100000,DEA:10000,JERK:100000 }));
       }}>ReelGo</button>
       {/* <button onClick={async() =>{
         // sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 1 });
 
-        sendTcpMsgPack({ "type": "M", "cmd": "M4",
+        sendTcpMsgPack(cmd.M4({
           pin_op_seq:[
     
             0, 1<<3|1<<(6+8), 1<<3|1<<(6+8),
             1, 1<<3|1<<(6+8), 0,
            30, 1<<15|1<<(6+8), 1<<15|1<<(6+8),
            1, 1<<15|1<<(6+8), 0,]
-        });
+        }));
 
 
 
@@ -2783,8 +2828,8 @@ export const CalibPage: React.FC<{
 
       
       {/* <button onClick={async() =>{
-        sendTcpMsgPack({ "type": "M", "cmd": "M4","group":1, "pin": 1<<6, "state": 1<<6,reset_ms:500 });
-        sendTcpMsgPack({ "type": "M", "cmd": "M4","group":1, "pin": 1<<0 | 1<<2 | 1<<4, "state": 1<<0 | 1<<2 | 1<<4,reset_ms:500 });
+        sendTcpMsgPack(cmd.M4({"group":1, "pin": 1<<6, "state": 1<<6,reset_ms:500 }));
+        sendTcpMsgPack(cmd.M4({"group":1, "pin": 1<<0 | 1<<2 | 1<<4, "state": 1<<0 | 1<<2 | 1<<4,reset_ms:500 }));
       }}>SynCam</button> */}
 
 
@@ -2795,40 +2840,40 @@ export const CalibPage: React.FC<{
 
       {/* <button 
       onKeyDown={async() =>{
-        sendTcpMsgPack({ "type": "M", "cmd": "M4","group":0, "pin": 1<<6, "state":0xFF,reset_ms:500 })
+        sendTcpMsgPack(cmd.M4({"group":0, "pin": 1<<6, "state":0xFF,reset_ms:500 }))
         // await sendTcpMsgPack({ "type": "G1", "Z": -18.9 })
       }}
       
       onMouseDown={async() =>{
-        sendTcpMsgPack({ "type": "M", "cmd": "M4","group":0, "pin": 1<<6, "state":0xFF })
+        sendTcpMsgPack(cmd.M4({"group":0, "pin": 1<<6, "state":0xFF }))
         // await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": -18.9 })
       }}
       
       onMouseUp={async() =>{
-        sendTcpMsgPack({ "type": "M", "cmd": "M4","group":0, "pin": 1<<6, "state":0 })
+        sendTcpMsgPack(cmd.M4({"group":0, "pin": 1<<6, "state":0 }))
       }}
       
       >MirrorOn</button> */}
 
       <button onClick={async() =>{
-        await sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.ReelAdv, "state": 1<<IO_Pins.O.ReelAdv, reset_ms:40 })
+        await sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.ReelAdv, "state": 1<<IO_Pins.O.ReelAdv, reset_ms:40 }))
         console.log("ReelAdv 1");
         await delay(60);
-        await sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.ReelAdv, "state": 1<<IO_Pins.O.ReelAdv, reset_ms:40 })
+        await sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.ReelAdv, "state": 1<<IO_Pins.O.ReelAdv, reset_ms:40 }))
         console.log("ReelAdv 2");
       }}>ReelAdv</button>
 
       
       <button onClick={async() =>{
-        await sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.ReelWheelFeed, "state": 1<<IO_Pins.O.ReelWheelFeed, reset_ms:10 })
+        await sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.ReelWheelFeed, "state": 1<<IO_Pins.O.ReelWheelFeed, reset_ms:10 }))
 
 
-        console.log("reel wheel feed",await sendTcpMsgPack({ "type": "M", "cmd": "GET_DIGITAL_INPUT",group:0 }));
+        console.log("reel wheel feed",await sendTcpMsgPack(cmd.GetDigitalInput(0)));
       }}>reel wheel feed</button>
 
       <button onClick={async() =>{
         let speed = 100;
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "F":speed,ACC:speed*3,DEA:speed*3,JERK:speed*300 })
+        await sendTcpMsgPack(cmd.G1({ "F":speed,ACC:speed*3,DEA:speed*3,JERK:speed*300 }))
         setIsJoggingModalOpen(true);
       }}>Jogging</button>
 
@@ -2836,14 +2881,14 @@ export const CalibPage: React.FC<{
       <button onClick={async() =>{
         (async()=>{
           FlexVibCtrl.top_light_on();
-          await sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.CAM_FlexFeeder, "state": 1<<IO_Pins.O.CAM_FlexFeeder, reset_ms:50 });
+          await sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.CAM_FlexFeeder, "state": 1<<IO_Pins.O.CAM_FlexFeeder, reset_ms:50 }));
           await delay(100);
 
           FlexVibCtrl.top_light_off();
         })();
 
         
-        await sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.CAM_Side|1<<IO_Pins.O.CAM_Side_Light0, "state": 1<<IO_Pins.O.CAM_Side|1<<IO_Pins.O.CAM_Side_Light0, reset_ms:50 });
+        await sendTcpMsgPack(camTrig(IO_Pins.O.CAM_Side, IO_Pins.O.CAM_Side_Light0, { reset_ms: 50 }));
         
       }}>SideCam Trig</button>
 
@@ -2860,7 +2905,7 @@ export const CalibPage: React.FC<{
         
         await FVib(10,100);
         await delay(200);
-        await sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.FlexVib_brake, "state": 1<<IO_Pins.O.FlexVib_brake, "motion_id_offset": 0, "motion_progress": 0, "reset_ms": 900 })
+        await sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.FlexVib_brake, "state": 1<<IO_Pins.O.FlexVib_brake, "motion_id_offset": 0, "motion_progress": 0, "reset_ms": 900 }))
 
 
       }}>FVib_v10</button>
@@ -2872,13 +2917,13 @@ export const CalibPage: React.FC<{
         // await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z,"F":speed })
         // await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X": -5,Y:-50 })
 
-        await sendTcpMsgPack({ "type": "M", "cmd": "WAIT_FOR_MOTION_STOP" });
+        await sendTcpMsgPack(cmd.WaitForMotionStop());
 
         //sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1, "state": 1, "motion_id_offset": 0, "motion_progress": 1, "reset_ms": 100 })
         
         let repReg=waitForFFeederCheckData();
         (async()=>{
-          await sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.CAM_FlexFeeder, "state": 1<<IO_Pins.O.CAM_FlexFeeder, reset_ms:50 });
+          await sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.CAM_FlexFeeder, "state": 1<<IO_Pins.O.CAM_FlexFeeder, reset_ms:50 }));
           FlexVibCtrl.top_light_on();
           
           await delay(50);
@@ -2925,13 +2970,13 @@ export const CalibPage: React.FC<{
       let cam_pin=1<<IO_Pins.O.CAM_Side;
 
 
-      sendTcpMsgPack({ "type": "M", "cmd": "M4",
+      sendTcpMsgPack(cmd.M4({
         pin_op_seq:[
 
           0, light_pin|cam_pin,  light_pin|cam_pin,
           1, light_pin|cam_pin, 0,
         ]
-      });
+      }));
 
       }}>SCamTake</button>
 
@@ -2941,13 +2986,13 @@ export const CalibPage: React.FC<{
         let cam_pin=1<<IO_Pins.O.CAM_Btm;
 
 
-        sendTcpMsgPack({ "type": "M", "cmd": "M4",
+        sendTcpMsgPack(cmd.M4({
           pin_op_seq:[
-    
+
             0, light_pin|cam_pin,  light_pin|cam_pin,
             1, light_pin|cam_pin, 0,
           ]
-        });
+        }));
 
       }}>BCamTake</button>
 
@@ -2969,15 +3014,15 @@ recheck:
 
         let slight_pin=0;//1<<IO_Pins.O.CAM_Side_Light0;
 
-        sendTcpMsgPack({ "type": "M", "cmd": "M4",
+        sendTcpMsgPack(cmd.M4({
           pin_op_seq:[
-    
+
             0, 1<<IO_Pins.O.CAM_Top_SideLight|1<<IO_Pins.O.CAM_Top|slight_pin, 1<<IO_Pins.O.CAM_Top_SideLight|1<<IO_Pins.O.CAM_Top|slight_pin,
             1, 1<<IO_Pins.O.CAM_Top_SideLight|1<<IO_Pins.O.CAM_Top, 0,
            40, 1<<IO_Pins.O.CAM_Top_Light0|1<<IO_Pins.O.CAM_Top|slight_pin, 1<<IO_Pins.O.CAM_Top_Light0|1<<IO_Pins.O.CAM_Top|slight_pin,
            1, 1<<IO_Pins.O.CAM_Top_Light0|1<<IO_Pins.O.CAM_Top|slight_pin, 0,
           ]
-        });
+        }));
 
       }}>CamTake</button>
 
@@ -3008,7 +3053,7 @@ save:
       {[-1,0,1,2].map((item)=>{
         return <button key={"TOP_recheck_revidx_"+item} onClick={async() =>{
           _this.revisit_idx=item;
-          let ret_data = await VP_sendTcpMsgPack({"type":"TopInsp","cmd_type":"revisit",index:_this.revisit_obj_idx,revisit_idx:_this.revisit_idx,SL_sens_alpha:_this.SL_sens_alpha});
+          await VP_sendTcpMsgPack({"type":"TopInsp","cmd_type":"revisit",index:_this.revisit_obj_idx,revisit_idx:_this.revisit_idx,SL_sens_alpha:_this.SL_sens_alpha});
         }}> {item}</button>
       })}
 
@@ -3023,7 +3068,7 @@ save:
         onChange={e => {
           _this.SL_sens_alpha = Number(e.target.value);
         }}
-        onMouseUp={e => {
+        onMouseUp={() => {
           VP_sendTcpMsgPack({"type":"TopInsp","cmd_type":"revisit",index:_this.revisit_obj_idx,revisit_idx:_this.revisit_idx,SL_sens_alpha:_this.SL_sens_alpha});
         }}
         onKeyUp={e => {
@@ -3058,9 +3103,9 @@ save:
             {item.ObjOnCamCoord.x.toFixed(3)},{item.ObjOnCamCoord.y.toFixed(3)}:::{item.ObjOnRobotCoord.X.toFixed(3)},{item.ObjOnRobotCoord.Y.toFixed(3)},{item.ObjOnRobotCoord.Z.toFixed(3)}
             
             <button onClick={async() =>{
-              await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z,"F":speed })
-              await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X": item.ObjOnRobotCoord.X,"Y": item.ObjOnRobotCoord.Y })
-              await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": item.ObjOnRobotCoord.Z })
+              await sendTcpMsgPack(cmd.G1({ "Z": safe_z,"F":speed }))
+              await sendTcpMsgPack(cmd.G1({ "X": item.ObjOnRobotCoord.X,"Y": item.ObjOnRobotCoord.Y }))
+              await sendTcpMsgPack(cmd.G1({ "Z": item.ObjOnRobotCoord.Z }))
             }} style={{ marginLeft: 8 }}>go point</button>
 
             
@@ -3072,16 +3117,16 @@ save:
               console.log(predicted_location,item.ObjOnRobotCoord);
 
               
-              await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z,"F":speed })
-              await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X": predicted_location.X,"Y":predicted_location.Y })
-              await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": predicted_location.Z })
+              await sendTcpMsgPack(cmd.G1({ "Z": safe_z,"F":speed }))
+              await sendTcpMsgPack(cmd.G1({ "X": predicted_location.X,"Y":predicted_location.Y }))
+              await sendTcpMsgPack(cmd.G1({ "Z": predicted_location.Z }))
 
 
 
             }} style={{ marginLeft: 6 }}>go Predict point</button>
             
             <button onClick={async() =>{
-              setCalibRecPair(calibRecPair.filter((item,fidx)=>fidx!=index));
+              setCalibRecPair(calibRecPair.filter((_item,fidx)=>fidx!=index));
             }} style={{ marginLeft: 6 }}>X</button>
 
 
@@ -3102,9 +3147,9 @@ save:
               console.log(predicted_location,item);
 
               
-              await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z,F:600,Cor:15 })
-              await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X": predicted_location.X,"Y":predicted_location.Y })
-              await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": predicted_location.Z })
+              await sendTcpMsgPack(cmd.G1({ "Z": safe_z,F:600,Cor:15 }))
+              await sendTcpMsgPack(cmd.G1({ "X": predicted_location.X,"Y":predicted_location.Y }))
+              await sendTcpMsgPack(cmd.G1({ "Z": predicted_location.Z }))
               // await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": safe_z })
 
               
@@ -3123,8 +3168,8 @@ save:
           }} style={{ marginLeft: 8 }}>Go</button>
           <button onClick={async() =>{
             
-            await sendTcpMsgPack({ "type": "M", "cmd": "WAIT_FOR_MOTION_STOP" })
-            let current_location = await sendTcpMsgPack({ "type": "M", "cmd": "READ_LATEST_CMD_LOCATION" })
+            await sendTcpMsgPack(cmd.WaitForMotionStop())
+            let current_location = await sendTcpMsgPack(cmd.ReadLatestCmdLocation())
             console.log(item,current_location);
             setCalibRecPair([...calibRecPair, {ObjOnCamCoord:item,ObjOnRobotCoord:current_location}]);
           }} style={{ marginLeft: 6 }}>+</button>
