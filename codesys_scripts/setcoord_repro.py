@@ -88,9 +88,12 @@ def main() -> int:
     send(sock, lock, {"id": 9001, "type": "SYS", "cmd": "GET_MACHINE_STATE"})
     time.sleep(0.8)
 
-    # the trigger
+    # the trigger. type:'M' is mandatory; without it the dispatcher's
+    # PacketType='M' gate skips the packet and it sits in minfo_buf until
+    # the heartbeat supervisor trips Error and the not-Ready drain NAKs
+    # the whole ring (this was the original false-positive B1 'stall').
     print(f"[{ts()}] TX SetCoord1 (motion path)")
-    send(sock, lock, {"id": 301, "cmd": "SetCoord1"})
+    send(sock, lock, {"id": 301, "type": "M", "cmd": "SetCoord1"})
 
     # watch for the trip
     time.sleep(10.0)
