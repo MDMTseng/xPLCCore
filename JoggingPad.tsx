@@ -1,4 +1,5 @@
 import React, { useCallback, useRef, useState } from 'react';
+import { cmd } from './lib/protocol';
 
 // Define the props for the RelativeMovePad component
 interface RelativeMovePadProps {
@@ -146,10 +147,10 @@ export const JoggingPad: React.FC<JoggingPadProps> = ({ speedFactor_XY,speedFact
          <RelativeMovePad id="jog_xy" style={{background:"black", flex:"1"}}
          onPressDown={async()=>{
           _this.jog_base_location=undefined;                
-          await sendTcpMsgPack({ "type": "M", "cmd": "WAIT_FOR_MOTION_STOP" })
-          _this.jog_base_location = await sendTcpMsgPack({ "type": "M", "cmd": "READ_LATEST_CMD_LOCATION" })
+          await sendTcpMsgPack(cmd.WaitForMotionStop())
+          _this.jog_base_location = await sendTcpMsgPack(cmd.ReadLatestCmdLocation())
           _this.jog_wait_prev_cmd=false;
-          
+
           _this.LP_Speed=0;
           _this.LP_pre_time=Date.now();
          }}
@@ -190,10 +191,11 @@ export const JoggingPad: React.FC<JoggingPadProps> = ({ speedFactor_XY,speedFact
 
 
           _this.jog_wait_prev_cmd=true;
-          await sendTcpMsgPack({ "type": "M", "cmd": "G1", 
-            "X": _this.jog_base_location.X, 
-            "Y": _this.jog_base_location.Y, 
-            "Z": _this.jog_base_location.Z })
+          await sendTcpMsgPack(cmd.G1({
+            X: _this.jog_base_location.X,
+            Y: _this.jog_base_location.Y,
+            Z: _this.jog_base_location.Z,
+          }))
 
           setCurrentLocation({..._this.jog_base_location});
           _this.jog_wait_prev_cmd=false;
@@ -203,8 +205,8 @@ export const JoggingPad: React.FC<JoggingPadProps> = ({ speedFactor_XY,speedFact
         <RelativeMovePad id="jog_z" style={{background:"red", width:"30px"}}
          onPressDown={async()=>{
           _this.jog_base_location=undefined;                
-          await sendTcpMsgPack({ "type": "M", "cmd": "WAIT_FOR_MOTION_STOP" })
-          _this.jog_base_location = await sendTcpMsgPack({ "type": "M", "cmd": "READ_LATEST_CMD_LOCATION" })
+          await sendTcpMsgPack(cmd.WaitForMotionStop())
+          _this.jog_base_location = await sendTcpMsgPack(cmd.ReadLatestCmdLocation())
           _this.jog_wait_prev_cmd=false;
          }}
          onRelativeMove={async(offset_x: number, offset_y: number,dx:number,dy:number)=>{
@@ -213,10 +215,11 @@ export const JoggingPad: React.FC<JoggingPadProps> = ({ speedFactor_XY,speedFact
           }
           _this.jog_base_location.Z -= dy*speedFactor_Z;
           _this.jog_wait_prev_cmd=true;
-          await sendTcpMsgPack({ "type": "M", "cmd": "G1", 
-            "X": _this.jog_base_location.X, 
-            "Y": _this.jog_base_location.Y, 
-            "Z": _this.jog_base_location.Z })
+          await sendTcpMsgPack(cmd.G1({
+            X: _this.jog_base_location.X,
+            Y: _this.jog_base_location.Y,
+            Z: _this.jog_base_location.Z,
+          }))
           setCurrentLocation({..._this.jog_base_location});
 
           _this.jog_wait_prev_cmd=false;

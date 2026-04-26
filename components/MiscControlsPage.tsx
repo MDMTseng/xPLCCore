@@ -1,9 +1,11 @@
 import React, { useCallback, useState } from 'react';
 import { JoggingPad } from '../JoggingPad';
 import { Modal } from '../Modal';
+import { DiagPanel } from './DiagPanel';
 import type { COMCtrlObj } from '../types';
 import { delay } from '../utils/async';
 import { t, type UILang } from '../i18n';
+import { cmd } from '../lib/protocol';
 
 enum PlcMotionEvent {
   EV_NONE = 0,
@@ -50,7 +52,7 @@ export const MiscControlsPage: React.FC<{
         return;
       }
 
-      let retInfo = await COMCtrlObj.sendTcpMsgPack({ "type": "SYS", "cmd": "GA_EV", "ev": event }) as any;
+      let retInfo = await COMCtrlObj.sendTcpMsgPack(cmd.GA_EV(event)) as any;
       event = PlcMotionEvent.EV_NONE;
       console.log(retInfo)
       let status_str = retInfo['st_str'];
@@ -68,16 +70,12 @@ export const MiscControlsPage: React.FC<{
       }
 
       if (status_str == "Ready") {
-
-
-
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": 11 , "F":1000,ACC:1000,DEA:1000,JERK:10000 })
-        await sendTcpMsgPack({ "type": "M", "cmd": "WAIT_FOR_MOTION_STOP" })
-        await sendTcpMsgPack({ "type": "M", "cmd": "SetCoord1" })
-
+        // SetCoord1 must fire before any G1: PLC's CoordSystemConfigured gate
+        // (cleared on UnInited entry) NAKs G1 with err='coord_not_configured'.
+        await sendTcpMsgPack(cmd.SetCoord1())
         await delay(100);
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X": 0, "Y": 0, "Z": 10, "A": 90})
-        await sendTcpMsgPack({ "type": "M", "cmd": "G1",  "Z": 11,"A": 0})
+        await sendTcpMsgPack(cmd.G1({ X: 0, Y: 0, Z: 10, A: 90 }))
+        await sendTcpMsgPack(cmd.G1({ Z: 11, A: 0 }))
 
 
 
@@ -214,7 +212,7 @@ export const MiscControlsPage: React.FC<{
             }}
             onClick={async () => {
               onPlcReadyChange?.(false);
-              await sendTcpMsgPack({ "type": "SYS", "cmd": "GA_EV", "ev": PlcMotionEvent.EV_ERROR })
+              await sendTcpMsgPack(cmd.GA_EV(PlcMotionEvent.EV_ERROR))
             }}
           >
             {t(uiLang, 'enterError')}
@@ -226,11 +224,11 @@ export const MiscControlsPage: React.FC<{
           <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button onClick={async () => {
               let event_id = Math.floor(Math.random() * 1000000);
-              COMCtrlObj.sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.2 }, false);
+              COMCtrlObj.sendTcpMsgPack(cmd.G4(0.2), false);
               for (let i = 0; i < 60; i++) {
-                COMCtrlObj.sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.02 }, false);
+                COMCtrlObj.sendTcpMsgPack(cmd.G4(0.02), false);
                 let wait_for_tracking = i % 10 == 0;
-                let retInfoPromise = sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1, "state": 1, "event_id": event_id + 1, "reset_ms": 1 }, wait_for_tracking)
+                let retInfoPromise = sendTcpMsgPack(cmd.M4({ pin: 1, state: 1, event_id: event_id + 1, reset_ms: 1 }), wait_for_tracking)
                 if (retInfoPromise instanceof Promise) {
                   console.log(await retInfoPromise);
                 }
@@ -412,6 +410,8 @@ export const MiscControlsPage: React.FC<{
           <JoggingPad speedFactor_XY={0.2} speedFactor_Z={0.1} sendTcpMsgPack={sendTcpMsgPack} />
         </Modal>
       </div>
+
+      <DiagPanel sendTcpMsgPack={sendTcpMsgPack} />
     </div>
   )
 }

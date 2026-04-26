@@ -3,6 +3,7 @@ import type { COMCtrlObj } from '../types';
 import { delay } from '../utils/async';
 import { t, type UILang } from '../i18n';
 import { useHarnessAction } from '../harness/registry';
+import { cmd } from '../lib/protocol';
 
 import { Divider } from 'antd';
 enum PlcMotionEvent {
@@ -47,7 +48,7 @@ export const OperationPage: React.FC<{
         return;
       }
 
-      let retInfo = await COMCtrlObj.sendTcpMsgPack({ "type": "SYS", "cmd": "GA_EV", "ev": event }) as any;
+      let retInfo = await COMCtrlObj.sendTcpMsgPack(cmd.GA_EV(event)) as any;
       event = PlcMotionEvent.EV_NONE;
       console.log(retInfo)
       let status_str = retInfo['st_str'];
@@ -65,19 +66,13 @@ export const OperationPage: React.FC<{
         event = PlcMotionEvent.EV_HOME_GO
       }
 
-      if (status_str == "Ready") {//set
-
-
-
-        {
-            await sendTcpMsgPack({ "type": "M", "cmd": "G1", "Z": 11 })
-            await sendTcpMsgPack({ "type": "M", "cmd": "WAIT_FOR_MOTION_STOP", "timeout_ms": 30000 })
-            await sendTcpMsgPack({ "type": "M", "cmd": "SetCoord1" })//set coord1 (realworld coordinate instead of machine coordinate)
-    
-            await delay(100);
-            await sendTcpMsgPack({ "type": "M", "cmd": "G1", "X": 0, "Y": 0, "Z": 10,"A": 90 })
-            await sendTcpMsgPack({ "type": "M", "cmd": "G1", "A": 0})
-        }
+      if (status_str == "Ready") {
+        // SetCoord1 must fire before any G1: PLC's CoordSystemConfigured gate
+        // (cleared on UnInited entry) NAKs G1 with err='coord_not_configured'.
+        await sendTcpMsgPack(cmd.SetCoord1())
+        await delay(100);
+        await sendTcpMsgPack(cmd.G1({ X: 0, Y: 0, Z: 10, A: 90 }))
+        await sendTcpMsgPack(cmd.G1({ A: 0 }))
 
 
 
@@ -128,14 +123,14 @@ export const OperationPage: React.FC<{
   }, [init_plc_motion]);
 
   useHarnessAction('enter_error', async () => {
-    await sendTcpMsgPack({ type: 'SYS', cmd: 'GA_EV', ev: PlcMotionEvent.EV_ERROR });
+    await sendTcpMsgPack(cmd.GA_EV(PlcMotionEvent.EV_ERROR));
     return { sent: true };
   }, [sendTcpMsgPack]);
 
   useHarnessAction('ga_ev', async (payload: any) => {
     const ev = Number(payload?.ev);
     if (!Number.isFinite(ev)) throw new Error('ga_ev: missing numeric ev');
-    const ret = await sendTcpMsgPack({ type: 'SYS', cmd: 'GA_EV', ev });
+    const ret = await sendTcpMsgPack(cmd.GA_EV(ev));
     return { reply: ret };
   }, [sendTcpMsgPack]);
   return (
@@ -242,7 +237,7 @@ export const OperationPage: React.FC<{
               cursor: 'pointer',
             }}
             onClick={async () => {
-              await sendTcpMsgPack({ "type": "SYS", "cmd": "GA_EV", "ev": PlcMotionEvent.EV_ERROR })
+              await sendTcpMsgPack(cmd.GA_EV(PlcMotionEvent.EV_ERROR))
             }}
           >
             {t(uiLang, 'enterError')}

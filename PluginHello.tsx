@@ -6,6 +6,7 @@ import type { COMCtrlObj } from './types';
 import { useTcpStringConnection } from './hooks/useTcpStringConnection';
 import { t, type UILang } from './i18n';
 import { hasHarnessAction, dispatchHarnessAction, listHarnessActions, registerHarnessAction, unregisterHarnessAction } from './harness/registry';
+import { cmd } from './lib/protocol';
 
 // Bump when shipping changes to the TCP/msgpack dispatcher or PLC protocol.
 // Shown as a pill next to the app title so you can tell at a glance whether
@@ -644,7 +645,7 @@ export const PluginHello: React.FC<{
           try {
             if (!sentFlagRef.current) {
               const sentAt = Date.now();
-              const p = sendTcpMsgPack({ type: 'SYS', cmd: 'PING' }, true, HEARTBEAT_STALE_MS) as Promise<any>;
+              const p = sendTcpMsgPack(cmd.Ping(), true, HEARTBEAT_STALE_MS) as Promise<any>;
               if (p && typeof (p as any).then === 'function') {
                 p.then((reply: any) => {
                   if (reply && reply.pong) {
@@ -689,7 +690,7 @@ export const PluginHello: React.FC<{
     let cancelled = false;
     (async () => {
       try {
-        const reply = await (sendTcpMsgPack({ type: 'SYS', cmd: 'GET_MACHINE_STATE' }, true, HEARTBEAT_STALE_MS) as Promise<any>);
+        const reply = await (sendTcpMsgPack(cmd.GetMachineState(), true, HEARTBEAT_STALE_MS) as Promise<any>);
         if (!cancelled && reply) {
           lastMachineSnapshotRef.current = { ...reply, fetched_at: Date.now() };
           console.log('[A4] reconnect snapshot', reply);
@@ -708,11 +709,11 @@ export const PluginHello: React.FC<{
   useEffect(() => {
     registerHarnessAction('ping', async () => {
       const sentAt = Date.now();
-      const reply = await (sendTcpMsgPack({ type: 'SYS', cmd: 'PING' }, true, HEARTBEAT_STALE_MS) as Promise<any>);
+      const reply = await (sendTcpMsgPack(cmd.Ping(), true, HEARTBEAT_STALE_MS) as Promise<any>);
       return { reply, latency_ms: Date.now() - sentAt };
     });
     registerHarnessAction('get_machine_state', async () => {
-      const reply = await (sendTcpMsgPack({ type: 'SYS', cmd: 'GET_MACHINE_STATE' }, true, HEARTBEAT_STALE_MS) as Promise<any>);
+      const reply = await (sendTcpMsgPack(cmd.GetMachineState(), true, HEARTBEAT_STALE_MS) as Promise<any>);
       lastMachineSnapshotRef.current = { ...reply, fetched_at: Date.now() };
       return reply;
     });
