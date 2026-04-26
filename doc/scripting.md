@@ -252,6 +252,15 @@ at the end of a template.
 
 ## Workflow caveats (not obvious until they bite you)
 
+- **`online_change` builds the project, not the filesystem.** Editing a
+  `.st` file under `codesys_code/` and then running
+  `codesys_scripts/online_change.py` (or any deploy template) does
+  **not** pick up your edit — `online_change` builds whatever's
+  currently in the project tree. You must run
+  `python codesys_scripts/tcp_client.py import_all` first to push disk
+  → project, then `online_change`. This bit during the W5 axes-state
+  rollout: the wire showed a stale `ele_count=15` until import was
+  re-run. Memory note: `codesys_import_then_online_change.md`.
 - **Import doesn't create or delete objects.** `import_all` only updates
   the text of objects that already exist in the project tree. If you
   add a new POU on disk, import silently reports it as `[miss]` —
