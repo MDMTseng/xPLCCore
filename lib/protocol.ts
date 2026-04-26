@@ -142,6 +142,9 @@ export interface MachineState {
   coord_set: boolean;
   axes_err_mask: number;
   axes_state: number;
+  // Per-axis SM3 ErrorIdent.SourceErrorID, same ordering as axes_err_mask
+  // bits 0..3 (EAxis0/1/2/reelpullmotor). 0 = no fault since clear.
+  axes_err_id: number[];
 }
 
 export interface DiagSnapshot {
