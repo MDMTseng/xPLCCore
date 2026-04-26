@@ -180,4 +180,17 @@ VAR_GLOBAL
 	DBG_SetCoordLastErrorID       : DWORD := 0;
 	DBG_SetCoordExecuteFallMs     : LINT := 0;
 
+	(* Per-axis SourceErrorID latch. Cyclic-side reader in AxisGroupSM copies
+	   `<axis>.ErrorIdent.SourceErrorID` once per scan into this array so the
+	   pure-read GET_MACHINE_STATE handler can return per-axis diagnostic
+	   codes without itself touching the axis FBs. Index layout matches the
+	   bit layout of `axes_err_mask`:
+	     [0] = IoConfig_Globals.EAxis0
+	     [1] = IoConfig_Globals.EAxis1
+	     [2] = IoConfig_Globals.EAxis2
+	     [3] = reelpullmotor
+	   0 = no fault since clear (matches SM3 semantics). Verify via
+	   probe_axis_errorident.py before trusting the values in production. *)
+	LastAxesErrorIDs : ARRAY[0..3] OF DWORD;
+
 END_VAR
