@@ -153,22 +153,36 @@ eLastType := E_MpType.MP_UNKNOWN;
 			sLastString[udiLength] := 0;
 			pCurrent := pCurrent + udiLength;
 		
-		// --- Binary Types (Fix 2: prevent desync when bin appears in a stream) ---
+		// --- Binary Types (Fix 2: prevent desync when bin appears in a stream).
+		// Length-driven advances are clamped to remaining buffer so a malformed
+		// payload can't push pCurrent past pStart+udiSize. ---
 		16#C4: // bin 8
 			udiLength := pCurrent^;
-			pCurrent := pCurrent + 1 + udiLength;
+			pCurrent := pCurrent + 1;
+			IF (pCurrent + udiLength) > (pStart + udiSize) THEN
+				udiLength := DWORD_TO_UDINT((pStart + udiSize) - pCurrent);
+			END_IF;
+			pCurrent := pCurrent + udiLength;
 			eLastType := E_MpType.MP_BINARY;
 
 		16#C5: // bin 16
 			pWordLen := pCurrent;
 			Swap16To(pWordLen, ADR(udiLength));
-			pCurrent := pCurrent + 2 + udiLength;
+			pCurrent := pCurrent + 2;
+			IF (pCurrent + udiLength) > (pStart + udiSize) THEN
+				udiLength := DWORD_TO_UDINT((pStart + udiSize) - pCurrent);
+			END_IF;
+			pCurrent := pCurrent + udiLength;
 			eLastType := E_MpType.MP_BINARY;
 
 		16#C6: // bin 32
 			pDwordLen := pCurrent;
 			Swap32To(pDwordLen, ADR(udiLength));
-			pCurrent := pCurrent + 4 + udiLength;
+			pCurrent := pCurrent + 4;
+			IF (pCurrent + udiLength) > (pStart + udiSize) THEN
+				udiLength := DWORD_TO_UDINT((pStart + udiSize) - pCurrent);
+			END_IF;
+			pCurrent := pCurrent + udiLength;
 			eLastType := E_MpType.MP_BINARY;
 
 		// --- Ext Types (skip-over; preserves alignment for downstream iteration) ---
@@ -180,19 +194,31 @@ eLastType := E_MpType.MP_UNKNOWN;
 
 		16#C7: // ext 8  : [len:1][type:1][data:len]
 			udiLength := pCurrent^;
-			pCurrent := pCurrent + 2 + udiLength;
+			pCurrent := pCurrent + 2; // len + type bytes
+			IF (pCurrent + udiLength) > (pStart + udiSize) THEN
+				udiLength := DWORD_TO_UDINT((pStart + udiSize) - pCurrent);
+			END_IF;
+			pCurrent := pCurrent + udiLength;
 			eLastType := E_MpType.MP_BINARY;
 
 		16#C8: // ext 16 : [len:2][type:1][data:len]
 			pWordLen := pCurrent;
 			Swap16To(pWordLen, ADR(udiLength));
-			pCurrent := pCurrent + 3 + udiLength;
+			pCurrent := pCurrent + 3;
+			IF (pCurrent + udiLength) > (pStart + udiSize) THEN
+				udiLength := DWORD_TO_UDINT((pStart + udiSize) - pCurrent);
+			END_IF;
+			pCurrent := pCurrent + udiLength;
 			eLastType := E_MpType.MP_BINARY;
 
 		16#C9: // ext 32 : [len:4][type:1][data:len]
 			pDwordLen := pCurrent;
 			Swap32To(pDwordLen, ADR(udiLength));
-			pCurrent := pCurrent + 5 + udiLength;
+			pCurrent := pCurrent + 5;
+			IF (pCurrent + udiLength) > (pStart + udiSize) THEN
+				udiLength := DWORD_TO_UDINT((pStart + udiSize) - pCurrent);
+			END_IF;
+			pCurrent := pCurrent + udiLength;
 			eLastType := E_MpType.MP_BINARY;
 
 		// --- Array Types ---

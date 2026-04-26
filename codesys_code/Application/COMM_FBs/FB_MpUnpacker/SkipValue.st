@@ -44,33 +44,58 @@ END_VAR
     16#CE, 16#D2, 16#CA: pPos := pPos + 4; // uint 32, int 32, float 32
     16#CF, 16#D3, 16#CB: pPos := pPos + 8; // uint 64, int 64, float 64
 
-    // --- String Types ---
+    // --- String Types (length-driven; clamp to remaining buffer so a malformed
+    //     payload can't push pPos past pStart+udiSize) ---
     16#D9: // str 8
         udiLength := pPos^;
-        pPos := pPos + 1 + udiLength;
+        pPos := pPos + 1;
+        IF (pPos + udiLength) > (pStart + udiSize) THEN
+            udiLength := DWORD_TO_UDINT((pStart + udiSize) - pPos);
+        END_IF;
+        pPos := pPos + udiLength;
     16#DA: // str 16
         pWordLen := pPos;
         Swap16To(pWordLen, ADR(udiLength)); // Assumes udiLength gets lower 16 bits
-        pPos := pPos + 2 + udiLength;
+        pPos := pPos + 2;
+        IF (pPos + udiLength) > (pStart + udiSize) THEN
+            udiLength := DWORD_TO_UDINT((pStart + udiSize) - pPos);
+        END_IF;
+        pPos := pPos + udiLength;
     16#DB: // str 32
         pDwordLen := pPos;
         Swap32To(pDwordLen, ADR(udiLength)); // Assumes Swap32To helper exists
-        pPos := pPos + 4 + udiLength;
+        pPos := pPos + 4;
+        IF (pPos + udiLength) > (pStart + udiSize) THEN
+            udiLength := DWORD_TO_UDINT((pStart + udiSize) - pPos);
+        END_IF;
+        pPos := pPos + udiLength;
 
-    // --- Binary Types ---
+    // --- Binary Types (same clamp pattern) ---
     16#C4: // bin 8
         udiLength := pPos^;
-        pPos := pPos + 1 + udiLength;
+        pPos := pPos + 1;
+        IF (pPos + udiLength) > (pStart + udiSize) THEN
+            udiLength := DWORD_TO_UDINT((pStart + udiSize) - pPos);
+        END_IF;
+        pPos := pPos + udiLength;
     16#C5: // bin 16
         pWordLen := pPos;
         Swap16To(pWordLen, ADR(udiLength));
-        pPos := pPos + 2 + udiLength;
+        pPos := pPos + 2;
+        IF (pPos + udiLength) > (pStart + udiSize) THEN
+            udiLength := DWORD_TO_UDINT((pStart + udiSize) - pPos);
+        END_IF;
+        pPos := pPos + udiLength;
     16#C6: // bin 32
         pDwordLen := pPos;
         Swap32To(pDwordLen, ADR(udiLength));
-        pPos := pPos + 4 + udiLength;
+        pPos := pPos + 4;
+        IF (pPos + udiLength) > (pStart + udiSize) THEN
+            udiLength := DWORD_TO_UDINT((pStart + udiSize) - pPos);
+        END_IF;
+        pPos := pPos + udiLength;
 
-    // --- Extension Types ---
+    // --- Extension Types (same clamp pattern for length-driven variants) ---
     16#D4: pPos := pPos + 2;  // fixext 1 (1-byte type + 1-byte data)
     16#D5: pPos := pPos + 3;  // fixext 2
     16#D6: pPos := pPos + 5;  // fixext 4
@@ -78,15 +103,27 @@ END_VAR
     16#D8: pPos := pPos + 17; // fixext 16
     16#C7: // ext 8
         udiLength := pPos^;
-        pPos := pPos + 1 + 1 + udiLength; // len(1) + type(1) + data
+        pPos := pPos + 2; // len(1) + type(1)
+        IF (pPos + udiLength) > (pStart + udiSize) THEN
+            udiLength := DWORD_TO_UDINT((pStart + udiSize) - pPos);
+        END_IF;
+        pPos := pPos + udiLength;
     16#C8: // ext 16
         pWordLen := pPos;
         Swap16To(pWordLen, ADR(udiLength));
-        pPos := pPos + 2 + 1 + udiLength; // len(2) + type(1) + data
+        pPos := pPos + 3; // len(2) + type(1)
+        IF (pPos + udiLength) > (pStart + udiSize) THEN
+            udiLength := DWORD_TO_UDINT((pStart + udiSize) - pPos);
+        END_IF;
+        pPos := pPos + udiLength;
     16#C9: // ext 32
         pDwordLen := pPos;
         Swap32To(pDwordLen, ADR(udiLength));
-        pPos := pPos + 4 + 1 + udiLength; // len(4) + type(1) + data
+        pPos := pPos + 5; // len(4) + type(1)
+        IF (pPos + udiLength) > (pStart + udiSize) THEN
+            udiLength := DWORD_TO_UDINT((pStart + udiSize) - pPos);
+        END_IF;
+        pPos := pPos + udiLength;
 
 ELSE
     IF (byMarker <= 16#7F) THEN // positive fixint
@@ -97,6 +134,9 @@ ELSE
     // fixstr
     ELSIF (byMarker >= 16#A0 AND byMarker <= 16#BF) THEN
         udiLength := byMarker - 16#A0;
+        IF (pPos + udiLength) > (pStart + udiSize) THEN
+            udiLength := DWORD_TO_UDINT((pStart + udiSize) - pPos);
+        END_IF;
         pPos := pPos + udiLength;
         
     // --- Container Types (add children to skip list) ---
