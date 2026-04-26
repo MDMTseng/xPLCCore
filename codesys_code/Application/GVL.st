@@ -85,6 +85,13 @@ VAR_GLOBAL
 	   UI is sending motion while the PLC is still powering/homing. *)
 	GroupNotReadyNakCount : UDINT := 0;
 
+	(* Count of packets NAKed because they had no recognised type tag (not
+	   'SYS', not 'M', not protocol-mismatched). Pre-fix these silently sat
+	   at the ring tail until a state transition drained them, blocking any
+	   SYS packets queued behind. Sustained growth means a UI sender forgot
+	   type:'M' on a motion command (closed B1 ghost). Diagnostic only. *)
+	MissingTypeFieldNakCount : UDINT := 0;
+
 	(* --- UI heartbeat (solidification.md W1 A3).
 	   UI pings via SYS/PING every ~500ms; PLC stamps LastUiPingMs with the
 	   current RuntimeMs and bumps UiPingCount. A supervisor can later compare
@@ -93,6 +100,15 @@ VAR_GLOBAL
 	   until such a supervisor is wired. 0 = never pinged yet. *)
 	LastUiPingMs : LINT := 0;
 	UiPingCount  : UDINT := 0;
+
+	(* Worst-case observed gap between consecutive PINGs (ms, PLC clock).
+	   Generic comm-stability metric: lets the UI dashboard "is the
+	   heartbeat steady or jittery?" without inferring from PLC-RTT alone.
+	   Updated in the PING handler; resettable via SYS/RESET_DBG_INFO.
+	   First PING after reset/boot does not contribute (no prior to delta
+	   against). 0 = no two PINGs seen yet since reset. *)
+	PingMaxGapMs       : UDINT := 0;
+	PrevPingRuntimeMs  : LINT  := 0;
 
 	(* Supervisor threshold: once the UI has pinged at least once, if no
 	   further PING arrives within UI_HEARTBEAT_TIMEOUT_MS while the FSM is
@@ -148,5 +164,20 @@ VAR_GLOBAL
 	IdleResetCount         : UDINT := 0;
 	ReadErrorResetCount    : UDINT := 0;
 	ParserErrorResetCount  : UDINT := 0;
+
+	(* B1 diagnostic counters for SetCoord1 stall investigation.
+	   AxisGroupSMScans bumps once per scan at the very top of AxisGroupSM
+	   so we can detect a cyclic-task stall by observing it stop advancing.
+	   The DBG_SetCoord* fields latch RuntimeMs at each step of the
+	   SetCoord1 dispatch -> SetCoordTransformFb lifecycle so we can
+	   measure how long Busy is held without sub-cycle online sampling. *)
+	AxisGroupSMScans              : UDINT := 0;
+	DBG_SetCoord1AcceptMs         : LINT := 0;
+	DBG_SetCoordExecuteRiseMs     : LINT := 0;
+	DBG_SetCoordBusyFirstMs       : LINT := 0;
+	DBG_SetCoordDoneMs            : LINT := 0;
+	DBG_SetCoordErrorMs           : LINT := 0;
+	DBG_SetCoordLastErrorID       : DWORD := 0;
+	DBG_SetCoordExecuteFallMs     : LINT := 0;
 
 END_VAR

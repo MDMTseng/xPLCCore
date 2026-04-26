@@ -17,6 +17,11 @@ PROGRAM AxisGroupSM
         // Sentinel used by 'G1' to detect "A not supplied" in the TryReadREAL
         // default. Any real A value is << |919191|.
         G1_A_UNSET_SENTINEL     : LREAL := -919191;
+        // Bound on per-scan SYS-drain iterations. Prevents a flood of SYS
+        // packets from monopolising the EC task. 16 covers normal bursts
+        // (PING + GA_EV + GET_MACHINE_STATE x a few); leftover slots wait
+        // one scan -- benign because SYS replies aren't latency-critical.
+        SYS_DRAIN_MAX_PER_SCAN  : INT := 16;
     END_VAR
     VAR
         reelpullmotor_fActPosition:REAL;
@@ -209,6 +214,20 @@ PROGRAM AxisGroupSM
     // or the packet is NAK'd before dispatch.
     ProtocolVersionGot: LINT;
 
+    // Per-scan iteration counter for the SYS-drain loop (see ReadIncomingPacket
+    // block). Bounded by SYS_DRAIN_MAX_PER_SCAN so a runaway SYS flood can't
+    // monopolise the EC task.
+    SysDrainIter : INT;
+
+    // B1 diagnostic: edge tracker on ApplyCoordTransform so DBG counters
+    // can capture the rising edge of SetCoordTransformFb.Execute. Reset
+    // alongside ApplyCoordTransform.
+    PrevApplyCoordTransform : BOOL := FALSE;
+    AxesErrMask             : UDINT := 0;
+    PingGapMs               : UDINT := 0;
+    DbgSetCoordSeenBusy     : BOOL := FALSE;
+    DbgSetCoordSeenDone     : BOOL := FALSE;
+    DbgSetCoordSeenError    : BOOL := FALSE;
 
     DBG_BLOCK : BOOL:=TRUE;
 
@@ -217,6 +236,11 @@ PROGRAM AxisGroupSM
 
 //IMPORTANT:following if TRUE... and if FALSE.... are mandatory, DO not try to remove/optimize it
 
+
+    // B1 diagnostic: per-scan tick. If this stops advancing relative to
+    // wall clock, the cyclic task itself is stalled (vs. the FB returning
+    // quickly while something downstream blocks).
+    GVL.AxisGroupSMScans := GVL.AxisGroupSMScans + 1;
 
     //InitRuntime();
     IF TRUE THEN
@@ -465,58 +489,66 @@ PROGRAM AxisGroupSM
     END_IF;
 
 
-    //ReadIncomingPacket();
-    IF TRUE THEN
-        PacketType := '';
-        ResponsePacketPointer := 0;
+    // Compute AxisGroupReady early so the unified packet-drain loop below
+    // can decide whether motion packets should be NAK'd as 'group_not_ready'
+    // (legacy behavior) or left at the tail for ProcessMotionPacket. The
+    // CheckAxisGroupReady block further down uses the same flag for the
+    // MotionPose reset and the early RETURN -- it's safe to compute here
+    // because the FSM state can't change mid-scan.
+    AxisGroupReady := (AxisGroupManagerFb._eState = E_RobotState.Ready);
 
-        IF (GVL.minfo_buf_ridx.size() > 0) THEN
-            MessageBufferPointer := ADR(GVL.minfo_buf[GVL.minfo_buf_ridx.getTail()][0]);
-            MessageUnpackerFb.Init(ADR(MessageBufferPointer[1]), MessageBufferPointer[0]);
-            CommandId := TO_DINT(MessageUnpackerFb.TryReadINT64('id', - 1));
-            PacketType := MessageUnpackerFb.TryReadString('type', '');
-            CommandType := MessageUnpackerFb.TryReadString('cmd', '');
-            ProtocolVersionGot := MessageUnpackerFb.TryReadINT64('protocol_version', 0);
+    //ReadIncomingPacket() + ProcessSystemPacket() + not-ready drain.
+    // Single drain loop over minfo_buf that:
+    //   - dispatches SYS packets (PING/GA_EV/GET_MACHINE_STATE/etc.)
+    //   - NAKs protocol_version_mismatch packets
+    //   - NAKs motion packets with 'group_not_ready' when FSM isn't Ready
+    //   - leaves motion at the tail for ProcessMotionPacket when Ready
+    // Fixes the prior anomaly where a PING queued behind a stalled motion
+    // packet got false-NAK'd as 'group_not_ready' (the old not-ready drain
+    // chewed through every slot blindly).
+    PacketType := '';
+    CommandType := '';
+    ResponsePacketPointer := 0;
+    SysDrainIter := 0;
+    WHILE (GVL.minfo_buf_ridx.size() > 0) AND (SysDrainIter < SYS_DRAIN_MAX_PER_SCAN) DO
+        MessageBufferPointer := ADR(GVL.minfo_buf[GVL.minfo_buf_ridx.getTail()][0]);
+        MessageUnpackerFb.Init(ADR(MessageBufferPointer[1]), MessageBufferPointer[0]);
+        CommandId := TO_DINT(MessageUnpackerFb.TryReadINT64('id', - 1));
+        PacketType := MessageUnpackerFb.TryReadString('type', '');
+        CommandType := MessageUnpackerFb.TryReadString('cmd', '');
+        ProtocolVersionGot := MessageUnpackerFb.TryReadINT64('protocol_version', 0);
 
-            // W1 A5: if the client declared a version and it doesn't match,
-            // NAK before any dispatch (SYS / motion / drain paths). 0 (absent
-            // / legacy) is allowed through. This keeps scripted test helpers
-            // working while giving real clients a hard gate when we bump.
-            IF (ProtocolVersionGot <> 0 AND TO_UDINT(ProtocolVersionGot) <> GVL.PROTOCOL_VERSION) THEN
-                IF (GVL.reMP_info_ridx.space() = 0) THEN
-                    GVL.reMP_info_ridx.consumeTail();
-                    GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
-                END_IF;
-                ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
-                MsgPakInfoClear(ResponsePacketPointer^);
-                ResponsePacketPointer^.ele_count := 4;
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('protocol_version_mismatch'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_got'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := ProtocolVersionGot);
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('id'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := CommandId);
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := FALSE);
-                MsgPakInfoWrapup(ResponsePacketPointer^);
-                GVL.reMP_info_ridx.pushHead();
-
-                GVL.minfo_buf_ridx.consumeTail();
-                GVL.ProtocolVersionMismatchCount := GVL.ProtocolVersionMismatchCount + 1;
-
-                // Neutralise downstream dispatch: clear the fields so neither
-                // SYS branch nor motion-accept/drain picks it up this scan.
-                PacketType := '';
-                CommandType := '';
-                ResponsePacketPointer := 0;
+        // W1 A5: if the client declared a version and it doesn't match,
+        // NAK before any dispatch. 0 (absent / legacy) is allowed through.
+        IF (ProtocolVersionGot <> 0 AND TO_UDINT(ProtocolVersionGot) <> GVL.PROTOCOL_VERSION) THEN
+            IF (GVL.reMP_info_ridx.space() = 0) THEN
+                GVL.reMP_info_ridx.consumeTail();
+                GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
             END_IF;
-        END_IF;
-    END_IF;
+            ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+            MsgPakInfoClear(ResponsePacketPointer^);
+            ResponsePacketPointer^.ele_count := 4;
+            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
+            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('protocol_version_mismatch'));
+            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_got'));
+            ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := ProtocolVersionGot);
+            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('id'));
+            ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := CommandId);
+            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
+            ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := FALSE);
+            MsgPakInfoWrapup(ResponsePacketPointer^);
+            GVL.reMP_info_ridx.pushHead();
 
-    IF TRUE THEN//ProcessSystemPacket
+            GVL.minfo_buf_ridx.consumeTail();
+            GVL.ProtocolVersionMismatchCount := GVL.ProtocolVersionMismatchCount + 1;
 
-        
-        IF (PacketType = 'SYS') THEN
+            // Neutralise downstream dispatch in case loop exits next.
+            PacketType := '';
+            CommandType := '';
+            ResponsePacketPointer := 0;
+            SysDrainIter := SysDrainIter + 1;
+
+        ELSIF (PacketType = 'SYS') THEN
             // reMP overflow guard: if the reply ring is full, drop the oldest
             // queued reply to make room. getHead() returning -1 would index
             // reMP_info_arr[-1] and fault the task. See doc/ringbuf-bugs.md #4.
@@ -557,6 +589,15 @@ PROGRAM AxisGroupSM
                 ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.LastErrorID));
             ELSIF (CommandType = 'PING') THEN
                 // A3: UI heartbeat. Stamp last-seen and bump counter; reply with runtime.
+                // Track worst-case PING-to-PING gap (PLC clock) for comm-jitter
+                // visibility. Skip first sample after reset (PrevPingRuntimeMs=0).
+                IF (GVL.PrevPingRuntimeMs > 0) THEN
+                    PingGapMs := TO_UDINT(RuntimeMs - GVL.PrevPingRuntimeMs);
+                    IF (PingGapMs > GVL.PingMaxGapMs) THEN
+                        GVL.PingMaxGapMs := PingGapMs;
+                    END_IF;
+                END_IF;
+                GVL.PrevPingRuntimeMs := RuntimeMs;
                 GVL.LastUiPingMs := RuntimeMs;
                 GVL.UiPingCount  := GVL.UiPingCount + 1;
                 ShouldReturn := TRUE;
@@ -571,7 +612,16 @@ PROGRAM AxisGroupSM
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
                 StateString := TO_STRING(AxisGroupManagerFb._eState);
-                ResponsePacketPointer^.ele_count := 8;
+                // Per-axis fault snapshot (W5 PLC half). DS402 drives on this
+                // bus don't expose nErrorID/LastError (verified live), so we
+                // surface bError as a 4-bit mask + nAxisState per axis. UI can
+                // tell the operator "Axis 2 errorstop" instead of "Error".
+                AxesErrMask := 0;
+                IF IoConfig_Globals.EAxis0.bError THEN AxesErrMask := AxesErrMask OR 16#1; END_IF;
+                IF IoConfig_Globals.EAxis1.bError THEN AxesErrMask := AxesErrMask OR 16#2; END_IF;
+                IF IoConfig_Globals.EAxis2.bError THEN AxesErrMask := AxesErrMask OR 16#4; END_IF;
+                IF reelpullmotor.bError           THEN AxesErrMask := AxesErrMask OR 16#8; END_IF;
+                ResponsePacketPointer^.ele_count := 10;
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('st'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := AxisGroupManagerFb._eState);
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('st_str'));
@@ -588,6 +638,81 @@ PROGRAM AxisGroupSM
                 ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := RuntimeMs);
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('coord_set'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := GVL.CoordSystemConfigured);
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('axes_err_mask'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(AxesErrMask));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('axes_state'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue :=
+                    TO_DINT(IoConfig_Globals.EAxis0.nAxisState)
+                    OR (TO_DINT(IoConfig_Globals.EAxis1.nAxisState) * 256)
+                    OR (TO_DINT(IoConfig_Globals.EAxis2.nAxisState) * 65536)
+                    OR (TO_DINT(reelpullmotor.nAxisState) * 16777216));
+            ELSIF (CommandType = 'RESET_DBG_INFO') THEN
+                // SYS-side reset: clears comm-stability counters without
+                // requiring FSM=Ready (the motion-side RESET_DBG_INFO at the
+                // bottom of this file is a legacy branch and only fires from
+                // the M dispatcher path). Generic comm hygiene; lets the UI
+                // dashboard rebaseline at any time.
+                GVL.ReMpDropCount               := 0;
+                GVL.OverlenDropCount            := 0;
+                GVL.SendStallDropCount          := 0;
+                GVL.GroupNotReadyNakCount       := 0;
+                GVL.MissingTypeFieldNakCount    := 0;
+                GVL.CoordNotConfiguredNakCount  := 0;
+                GVL.ProtocolVersionMismatchCount := 0;
+                GVL.IdleResetCount              := 0;
+                GVL.ReadErrorResetCount         := 0;
+                GVL.ParserErrorResetCount       := 0;
+                GVL.UiHeartbeatStaleCount       := 0;
+                GVL.StateChangeEventCount       := 0;
+                GVL.PingMaxGapMs                := 0;
+                GVL.PrevPingRuntimeMs           := 0;
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 1;
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('reset'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := TRUE);
+            ELSIF (CommandType = 'GET_DIAG') THEN
+                // Generic comm/robustness counters dump. UI dashboard polls this
+                // (e.g. once per second) to chart drop/NAK/reset rates and the
+                // PING gap-jitter envelope. Read-only; doesn't perturb FSM.
+                // Counters resettable via SYS/RESET_DBG_INFO (see existing handler).
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 17;
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('runtime_ms'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := RuntimeMs);
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('sm_scans'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.AxisGroupSMScans));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('remp_drop'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.ReMpDropCount));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('overlen_drop'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.OverlenDropCount));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('send_stall_drop'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.SendStallDropCount));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('group_not_ready_nak'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.GroupNotReadyNakCount));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('missing_type_nak'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.MissingTypeFieldNakCount));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('coord_not_cfg_nak'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.CoordNotConfiguredNakCount));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('proto_mismatch_nak'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.ProtocolVersionMismatchCount));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('idle_reset'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.IdleResetCount));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('read_err_reset'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.ReadErrorResetCount));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('parser_err_reset'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.ParserErrorResetCount));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ui_ping_count'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.UiPingCount));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ui_hb_stale_count'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.UiHeartbeatStaleCount));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ping_max_gap_ms'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.PingMaxGapMs));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('last_ui_ping_ms'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := GVL.LastUiPingMs);
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('st_chg_event_count'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.StateChangeEventCount));
             ELSE
                 // Unknown SYS command -- emit NAK so the TS caller doesn't hang on timeout.
                 ShouldReturn := TRUE;
@@ -610,9 +735,75 @@ PROGRAM AxisGroupSM
                 MsgPakInfoWrapup(ResponsePacketPointer^);
                 GVL.reMP_info_ridx.pushHead();
             END_IF;
-        END_IF;
+            SysDrainIter := SysDrainIter + 1;
 
-    END_IF;
+        ELSIF (PacketType <> 'M') THEN
+            // Tail is neither SYS nor 'M'. Most likely a caller forgot to set
+            // type:'M' on a motion command (closed B1 ghost: SetCoord1 sent
+            // as {cmd:'SetCoord1'} with no type sat at the tail forever,
+            // blocked PINGs, supervisor tripped at 5s). NAK inline so a
+            // future caller fails fast instead of "stalling" -- and so any
+            // SYS packets queued behind it can drain in this same loop.
+            IF (GVL.reMP_info_ridx.space() = 0) THEN
+                GVL.reMP_info_ridx.consumeTail();
+                GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+            END_IF;
+            ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+            MsgPakInfoClear(ResponsePacketPointer^);
+            ResponsePacketPointer^.ele_count := 4;
+            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
+            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('missing_type_field'));
+            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_got_type'));
+            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(PacketType));
+            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('id'));
+            ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := CommandId);
+            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
+            ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := FALSE);
+            MsgPakInfoWrapup(ResponsePacketPointer^);
+            GVL.reMP_info_ridx.pushHead();
+
+            GVL.minfo_buf_ridx.consumeTail();
+            GVL.MissingTypeFieldNakCount := GVL.MissingTypeFieldNakCount + 1;
+
+            PacketType := '';
+            CommandType := '';
+            ResponsePacketPointer := 0;
+            SysDrainIter := SysDrainIter + 1;
+
+        ELSE
+            // Tail is type:'M' (motion). When FSM isn't Ready, NAK it inline
+            // with 'group_not_ready' so the next iteration can see any SYS
+            // packets queued behind it. When Ready, EXIT and let
+            // ProcessMotionPacket handle the tail.
+            IF NOT AxisGroupReady THEN
+                IF (GVL.reMP_info_ridx.space() = 0) THEN
+                    GVL.reMP_info_ridx.consumeTail();
+                    GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+                END_IF;
+                ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+                MsgPakInfoClear(ResponsePacketPointer^);
+                ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 3;
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('group_not_ready'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('id'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := CommandId);
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := FALSE);
+                MsgPakInfoWrapup(ResponsePacketPointer^);
+                GVL.reMP_info_ridx.pushHead();
+
+                GVL.minfo_buf_ridx.consumeTail();
+                GVL.GroupNotReadyNakCount := GVL.GroupNotReadyNakCount + 1;
+
+                PacketType := '';
+                CommandType := '';
+                ResponsePacketPointer := 0;
+                SysDrainIter := SysDrainIter + 1;
+            ELSE
+                EXIT;
+            END_IF;
+        END_IF;
+    END_WHILE;
 
 
     IF TRUE THEN//ProcessAuxCommands
@@ -918,6 +1109,15 @@ PROGRAM AxisGroupSM
 
 
 
+        // B1 diagnostic: latch the rising edge of Execute (=ApplyCoordTransform)
+        // BEFORE the FB call so we know exactly which scan kicked it off.
+        IF (ApplyCoordTransform AND NOT PrevApplyCoordTransform) THEN
+            GVL.DBG_SetCoordExecuteRiseMs := RuntimeMs;
+            DbgSetCoordSeenBusy  := FALSE;
+            DbgSetCoordSeenDone  := FALSE;
+            DbgSetCoordSeenError := FALSE;
+        END_IF;
+
         SetCoordTransformFb(
             AxisGroup := AxisGroupManagerFb._agAxisGroup,
             Execute := ApplyCoordTransform,
@@ -925,9 +1125,28 @@ PROGRAM AxisGroupSM
             CoordSystem := SMC_COORD_SYSTEM.MCS
         );
 
+        // B1 diagnostic: catch the FB lifecycle even if Busy is asserted for
+        // only a single scan. First-seen is what we care about; the FB clears
+        // Done/Error on the next falling-edge of Execute.
+        IF (SetCoordTransformFb.Busy AND NOT DbgSetCoordSeenBusy) THEN
+            GVL.DBG_SetCoordBusyFirstMs := RuntimeMs;
+            DbgSetCoordSeenBusy := TRUE;
+        END_IF;
+        IF (SetCoordTransformFb.Done AND NOT DbgSetCoordSeenDone) THEN
+            GVL.DBG_SetCoordDoneMs := RuntimeMs;
+            DbgSetCoordSeenDone := TRUE;
+        END_IF;
+        IF (SetCoordTransformFb.Error AND NOT DbgSetCoordSeenError) THEN
+            GVL.DBG_SetCoordErrorMs := RuntimeMs;
+            GVL.DBG_SetCoordLastErrorID := TO_DWORD(SetCoordTransformFb.ErrorID);
+            DbgSetCoordSeenError := TRUE;
+        END_IF;
+
         IF ApplyCoordTransform AND (SetCoordTransformFb.Busy OR SetCoordTransformFb.Done OR SetCoordTransformFb.Error) THEN
             ApplyCoordTransform := FALSE;
+            GVL.DBG_SetCoordExecuteFallMs := RuntimeMs;
         END_IF;
+        PrevApplyCoordTransform := ApplyCoordTransform;
 
         ReadMcsTransformFb(
             AxisGroup := AxisGroupManagerFb._agAxisGroup,
@@ -1111,6 +1330,15 @@ PROGRAM AxisGroupSM
                 CoordTransform.C := 0.0;
                 ApplyCoordTransform := TRUE;
                 GVL.CoordSystemConfigured := TRUE;
+                GVL.DBG_SetCoord1AcceptMs := RuntimeMs;
+                // Reset the lifecycle DBG_SetCoord* fields so an old reading
+                // doesn't get mistaken for the new run.
+                GVL.DBG_SetCoordExecuteRiseMs  := 0;
+                GVL.DBG_SetCoordBusyFirstMs    := 0;
+                GVL.DBG_SetCoordDoneMs         := 0;
+                GVL.DBG_SetCoordErrorMs        := 0;
+                GVL.DBG_SetCoordLastErrorID    := 0;
+                GVL.DBG_SetCoordExecuteFallMs  := 0;
 
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
@@ -1121,6 +1349,25 @@ PROGRAM AxisGroupSM
                 IoTriggerResetCount := 0;
                 IoTriggerInfoCount := 0;
                 IoCommandCount := 0;
+
+                // Comm-stability counters reset (matches SYS/GET_DIAG payload)
+                // so a UI dashboard can rebaseline cleanly. Doesn't reset
+                // RuntimeMs / sm_scans (monotonic clocks) or last_ui_ping_ms
+                // (live state, not a counter).
+                GVL.ReMpDropCount               := 0;
+                GVL.OverlenDropCount            := 0;
+                GVL.SendStallDropCount          := 0;
+                GVL.GroupNotReadyNakCount       := 0;
+                GVL.MissingTypeFieldNakCount    := 0;
+                GVL.CoordNotConfiguredNakCount  := 0;
+                GVL.ProtocolVersionMismatchCount := 0;
+                GVL.IdleResetCount              := 0;
+                GVL.ReadErrorResetCount         := 0;
+                GVL.ParserErrorResetCount       := 0;
+                GVL.UiHeartbeatStaleCount       := 0;
+                GVL.StateChangeEventCount       := 0;
+                GVL.PingMaxGapMs                := 0;
+                GVL.PrevPingRuntimeMs           := 0;
 
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
