@@ -80,7 +80,7 @@ export const Modal: React.FC<ModalProps> = ({
 }) => {
   const [clicks, setClicks] = useState(0);
   const [animationKey, setAnimationKey] = useState(0);
-  const timerRef = useRef<NodeJS.Timeout>();
+  const timerRef = useRef<NodeJS.Timeout | undefined>(undefined);
 
   const handleCloseAttempt = () => {
     if (timerRef.current) {
