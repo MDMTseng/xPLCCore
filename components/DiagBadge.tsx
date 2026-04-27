@@ -31,6 +31,12 @@ export const DiagBadge: React.FC<{
   const [worst, setWorst] = useState<{ key: string; value: number } | null>(null);
   const [total, setTotal] = useState<number>(0);
   const [stale, setStale] = useState<boolean>(false);
+  // Latency hints for tooltip. ping_max_gap_ms is PLC's worst observed gap
+  // between consecutive UI heartbeats (envelope, not current). last_ui_ping_ms
+  // is the runtime_ms timestamp of the last PING the PLC saw — comparing it
+  // to runtime_ms tells the operator how stale the UI->PLC link is right now.
+  const [pingMaxGap, setPingMaxGap] = useState<number | null>(null);
+  const [pingFreshness, setPingFreshness] = useState<number | null>(null);
   const inflightRef = useRef(false);
 
   const poll = useCallback(async () => {
@@ -53,6 +59,15 @@ export const DiagBadge: React.FC<{
       }
       setWorst(max);
       setTotal(sum);
+      const gap = Number(reply.ping_max_gap_ms);
+      setPingMaxGap(Number.isFinite(gap) ? gap : null);
+      const lastPing = Number(reply.last_ui_ping_ms);
+      const runtime = Number(reply.runtime_ms);
+      setPingFreshness(
+        Number.isFinite(lastPing) && Number.isFinite(runtime) && lastPing > 0
+          ? Math.max(0, runtime - lastPing)
+          : null
+      );
       setStale(false);
     } catch {
       setStale(true);
@@ -83,11 +98,17 @@ export const DiagBadge: React.FC<{
   if (!connected) return null;
 
   const isWarn = total > 0;
+  const latencyLine = (() => {
+    const parts: string[] = [];
+    if (pingMaxGap !== null) parts.push(`PING worst-gap ${pingMaxGap}ms`);
+    if (pingFreshness !== null) parts.push(`last PING ${pingFreshness}ms ago`);
+    return parts.length ? `\n${parts.join(' · ')}` : '';
+  })();
   const tooltip = stale
     ? 'PLC diag poll failed (last reply was NAK/missing). Click to investigate.'
     : isWarn
-      ? `${total} silent NAK/drop/reset events on PLC since boot or last clear. Worst: ${worst?.key}=${worst?.value}. Click for details.`
-      : 'PLC drop/NAK/reset counters all clean.';
+      ? `${total} silent NAK/drop/reset events on PLC since boot or last clear. Worst: ${worst?.key}=${worst?.value}. Click for details.${latencyLine}`
+      : `PLC drop/NAK/reset counters all clean.${latencyLine}`;
 
   return (
     <button
