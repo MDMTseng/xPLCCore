@@ -99,7 +99,7 @@ def do_status(timeout):
         if isinstance(inner, dict) and inner.get("pong"):
             rows.append(("ui_harness", True, "pong runtime_ms=%s" % inner.get("runtime_ms", "?")))
         else:
-            rows.append(("ui_harness", False, "no pong: %s" % (out or res.stdout)[:200]))
+            rows.append(("ui_harness", False, "no pong: %s" % str(out or res.stdout)[:200]))
     except subprocess.TimeoutExpired:
         rows.append(("ui_harness", False, "timeout (UI not running / not connected?)"))
     except Exception as ex:
