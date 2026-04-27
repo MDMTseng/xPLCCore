@@ -7,6 +7,7 @@ ACTIONS_TO_ENSURE = [
     "InitRuntime",
     "UpdateAxisGroupState",
     "UpdateRuntimeAndInputEvent",
+    "UpdateMotionProgress",
 ]
 
 proj = projects.primary
