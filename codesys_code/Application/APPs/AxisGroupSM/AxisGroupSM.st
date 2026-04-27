@@ -209,6 +209,11 @@ PROGRAM AxisGroupSM
     InputPinState: UINT;
     
     MotionTargetMovementId: SMC_Movement_Id;
+    // Scratch for safely combining MotionTargetMovementId (ULINT) with the
+    // signed motion_id_offset payload field. DINT (32-bit signed) covers any
+    // realistic offset; the previous TO_INT cast wrapped offsets >32767 to
+    // negative and silently rolled TargetMovementId backwards.
+    MotionIdOffsetTemp: DINT;
     
     DigitalInputPointer: POINTER TO BYTE;
 

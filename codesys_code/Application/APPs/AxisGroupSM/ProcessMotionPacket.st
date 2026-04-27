@@ -253,7 +253,18 @@
 
 					FlyEventTempData.TimeToLiveMs := TO_DINT(MessageUnpackerFb.TryReadINT64('ttl_ms', -1));
 
-					FlyEventTempData.TargetMovementId := MotionTargetMovementId + TO_INT(MessageUnpackerFb.TryReadINT64('motion_id_offset', 0));
+					// Read offset as full DINT (was TO_INT, which silently wrapped
+					// any value >32767 to negative and rolled TargetMovementId
+					// backwards onto a stale movement). Negative offsets that
+					// would underflow ULINT are clamped to 0.
+					MotionIdOffsetTemp := TO_DINT(MessageUnpackerFb.TryReadINT64('motion_id_offset', 0));
+					IF MotionIdOffsetTemp >= 0 THEN
+						FlyEventTempData.TargetMovementId := MotionTargetMovementId + DINT_TO_ULINT(MotionIdOffsetTemp);
+					ELSIF MotionTargetMovementId >= DINT_TO_ULINT(-MotionIdOffsetTemp) THEN
+						FlyEventTempData.TargetMovementId := MotionTargetMovementId - DINT_TO_ULINT(-MotionIdOffsetTemp);
+					ELSE
+						FlyEventTempData.TargetMovementId := 0;
+					END_IF;
 
 					FlyEventTempData.TargetMovementProgress := TO_LREAL(MessageUnpackerFb.TryReadREAL('motion_progress', 1));
 
@@ -392,7 +403,15 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
                 IF (MotionOutputPin <> 0 AND MotionTargetMovementId <> 0) THEN
                     FlyEventTempData.ActionType := FlyEventActType.ACK_SRC_ID;
                     FlyEventTempData.TriggerType := FlyEventTriggerType.MovmentProgressTrigger;
-                    FlyEventTempData.TargetMovementId := MotionTargetMovementId + TO_INT(MessageUnpackerFb.TryReadINT64('motion_id_offset', 0));
+                    // Same TO_INT->INT16 wrap fix as the M4 branch above.
+                    MotionIdOffsetTemp := TO_DINT(MessageUnpackerFb.TryReadINT64('motion_id_offset', 0));
+                    IF MotionIdOffsetTemp >= 0 THEN
+                        FlyEventTempData.TargetMovementId := MotionTargetMovementId + DINT_TO_ULINT(MotionIdOffsetTemp);
+                    ELSIF MotionTargetMovementId >= DINT_TO_ULINT(-MotionIdOffsetTemp) THEN
+                        FlyEventTempData.TargetMovementId := MotionTargetMovementId - DINT_TO_ULINT(-MotionIdOffsetTemp);
+                    ELSE
+                        FlyEventTempData.TargetMovementId := 0;
+                    END_IF;
                     FlyEventTempData.TargetMovementProgress := TO_LREAL(MessageUnpackerFb.TryReadREAL('motion_progress', 1));
 
                     FlyEventTempData.SourceCommandId := CommandId;
