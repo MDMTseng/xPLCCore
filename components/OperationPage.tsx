@@ -7,6 +7,25 @@ import { cmd, Event, validateReply, type EventOrdinal } from '../lib/protocol';
 
 import { Divider } from 'antd';
 
+// SMC_AXIS_STATE (SM3_Basic). PLC packs one byte per axis into axes_state
+// DINT — byte0=EAxis0, byte1=EAxis1, byte2=EAxis2, byte3=reel. Decoding to
+// names lets the operator see "Errorstop" instead of "1" without opening
+// the SoftMotion docs.
+const SMC_AXIS_STATE_NAMES: Record<number, string> = {
+  0: 'power_off',
+  1: 'errorstop',
+  2: 'stopping',
+  3: 'homing',
+  4: 'standstill',
+  5: 'discrete_motion',
+  6: 'continuous_motion',
+  7: 'synchronized_motion',
+};
+function decodeAxisState(packed: number, idx: number): { code: number; name: string } {
+  const code = (packed >>> (idx * 8)) & 0xff;
+  return { code, name: SMC_AXIS_STATE_NAMES[code] ?? `0x${code.toString(16)}` };
+}
+
 export const OperationPage: React.FC<{
   COMCtrlObj:COMCtrlObj,
   env_path: string,
@@ -30,6 +49,7 @@ export const OperationPage: React.FC<{
   const [axesErrId, setAxesErrId] = useState<number[] | null>(null);
   const [axesErrMask, setAxesErrMask] = useState<number | null>(null);
   const [axesLabels, setAxesLabels] = useState<string[] | null>(null);
+  const [axesState, setAxesState] = useState<number | null>(null);
   // Coord-system gate. PLC clears it on UnInited entry (any reset/recovery)
   // and rejects G1 with err='coord_not_configured' until SetCoord0/1 is
   // re-called. Surface it so the operator can spot the gate state at a
@@ -49,6 +69,9 @@ export const OperationPage: React.FC<{
       }
       if (reply && typeof reply.axes_err_mask === 'number') {
         setAxesErrMask(reply.axes_err_mask);
+      }
+      if (reply && typeof reply.axes_state === 'number') {
+        setAxesState(reply.axes_state);
       }
       if (reply && typeof reply.coord_set === 'boolean') {
         setCoordSet(reply.coord_set);
@@ -268,13 +291,14 @@ export const OperationPage: React.FC<{
             }}
           >
             Last error: {plcLastError.src} (id={plcLastError.id})
-            {(axesErrId || axesErrMask !== null) && (
+            {(axesErrId || axesErrMask !== null || axesState !== null) && (
               <div style={{ marginTop: 6, fontWeight: 500, fontSize: 11 }}>
                 {(axesLabels ?? AXIS_LABELS_FALLBACK).map((label: string, i: number) => {
                   const eid = axesErrId?.[i] ?? 0;
                   const faulted = axesErrMask !== null
                     ? ((axesErrMask >> i) & 1) === 1
                     : eid !== 0;
+                  const st = axesState !== null ? decodeAxisState(axesState, i) : null;
                   return (
                     <div
                       key={i}
@@ -289,6 +313,7 @@ export const OperationPage: React.FC<{
                       <span>{label}</span>
                       <span>
                         {faulted ? 'FAULT' : 'ok'}
+                        {st && ` · ${st.name}`}
                         {' · ErrID 0x'}
                         {(eid >>> 0).toString(16).padStart(4, '0').toUpperCase()}
                       </span>
