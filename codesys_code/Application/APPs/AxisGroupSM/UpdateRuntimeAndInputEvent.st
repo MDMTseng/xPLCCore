@@ -53,22 +53,28 @@ IF TO_INT(AxisGroupManagerFb._eState) <> PrevAxisGroupState THEN
     PrevAxisGroupState := TO_INT(AxisGroupManagerFb._eState);
 END_IF;
 
-// COORD_SET push event: FALSE->TRUE edge on GVL.CoordSystemConfigured.
-// Fires after SetCoord0 / SetCoord1 completes so the UI doesn't have
-// to poll GET_MACHINE_STATE to learn the coord gate just opened.
-// Envelope matches ST_CHG: kind='event', name='COORD_SET'.
-IF (GVL.CoordSystemConfigured AND NOT PrevCoordSet) THEN
+// COORD_SET push event: edge-detect on GVL.CoordSystemConfigured (both
+// directions). UnInited entry clears the gate; SetCoord0/1 raises it.
+// The falling edge matters as much as the rising one -- after a reset
+// the operator's first G1 will NAK with err='coord_not_configured'
+// unless they reconfigure, so the UI needs to know the gate dropped
+// without polling GET_MACHINE_STATE.
+// Envelope matches ST_CHG: kind='event', name='COORD_SET', plus a BOOL
+// `value` carrying the new gate state.
+IF (GVL.CoordSystemConfigured <> PrevCoordSet) THEN
     IF (GVL.reMP_info_ridx.space() = 0) THEN
         GVL.reMP_info_ridx.consumeTail();
         GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
     END_IF;
     EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
     MsgPakInfoClear(EventPacketPointer^);
-    EventPacketPointer^.ele_count := 3;
+    EventPacketPointer^.ele_count := 4;
     EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
     EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('event'));
     EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('name'));
     EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('COORD_SET'));
+    EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('value'));
+    EventPacketPointer^.whead := MessagePackerFb.PackBool(pStart := EventPacketPointer^.whead, bValue := GVL.CoordSystemConfigured);
     EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('runtime_ms'));
     EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
     MsgPakInfoWrapup(EventPacketPointer^);

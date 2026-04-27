@@ -171,6 +171,9 @@ export interface PushEvent {
   kind: 'event';
   name: 'ST_CHG' | 'COORD_SET' | 'MOVE_DONE';
   runtime_ms: number;
+  // COORD_SET only: BOOL gate state on this edge (true = SetCoord0/1
+  // just raised it; false = UnInited entry just cleared it).
+  value?: boolean;
   [k: string]: unknown;
 }
 

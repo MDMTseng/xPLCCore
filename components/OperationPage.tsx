@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import type { COMCtrlObj } from '../types';
 import { delay } from '../utils/async';
 import { t, type UILang } from '../i18n';
@@ -53,6 +53,20 @@ export const OperationPage: React.FC<{
     }
   }, [COMCtrlObj.sendTcpMsgPack]);
   const fetchAxesErr = refreshMachineState;
+
+  // PLC pushes a COORD_SET event on every edge of GVL.CoordSystemConfigured
+  // (UnInited entry clears it; SetCoord0/1 raises it). Listening here keeps
+  // the gate-state banner in sync without polling GET_MACHINE_STATE.
+  useEffect(() => {
+    const handler = (ev: globalThis.Event) => {
+      const msg = (ev as CustomEvent).detail;
+      if (msg && msg.name === 'COORD_SET' && typeof msg.value === 'boolean') {
+        setCoordSet(msg.value);
+      }
+    };
+    window.addEventListener('plc:event', handler as EventListener);
+    return () => window.removeEventListener('plc:event', handler as EventListener);
+  }, []);
 
   const init_plc_motion = useCallback(async (loop_count: number = 20, delay_ms: number = 500,latest_state_cb:(status_str:string, err_src:string, err_id:number)=>void) => {
     let event: EventOrdinal = Event.NONE;
