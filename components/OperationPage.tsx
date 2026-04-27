@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { COMCtrlObj } from '../types';
 import { delay } from '../utils/async';
 import { t, type UILang } from '../i18n';
@@ -6,6 +6,12 @@ import { useHarnessAction } from '../harness/registry';
 import { cmd, Event, validateReply, type EventOrdinal } from '../lib/protocol';
 
 import { Divider } from 'antd';
+
+// Mirrors AxisGroupSM.st `MOTION_BUFFER_THRESHOLD : ULINT := 12;`. Keep in
+// sync with the PLC constant -- ProcessMotionPacket gates motion acceptance
+// on `MotionBufferSize < MOTION_BUFFER_THRESHOLD`, so the UI cap is the
+// same number. If the PLC bumps it, bump here too.
+const MOTION_BUFFER_THRESHOLD = 12;
 
 // SMC_AXIS_STATE (SM3_Basic). PLC packs one byte per axis into axes_state
 // DINT — byte0=EAxis0, byte1=EAxis1, byte2=EAxis2, byte3=reel. Decoding to
@@ -55,6 +61,22 @@ export const OperationPage: React.FC<{
   // re-called. Surface it so the operator can spot the gate state at a
   // glance instead of seeing a cryptic NAK on the first move.
   const [coordSet, setCoordSet] = useState<boolean | null>(null);
+  // Motion-queue depth (F1) and live commanded position (F2). PLC publishes
+  // motion_buffer_size in GET_MACHINE_STATE; READ_LATEST_CMD_LOCATION returns
+  // the most recently committed XYZ/ABC pose. Polled together at 1Hz while
+  // the page is mounted so the operator can see the queue filling up before
+  // ProcessMotionPacket starts NAKing with retry-cooldown.
+  const [motionBufferSize, setMotionBufferSize] = useState<number | null>(null);
+  const [movementId, setMovementId] = useState<number | null>(null);
+  const [position, setPosition] = useState<
+    { X: number; Y: number; Z: number; A?: number; B?: number; C?: number } | null
+  >(null);
+  // F4 watchdog: PLC pushes MOVE_DONE on every drain edge. If the id jumps
+  // by more than 1 between consecutive events, a queued move was dropped
+  // somewhere (TCP stall, ring overflow, etc.) -- surface it instead of
+  // silently advancing.
+  const [moveSkipWarning, setMoveSkipWarning] = useState<string | null>(null);
+  const lastSeenMoveDoneIdRef = useRef<number>(0);
   // Static fallback used only until the first GET_MACHINE_STATE arrives
   // and gives us the PLC-provided axes_labels. Anything visible to the
   // operator should come from the live array, not this constant.
@@ -79,6 +101,12 @@ export const OperationPage: React.FC<{
       if (reply && Array.isArray(reply.axes_labels)) {
         setAxesLabels(reply.axes_labels.map((s: any) => String(s)));
       }
+      if (reply && typeof reply.motion_buffer_size === 'number') {
+        setMotionBufferSize(reply.motion_buffer_size);
+      }
+      if (reply && typeof reply.movement_id === 'number') {
+        setMovementId(reply.movement_id);
+      }
     } catch {
       /* swallow — best-effort enrichment */
     }
@@ -88,16 +116,57 @@ export const OperationPage: React.FC<{
   // PLC pushes a COORD_SET event on every edge of GVL.CoordSystemConfigured
   // (UnInited entry clears it; SetCoord0/1 raises it). Listening here keeps
   // the gate-state banner in sync without polling GET_MACHINE_STATE.
+  // Same listener also handles MOVE_DONE (F4 watchdog): every drain edge
+  // carries the LastAcceptedMovementId; a gap >1 between consecutive ids
+  // means a queued movement was dropped en route (TCP stall, ring spill).
   useEffect(() => {
     const handler = (ev: globalThis.Event) => {
       const msg = (ev as CustomEvent).detail;
-      if (msg && msg.name === 'COORD_SET' && typeof msg.value === 'boolean') {
+      if (!msg) return;
+      if (msg.name === 'COORD_SET' && typeof msg.value === 'boolean') {
         setCoordSet(msg.value);
+      } else if (msg.name === 'MOVE_DONE' && typeof msg.movement_id === 'number') {
+        const id = msg.movement_id as number;
+        const prev = lastSeenMoveDoneIdRef.current;
+        if (prev !== 0 && id > prev + 1) {
+          setMoveSkipWarning(
+            `Movement-id jumped ${prev} → ${id} (skipped ${id - prev - 1}).`
+          );
+        }
+        lastSeenMoveDoneIdRef.current = id;
+        setMovementId(id);
       }
     };
     window.addEventListener('plc:event', handler as EventListener);
     return () => window.removeEventListener('plc:event', handler as EventListener);
   }, []);
+
+  // 1Hz poll of GET_MACHINE_STATE + READ_LATEST_CMD_LOCATION while the page
+  // is mounted. Cheap (two msgpack round-trips/sec) and gives the operator
+  // a live view of queue depth + commanded pose. We don't gate on
+  // plcMotionStatus -- the PLC answers in any state, and we want the queue
+  // visible even before Ready (e.g. catching a stuck buffer post-recovery).
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      if (cancelled) return;
+      await refreshMachineState();
+      try {
+        const reply: any = await COMCtrlObj.sendTcpMsgPack(cmd.ReadLatestCmdLocation());
+        if (!cancelled && reply && typeof reply.X === 'number') {
+          setPosition({
+            X: reply.X, Y: reply.Y, Z: reply.Z,
+            A: typeof reply.A === 'number' ? reply.A : undefined,
+            B: typeof reply.B === 'number' ? reply.B : undefined,
+            C: typeof reply.C === 'number' ? reply.C : undefined,
+          });
+        }
+      } catch { /* best-effort */ }
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [refreshMachineState, COMCtrlObj.sendTcpMsgPack]);
 
   const init_plc_motion = useCallback(async (loop_count: number = 20, delay_ms: number = 500,latest_state_cb:(status_str:string, err_src:string, err_id:number)=>void) => {
     let event: EventOrdinal = Event.NONE;
@@ -273,6 +342,90 @@ export const OperationPage: React.FC<{
               }}
             >
               Set Coord1
+            </button>
+          </div>
+        )}
+
+        {(motionBufferSize !== null || position !== null) && (
+          <div
+            style={{
+              marginTop: 10,
+              border: '1px solid #e5e7eb',
+              borderRadius: 10,
+              padding: '8px 10px',
+              background: '#f8fafc',
+              color: '#334155',
+              fontSize: 12,
+              display: 'grid',
+              gridTemplateColumns: 'auto 1fr',
+              gap: 8,
+              alignItems: 'center',
+            }}
+          >
+            {motionBufferSize !== null && (() => {
+              const full = motionBufferSize >= MOTION_BUFFER_THRESHOLD - 2;
+              return (
+                <>
+                  <span style={{ fontWeight: 700 }}>Queue</span>
+                  <span
+                    style={{
+                      fontFamily: 'monospace',
+                      fontWeight: 700,
+                      color: full ? '#991b1b' : '#166534',
+                    }}
+                  >
+                    {motionBufferSize} / {MOTION_BUFFER_THRESHOLD}
+                    {movementId !== null && ` · last id ${movementId}`}
+                  </span>
+                </>
+              );
+            })()}
+            {position && (
+              <>
+                <span style={{ fontWeight: 700 }}>Pose</span>
+                <span style={{ fontFamily: 'monospace' }}>
+                  X {position.X.toFixed(3)} · Y {position.Y.toFixed(3)} · Z {position.Z.toFixed(3)}
+                  {position.A !== undefined && ` · A ${position.A.toFixed(3)}`}
+                  {position.B !== undefined && ` · B ${position.B.toFixed(3)}`}
+                  {position.C !== undefined && ` · C ${position.C.toFixed(3)}`}
+                </span>
+              </>
+            )}
+          </div>
+        )}
+
+        {moveSkipWarning && (
+          <div
+            style={{
+              marginTop: 10,
+              border: '1px solid #fca5a5',
+              borderRadius: 10,
+              padding: '8px 10px',
+              background: '#fef2f2',
+              color: '#991b1b',
+              fontSize: 12,
+              fontWeight: 600,
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: 8,
+            }}
+          >
+            <span>MOVE_DONE gap detected — {moveSkipWarning}</span>
+            <button
+              type="button"
+              onClick={() => setMoveSkipWarning(null)}
+              style={{
+                background: '#dc2626',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 6,
+                padding: '4px 10px',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Dismiss
             </button>
           </div>
         )}
