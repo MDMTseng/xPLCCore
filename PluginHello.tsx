@@ -6,7 +6,7 @@ import type { COMCtrlObj } from './types';
 import { useTcpStringConnection } from './hooks/useTcpStringConnection';
 import { t, type UILang } from './i18n';
 import { hasHarnessAction, dispatchHarnessAction, listHarnessActions, registerHarnessAction, unregisterHarnessAction } from './harness/registry';
-import { cmd } from './lib/protocol';
+import { cmd, validateReply } from './lib/protocol';
 
 // Bump when shipping changes to the TCP/msgpack dispatcher or PLC protocol.
 // Shown as a pill next to the app title so you can tell at a glance whether
@@ -144,6 +144,22 @@ export const PluginHello: React.FC<{
   const [tcpAvailable, setTcpAvailable] = useState(false);
   // Enable flags to drive effects
   const [tcpClientEnabled, setTcpClientEnabled] = useState(false);
+
+  // PLC reply schema-drift surface. validateReply() in lib/protocol.ts
+  // dispatches `plc:schema-drift` when a known reply shape is missing
+  // required keys. We latch the first one and show it in a red strip
+  // so a coupling-invariants regression doesn't silently fall through.
+  const [schemaDrift, setSchemaDrift] = useState<{ name: string; missing: string; at: number } | null>(null);
+  useEffect(() => {
+    const handler = (ev: globalThis.Event) => {
+      const d = (ev as CustomEvent).detail;
+      if (d && typeof d.name === 'string') {
+        setSchemaDrift({ name: d.name, missing: String(d.missing ?? ''), at: d.at ?? Date.now() });
+      }
+    };
+    window.addEventListener('plc:schema-drift', handler as EventListener);
+    return () => window.removeEventListener('plc:schema-drift', handler as EventListener);
+  }, []);
 
   // TCP Client states
   const [tcpConnected, setTcpConnected] = useState(false);
@@ -704,6 +720,7 @@ export const PluginHello: React.FC<{
       try {
         const reply = await (sendTcpMsgPack(cmd.GetMachineState(), true, HEARTBEAT_STALE_MS) as Promise<any>);
         if (!cancelled && reply) {
+          validateReply('MachineState', reply);
           lastMachineSnapshotRef.current = { ...reply, fetched_at: Date.now() };
           console.log('[A4] reconnect snapshot', reply);
           try {
@@ -726,6 +743,7 @@ export const PluginHello: React.FC<{
     });
     registerHarnessAction('get_machine_state', async () => {
       const reply = await (sendTcpMsgPack(cmd.GetMachineState(), true, HEARTBEAT_STALE_MS) as Promise<any>);
+      validateReply('MachineState', reply);
       lastMachineSnapshotRef.current = { ...reply, fetched_at: Date.now() };
       return reply;
     });
@@ -1074,6 +1092,45 @@ export const PluginHello: React.FC<{
         color: '#111827',
       }}
     >
+      {schemaDrift && (
+        <div
+          style={{
+            marginBottom: 10,
+            border: '1px solid #ef4444',
+            background: '#fef2f2',
+            color: '#7f1d1d',
+            borderRadius: 10,
+            padding: '8px 12px',
+            fontSize: 12,
+            fontWeight: 700,
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          <span>
+            PLC reply schema drift: <code>{schemaDrift.name}</code> missing keys{' '}
+            <code>{schemaDrift.missing}</code>. UI may show stale/undefined values.
+            Check coupling_invariants.md "Reply-ring layout vs UI parser".
+          </span>
+          <button
+            type="button"
+            onClick={() => setSchemaDrift(null)}
+            style={{
+              background: '#7f1d1d',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 6,
+              padding: '3px 10px',
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            dismiss
+          </button>
+        </div>
+      )}
       <div style={{ ...sectionCardStyle, marginBottom: 12, borderRadius: 14, padding: 0, overflow: 'hidden' }}>
         <div style={{ padding: '9px 12px', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto', gap: 8, alignItems: 'start' }}>
           <div>

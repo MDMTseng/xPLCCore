@@ -224,6 +224,60 @@ export const cmd = {
   GA_EV: (ev: number) => env<GaEvReply>({ type: 'SYS', cmd: 'GA_EV', ev }),
 } as const;
 
+// ─── Runtime schema-drift guard ──────────────────────────────────────
+// TS reply types are erased at runtime, so a renamed/removed PLC field
+// silently surfaces as `undefined` in the UI. This lets each consumer
+// call `validateReply('MachineState', reply)` once and get a loud
+// console.error + a `plc:schema-drift` window event when keys are
+// missing -- caught the moment a coupling-invariants entry rots.
+//
+// Per-shape required-key lists are kept here next to the interfaces so
+// they move together. Field types beyond presence aren't checked --
+// presence catches 95% of drift; deeper validation isn't worth the
+// runtime cost on every reply.
+
+export const REQUIRED_KEYS = {
+  MachineState: [
+    'st', 'st_str', 'err_src', 'err_id', 'motion_buffer_size',
+    'movement_id', 'runtime_ms', 'coord_set',
+    'axes_err_mask', 'axes_state', 'axes_err_id',
+  ],
+  DiagSnapshot: [
+    'runtime_ms', 'sm_scans', 'remp_drop', 'overlen_drop', 'send_stall_drop',
+    'group_not_ready_nak', 'missing_type_nak', 'coord_not_cfg_nak',
+    'proto_mismatch_nak', 'idle_reset', 'read_err_reset', 'parser_err_reset',
+    'ui_ping_count', 'ui_hb_stale_count', 'ping_max_gap_ms',
+    'last_ui_ping_ms', 'st_chg_event_count',
+  ],
+  GaEvReply: ['st', 'st_str', 'err_src', 'err_id'],
+} as const;
+
+export type ReplyShapeName = keyof typeof REQUIRED_KEYS;
+
+export function validateReply(name: ReplyShapeName, reply: unknown): boolean {
+  if (!reply || typeof reply !== 'object') {
+    reportSchemaDrift(name, '<not-an-object>', reply);
+    return false;
+  }
+  const missing = REQUIRED_KEYS[name].filter((k) => !(k in (reply as object)));
+  if (missing.length > 0) {
+    reportSchemaDrift(name, missing.join(','), reply);
+    return false;
+  }
+  return true;
+}
+
+function reportSchemaDrift(name: string, missing: string, reply: unknown): void {
+  console.error(`[schema-drift] ${name} reply missing keys: ${missing}`, reply);
+  if (typeof window !== 'undefined') {
+    try {
+      window.dispatchEvent(new CustomEvent('plc:schema-drift', {
+        detail: { name, missing, reply, at: Date.now() },
+      }));
+    } catch (_) { /* SSR / no-DOM context */ }
+  }
+}
+
 // Opt-in typed sender. Wraps an existing `sendTcpMsgPack` so callers
 // who want compile-time reply types can write:
 //

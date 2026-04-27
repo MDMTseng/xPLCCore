@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { cmd } from '../lib/protocol';
+import { cmd, validateReply } from '../lib/protocol';
 
 type DiagReply = Record<string, number> & { ack?: boolean };
 
@@ -39,6 +39,7 @@ export const DiagPanel: React.FC<{
     try {
       const reply = await (sendTcpMsgPack(cmd.GetDiag(), true) as Promise<any>);
       if (reply && reply.ack !== false) {
+        validateReply('DiagSnapshot', reply);
         setPrev(latest);
         setLatest(reply as DiagReply);
         setLastFetchAt(Date.now());

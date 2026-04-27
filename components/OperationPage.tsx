@@ -3,7 +3,7 @@ import type { COMCtrlObj } from '../types';
 import { delay } from '../utils/async';
 import { t, type UILang } from '../i18n';
 import { useHarnessAction } from '../harness/registry';
-import { cmd, Event, type EventOrdinal } from '../lib/protocol';
+import { cmd, Event, validateReply, type EventOrdinal } from '../lib/protocol';
 
 import { Divider } from 'antd';
 
@@ -39,6 +39,7 @@ export const OperationPage: React.FC<{
   const refreshMachineState = useCallback(async () => {
     try {
       const reply: any = await COMCtrlObj.sendTcpMsgPack(cmd.GetMachineState());
+      validateReply('MachineState', reply);
       if (reply && Array.isArray(reply.axes_err_id)) {
         setAxesErrId(reply.axes_err_id.map((n: any) => Number(n) | 0));
       }
@@ -79,6 +80,7 @@ export const OperationPage: React.FC<{
       }
 
       let retInfo = await COMCtrlObj.sendTcpMsgPack(cmd.GA_EV(event)) as any;
+      validateReply('GaEvReply', retInfo);
       event = Event.NONE;
       console.log(retInfo)
       let status_str = retInfo['st_str'];
