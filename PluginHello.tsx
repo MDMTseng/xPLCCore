@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { encode, decodeMultiStream } from '@msgpack/msgpack';
 import { ModbusRTU } from './lib/ModbusRTU';
 import { ControlPage } from './components/ControlPage';
+import { DiagBadge } from './components/DiagBadge';
 import type { COMCtrlObj } from './types';
 import { useTcpStringConnection } from './hooks/useTcpStringConnection';
 import { t, type UILang } from './i18n';
@@ -1175,6 +1176,7 @@ export const PluginHello: React.FC<{
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifySelf: 'end' }}>
+            <DiagBadge sendTcpMsgPack={sendTcpMsgPack} connected={tcpConnected} />
             <div style={{ display: 'inline-flex', border: '1px solid #d1d5db', borderRadius: 999, overflow: 'hidden', background: '#ffffff' }}>
               <button
                 type="button"
