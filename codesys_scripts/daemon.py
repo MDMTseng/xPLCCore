@@ -286,10 +286,19 @@ append_rpc_log("%s daemon-start pid=%s" % (time.strftime("%H:%M:%S"), os.getpid(
 print("[daemon] listening. Ctrl+C in this console to stop.")
 
 stop_requested = False
+# Accept-error throttle: a broken listening socket (e.g. WSAEINVAL 10022 on
+# Windows) used to make accept() raise immediately every iteration, spinning
+# at 100% CPU and flooding daemon.rpc.log with 100k+ identical lines until
+# CODESYS crashed. Sleep + bound the retries so a wedged socket exits the
+# daemon cleanly instead of taking the IDE down with it.
+ACCEPT_ERR_SLEEP   = 1.0   # seconds between retries when accept() raises
+ACCEPT_ERR_MAX     = 5     # consecutive errors before giving up
+accept_err_streak  = 0
 try:
     while not stop_requested:
         try:
             client, _addr = srv.accept()
+            accept_err_streak = 0
         except socket.timeout:
             continue
         except KeyboardInterrupt:
@@ -298,10 +307,20 @@ try:
                            % time.strftime("%H:%M:%S"))
             break
         except Exception as ex:
-            # Trace anything else so we can see why the loop ended.
-            append_rpc_log("%s accept-exception: %s" % (
-                time.strftime("%H:%M:%S"), repr(ex)[:200]))
-            traceback.print_exc()
+            accept_err_streak += 1
+            # Log only the first occurrence of a streak (avoid log flood) plus
+            # the final one before bailing out.
+            if accept_err_streak == 1 or accept_err_streak >= ACCEPT_ERR_MAX:
+                append_rpc_log("%s accept-exception (streak=%d): %s" % (
+                    time.strftime("%H:%M:%S"), accept_err_streak,
+                    repr(ex)[:200]))
+            if accept_err_streak >= ACCEPT_ERR_MAX:
+                append_rpc_log("%s loop-exit reason=accept-error-streak"
+                               % time.strftime("%H:%M:%S"))
+                print("[daemon] giving up after %d accept errors; restart me"
+                      % ACCEPT_ERR_MAX)
+                break
+            time.sleep(ACCEPT_ERR_SLEEP)
             continue
         try:
             stop_requested = handle_client(client)
