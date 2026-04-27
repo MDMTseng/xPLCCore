@@ -77,7 +77,15 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
     ELSE
         CASE FlyEventBuffer[Index].ActionType OF
             FlyEventActType.PIN_OPERATION:
-                IF (FlyEventBuffer[Index].IoStageCount > 0) THEN
+                // Defensive bounds: guard against IoStageIndex >= IoStageCount
+                // (post-increment lookup races) and against IoStageCount that
+                // somehow exceeded FlyEventStageLimit (struct corruption).
+                // Out-of-range deref of the fixed-size stage arrays would be
+                // a hard crash; clamp to no-op instead.
+                IF (FlyEventBuffer[Index].IoStageCount > 0
+                    AND FlyEventBuffer[Index].IoStageIndex >= 0
+                    AND FlyEventBuffer[Index].IoStageIndex < FlyEventBuffer[Index].IoStageCount
+                    AND FlyEventBuffer[Index].IoStageIndex < FlyEventStageLimit) THEN
                     MotionOutputPin := FlyEventBuffer[Index].IoStagePinMask[FlyEventBuffer[Index].IoStageIndex];
                     StagePinState := FlyEventBuffer[Index].IoStagePinState[FlyEventBuffer[Index].IoStageIndex];
                 ELSE
@@ -92,7 +100,8 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
                 DigitalOutputBits := TmpDigitalOutputBits;
 
                 FlyEventBuffer[Index].IoStageIndex := FlyEventBuffer[Index].IoStageIndex + 1;
-                IF (FlyEventBuffer[Index].IoStageIndex < FlyEventBuffer[Index].IoStageCount) THEN
+                IF (FlyEventBuffer[Index].IoStageIndex < FlyEventBuffer[Index].IoStageCount
+                    AND FlyEventBuffer[Index].IoStageIndex < FlyEventStageLimit) THEN
                     FlyEventBuffer[Index].IoStageDelayCountdown := FlyEventBuffer[Index].IoStageDelay[FlyEventBuffer[Index].IoStageIndex];
                     FlyEventBuffer[Index].TriggerType := FlyEventTriggerType.SequenceDelayWait;
                 ELSE
