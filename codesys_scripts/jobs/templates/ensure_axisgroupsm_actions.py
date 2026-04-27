@@ -5,6 +5,7 @@
 
 ACTIONS_TO_ENSURE = [
     "InitRuntime",
+    "UpdateAxisGroupState",
 ]
 
 proj = projects.primary
