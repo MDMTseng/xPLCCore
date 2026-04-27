@@ -248,11 +248,22 @@ export async function send<R>(
   return (await result) as R;
 }
 
-// E_RobotEvent ordinals — see memory `plc_event_numeric_values.md`.
+// E_RobotEvent ordinals. Authoritative source:
+// codesys_code/Application/Robot_FBs/E_RobotEvent.st (UDINT enum).
+// PLC order is positional, so any reorder there must mirror here.
+// See coupling_invariants.md "E_RobotEvent ordinals".
 export const Event = {
+  NONE: 0,
+  BOOT: 1,
   POWER_ON: 2,
+  POWER_OFF: 3,
   GROUP_ENABLE: 4,
+  GROUP_DISABLE: 5,
   HOME_GO: 6,
   HOME_GO_FORCE_SKIP: 7,
   RESET: 8,
+  ERROR: 9,
+  OK: 10,
+  ER: 11,
 } as const;
+export type EventOrdinal = (typeof Event)[keyof typeof Event];

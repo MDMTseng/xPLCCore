@@ -5,22 +5,7 @@ import { DiagPanel } from './DiagPanel';
 import type { COMCtrlObj } from '../types';
 import { delay } from '../utils/async';
 import { t, type UILang } from '../i18n';
-import { cmd } from '../lib/protocol';
-
-enum PlcMotionEvent {
-  EV_NONE = 0,
-  EV_BOOT = 1,
-  EV_POWER_ON = 2,
-  EV_POWER_OFF = 3,
-  EV_GROUP_ENABLE = 4,
-  EV_GROUP_DISABLE = 5,
-  EV_HOME_GO = 6,
-  EV_HOME_GO_FORCE_SKIP = 7,
-  EV_RESET = 8,
-  EV_ERROR = 9,
-  EV_OK = 10,
-  EV_ER = 11,
-}
+import { cmd, Event, type EventOrdinal } from '../lib/protocol';
 
 export const MiscControlsPage: React.FC<{
   COMCtrlObj:COMCtrlObj,
@@ -43,7 +28,7 @@ export const MiscControlsPage: React.FC<{
   const [plcLastError, setPlcLastError] = useState<{src: string, id: number} | null>(null);
   const [isJoggingModalOpen, setIsJoggingModalOpen] = useState(false);
   const init_plc_motion = useCallback(async (loop_count: number = 20, delay_ms: number = 500,latest_state_cb:(status_str:string, err_src:string, err_id:number)=>void) => {
-    let event = PlcMotionEvent.EV_NONE;
+    let event: EventOrdinal = Event.NONE;
     let Counter = 0;
     while (true) {//feed event to enter ready state
       Counter += 1;
@@ -53,7 +38,7 @@ export const MiscControlsPage: React.FC<{
       }
 
       let retInfo = await COMCtrlObj.sendTcpMsgPack(cmd.GA_EV(event)) as any;
-      event = PlcMotionEvent.EV_NONE;
+      event = Event.NONE;
       console.log(retInfo)
       let status_str = retInfo['st_str'];
       // err_src/err_id: published by the PLC on every SYS/GA_EV reply; cleared
@@ -62,11 +47,11 @@ export const MiscControlsPage: React.FC<{
       const err_id: number = retInfo['err_id'] ?? 0;
       latest_state_cb(status_str, err_src, err_id);
       if (status_str == "Powered") {
-        event = PlcMotionEvent.EV_GROUP_ENABLE
+        event = Event.GROUP_ENABLE
       }
 
       if (status_str == "GroupEnabled") {
-        event = PlcMotionEvent.EV_HOME_GO
+        event = Event.HOME_GO
       }
 
       if (status_str == "Ready") {
@@ -87,15 +72,15 @@ export const MiscControlsPage: React.FC<{
 
       if (status_str == "Powering") {
       }
-      // event=PlcMotionEvent.EV_ERROR
+      // event=Event.ERROR
 
       if (status_str == "Error") {
-        event = PlcMotionEvent.EV_RESET
+        event = Event.RESET
       }
 
 
       if (status_str == "UnInited") {
-        event = PlcMotionEvent.EV_POWER_ON
+        event = Event.POWER_ON
       }
 
       await delay(delay_ms);
@@ -212,7 +197,7 @@ export const MiscControlsPage: React.FC<{
             }}
             onClick={async () => {
               onPlcReadyChange?.(false);
-              await sendTcpMsgPack(cmd.GA_EV(PlcMotionEvent.EV_ERROR))
+              await sendTcpMsgPack(cmd.GA_EV(Event.ERROR))
             }}
           >
             {t(uiLang, 'enterError')}
