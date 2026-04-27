@@ -19,6 +19,9 @@ Usage:
     python rpc.py push
     python rpc.py push --no-tests
 
+    # one-shot environment health check (daemon + UI harness + PLC link)
+    python rpc.py status
+
     # tell the daemon to exit (server-side Ctrl+C also works)
     python rpc.py stop
 
@@ -64,9 +67,77 @@ def call(req, timeout):
     return json.loads(raw)
 
 
+def do_status(timeout):
+    """One-shot environment health check. Reports pass/fail per layer
+    so a debugging session starts from "what is actually broken" rather
+    than guessing. Returns 0 if all green, 1 otherwise."""
+    import json as _json
+    rows = []  # (layer, ok, detail)
+
+    # Layer 1: scripting daemon reachable
+    try:
+        rep = call({"cmd": "ping"}, timeout=min(timeout, 5))
+        rows.append(("daemon", bool(rep.get("ok")), "rpc_count=%s" % rep.get("rpc_count", "?")))
+    except ConnectionRefusedError:
+        rows.append(("daemon", False, "connection refused on %s:%d" % (HOST, PORT)))
+    except Exception as ex:
+        rows.append(("daemon", False, "error: %s" % ex))
+
+    # Layer 2: UI remote_harness reachable + UI<->PLC link
+    # Spawn remote_ctrl.py PING through the UI harness so we exercise the
+    # whole chain instead of probing the harness alone.
+    try:
+        res = subprocess.run(
+            [sys.executable, os.path.join(HERE, "remote_ctrl.py"),
+             "send_tcp_msgpack", _json.dumps({"type": "SYS", "cmd": "PING"}),
+             "--timeout", str(min(timeout, 5))],
+            capture_output=True, text=True, timeout=min(timeout, 8),
+        )
+        out = _json.loads(res.stdout or "{}")
+        result = out.get("result") or {}
+        inner = result.get("value") if isinstance(result, dict) else None
+        if isinstance(inner, dict) and inner.get("pong"):
+            rows.append(("ui_harness", True, "pong runtime_ms=%s" % inner.get("runtime_ms", "?")))
+        else:
+            rows.append(("ui_harness", False, "no pong: %s" % (out or res.stdout)[:200]))
+    except subprocess.TimeoutExpired:
+        rows.append(("ui_harness", False, "timeout (UI not running / not connected?)"))
+    except Exception as ex:
+        rows.append(("ui_harness", False, "error: %s" % ex))
+
+    # Layer 3: PLC FSM state via GET_MACHINE_STATE
+    try:
+        res = subprocess.run(
+            [sys.executable, os.path.join(HERE, "remote_ctrl.py"),
+             "send_tcp_msgpack",
+             _json.dumps({"type": "SYS", "cmd": "GET_MACHINE_STATE"}),
+             "--timeout", str(min(timeout, 5))],
+            capture_output=True, text=True, timeout=min(timeout, 8),
+        )
+        out = _json.loads(res.stdout or "{}")
+        result = out.get("result") or {}
+        inner = result.get("value") if isinstance(result, dict) else None
+        if isinstance(inner, dict) and "st_str" in inner:
+            rows.append(("plc_fsm", True, "st=%s coord_set=%s axes_err_mask=%s"
+                         % (inner.get("st_str"), inner.get("coord_set"),
+                            inner.get("axes_err_mask"))))
+        else:
+            rows.append(("plc_fsm", False, "no machine-state reply"))
+    except Exception as ex:
+        rows.append(("plc_fsm", False, "error: %s" % ex))
+
+    width = max(len(r[0]) for r in rows)
+    all_ok = True
+    for layer, ok, detail in rows:
+        mark = "OK " if ok else "FAIL"
+        print("[%s] %-*s %s" % (mark, width, layer, detail))
+        all_ok = all_ok and ok
+    return 0 if all_ok else 1
+
+
 def main():
     ap = argparse.ArgumentParser(description="CODESYS scripting RPC client")
-    ap.add_argument("cmd", choices=["ping", "exec", "stop", "push"])
+    ap.add_argument("cmd", choices=["ping", "exec", "stop", "push", "status"])
     ap.add_argument("--file", help="path to .py file (else read from stdin)")
     ap.add_argument("--label", default="", help="short tag for daemon log")
     ap.add_argument("--timeout", type=float, default=180,
@@ -74,6 +145,9 @@ def main():
     ap.add_argument("--no-tests", action="store_true",
                     help="(push only) skip the pytest regression after online_change")
     args = ap.parse_args()
+
+    if args.cmd == "status":
+        sys.exit(do_status(args.timeout))
 
     if args.cmd == "push":
         # Delegate to the dedicated wrapper so the regression-gated push has
