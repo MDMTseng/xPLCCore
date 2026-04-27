@@ -10,8 +10,9 @@ Entries are ordered roughly by blast radius (most dangerous first).
 
 ## A-axis `/10` scaling
 **Sites:**
-- [`ProcessMotionPacket.st:430-441`](../codesys_code/Application/APPs/AxisGroupSM/ProcessMotionPacket.st) — `MotionPose.c.A := MotionPoseTempReal / 10`
-- `SM_Drive_GenericDSP402` axis scaling (CODESYS GUI) — has matching 10x to undo it
+- [`ProcessMotionPacket.st`](../codesys_code/Application/APPs/AxisGroupSM/ProcessMotionPacket.st) — `MotionPose.c.A := MotionPoseTempReal / A_AXIS_KIN_WRAP_SCALE`
+- [`AxisGroupSM.st`](../codesys_code/Application/APPs/AxisGroupSM/AxisGroupSM.st) VAR_INPUT — `A_AXIS_KIN_WRAP_SCALE : LREAL := 10` (the constant)
+- `SM_Drive_GenericDSP402` axis scaling (CODESYS GUI) — has matching `A_AXIS_KIN_WRAP_SCALE`x to undo it
 
 **Constraint:** Either both ends use `/10` and `*10`, or neither.
 

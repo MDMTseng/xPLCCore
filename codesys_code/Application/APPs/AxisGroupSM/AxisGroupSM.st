@@ -17,6 +17,14 @@ PROGRAM AxisGroupSM
         // Sentinel used by 'G1' to detect "A not supplied" in the TryReadREAL
         // default. Any real A value is << |919191|.
         G1_A_UNSET_SENTINEL     : LREAL := -919191;
+        // A-axis Kin_CAxis wrap workaround: SpiderR's chained kinematic
+        // wraps c.A to +/-180 deg structurally, but the UI commands
+        // +/-360 deg. We divide by this constant here and multiply by
+        // the same constant on the SM_Drive_GenericDSP402 axis-side
+        // scaling (CODESYS GUI), so the wrap is dodged round-trip.
+        // Both ends MUST match. See doc/coupling_invariants.md
+        // "A-axis /10 scaling" before changing.
+        A_AXIS_KIN_WRAP_SCALE   : LREAL := 10;
         // Bound on per-scan SYS-drain iterations. Prevents a flood of SYS
         // packets from monopolising the EC task. 16 covers normal bursts
         // (PING + GA_EV + GET_MACHINE_STATE x a few); leftover slots wait
