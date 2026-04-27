@@ -126,8 +126,9 @@ VAR_GLOBAL
 	   to Error (recoverable via EV_RESET -> UnInited). Zero would disable
 	   the watchdog; keep > HEARTBEAT_STALE_MS in PluginHello.tsx (currently
 	   3500ms) so the UI flags stale first, giving it a chance to reconnect
-	   before the PLC halts motion. *)
-	UI_HEARTBEAT_TIMEOUT_MS : LINT := 10000;
+	   before the PLC halts motion. Tightened 2026-04-28 from 10000 -> 5000
+	   so PLC halts ~1.5s after the UI flags stale, instead of 6.5s. *)
+	UI_HEARTBEAT_TIMEOUT_MS : LINT := 5000;
 	UiHeartbeatStaleCount   : UDINT := 0;
 
 	(* Post-homing coord-system gate.
