@@ -2,17 +2,10 @@
 VAR_GLOBAL
 	
 	
-	minfo_buf: ARRAY [0..5] OF ARRAY [0..256-1]OF BYTE; 
+	minfo_buf: ARRAY [0..5] OF ARRAY [0..256-1]OF BYTE;
 	minfo_buf_ridx:FB_RingBufferIndex(6);
-	
-	
-	aux0_info_buf: ARRAY [0..5] OF ARRAY [0..256-1]OF BYTE; 
-	aux0_info_buf_ridx:FB_RingBufferIndex(6);
-	aux1_info_buf: ARRAY [0..5] OF ARRAY [0..256-1]OF BYTE; 
-	aux1_info_buf_ridx:FB_RingBufferIndex(6);
-	aux2_info_buf: ARRAY [0..5] OF ARRAY [0..256-1]OF BYTE; 
-	aux2_info_buf_ridx:FB_RingBufferIndex(6);
-	
+
+
 	reMP_info_SIZE:INT:=32;
 	reMP_info_buff_SIZE:INT:=256;
 	reMP_info_buf: ARRAY [0..32-1] OF ARRAY [0..256-1]OF BYTE; 
@@ -59,10 +52,10 @@ VAR_GLOBAL
 	BUS_RESTART_COOLDOWN_MS : LINT := 30000;
 
 	(* --- Ring-buffer safety (ringbuf-bugs.md, Bundle 1).
-	   Slots in minfo_buf / aux*_info_buf are 256 bytes: 1 length byte +
-	   255 payload. Anything over MAX_SLOT_PAYLOAD would wrap via
-	   DINT_TO_BYTE and silently corrupt the slot, so the TCP ingress drops
-	   the packet and bumps OverlenDropCount instead.
+	   Slots in minfo_buf are 256 bytes: 1 length byte + 255 payload.
+	   Anything over MAX_SLOT_PAYLOAD would wrap via DINT_TO_BYTE and
+	   silently corrupt the slot, so the TCP ingress drops the packet and
+	   bumps OverlenDropCount instead.
 	   ReMpDropCount counts reply-ring (reMP_info_ridx) drops: when the
 	   ring is full, the oldest queued reply is consumed to make room.
 	   Both counters are diagnostic only -- sustained growth means the

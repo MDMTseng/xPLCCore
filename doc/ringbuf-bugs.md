@@ -1,14 +1,17 @@
 # Ring-buffer / TCP-buffer audit
 
-Audit of `GVL.minfo_buf / aux{0,1,2}_info_buf / reMP_info_*` rings and the
-callsites around `FB_RingBufferIndex`. The FB itself (head/tail/count wrap
-math, push/consume returns) is correct; the holes are all in the usage.
+Audit of `GVL.minfo_buf / reMP_info_*` rings and the callsites around
+`FB_RingBufferIndex`. The FB itself (head/tail/count wrap math,
+push/consume returns) is correct; the holes are all in the usage.
+(`aux{0,1,2}_info_buf` removed 2026-04-27 — see #12.)
 
 > **Status sweep 2026-04-27:** all High items closed; #5/#6 closed by POU
 > deletion; #7/#8 closed in [TCP_MSGPAK_Server.st](../codesys_code/Application/APPs/TCP_MSGPAK_Server.st);
-> #11 closed by SPSC lock-free refactor of FB_RingBufferIndex.
+> #11 closed by SPSC lock-free refactor of FB_RingBufferIndex; **#12
+> closed by AUX removal** — `reMP_info_ridx` is now single-producer
+> (AxisGroupSM only).
 > Remaining open: #3 (closed-with-rationale), #9 (defensive-only, no fix
-> needed), #10 (observation), **#12 reMP MPSC race (new, deferred)**.
+> needed), #10 (observation).
 > See per-item notes for current state.
 
 ## High
@@ -109,29 +112,23 @@ call it from a single-task context. The legacy in-loop `clear()` in
 the AxisGroupSM not-Ready drain was already removed when that path
 became per-packet NAK.
 
-### 12. `reMP_info_ridx` is MPSC, FB only guarantees SPSC — **Open**
-Both `AxisGroupSM` (replies) and `TCP_MSGPAK_Server` (AUX acks) call
-`pushHead` on the same `reMP_info_ridx` instance. The lock-free FB
-fix (#11) is SPSC-only: two concurrent `pushHead`s can both
-`getHead()` the same slot index and the second `_head` advance can
-land before the first, producing a torn slot or a lost packet. Same
-window as #11 (a few instructions); never observed live, but real.
+### 12. `reMP_info_ridx` is MPSC, FB only guarantees SPSC — **Closed 2026-04-27 by AUX removal**
+Previously both `AxisGroupSM` (replies) and `TCP_MSGPAK_Server` (AUX
+acks) wrote `reMP_info_ridx`, so the lock-free SPSC FB (#11) didn't
+cover the producer side. AUX was a reserved-but-unused channel (no UI
+sender, no PLC handler — packets were just drained), so the entire AUX
+path was deleted: `aux{0,1,2}_info_buf[_ridx]` removed from GVL,
+TCP_MSGPAK_Server collapsed to the minfo branch, AxisGroupSM's
+`ProcessAuxCommands` drain block deleted. `reMP_info_ridx` is now
+single-producer (AxisGroupSM EC task) / single-consumer
+(TCP_MSGPAK_Server Comm task) — pure SPSC, fully covered by #11.
 
-**Fix options** (all defer-worthy until measured):
-- Give `TCP_MSGPAK_Server` its own `aux_reply_ridx`; the send loop
-  drains both rings each scan. Comm task becomes sole producer of
-  `aux_reply` and sole consumer of both. AxisGroupSM stays sole
-  producer of `reMP_info_ridx`. Both pure SPSC.
-- Move AUX-ack staging into AxisGroupSM via a Comm→EC handoff ring
-  (also SPSC). Adds one EC scan of latency.
-- Disable preemption around `pushHead`; CODESYS doesn't expose a
-  clean lightweight mutex for this.
-
-Pick when this becomes load-bearing or when AUX traffic ramps up.
+If AUX is ever revived, design the new dispatcher with a separate
+`aux_reply_ridx` so `reMP_info_ridx` stays SPSC.
 
 ### 10. Ring capacities — **Observation only**
-minfo=6, aux[0..2]=6, reply=32. 32-slot reply ring measured to absorb
-a 400-packet burst with a stalled reader without dropping (see memory
-`plc_remp_ring_headroom.md`). 6-slot ingress rings are tight under
+minfo=6, reply=32. 32-slot reply ring measured to absorb a 400-packet
+burst with a stalled reader without dropping (see memory
+`plc_remp_ring_headroom.md`). 6-slot minfo ingress is tight under
 sustained burst but currently fine; revisit if `OverlenDropCount` or
 ingress-side queueing pressure ever becomes visible in `GET_DIAG`.

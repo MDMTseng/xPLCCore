@@ -227,9 +227,6 @@ Three rings:
   is the parser in `TCP_MSGPAK_Server`; consumer is `AxisGroupSM`.
   Overlen packets are dropped with `OverlenDropCount` rather than
   silently wrapping via `DINT_TO_BYTE`.
-- `aux{0,1,2}_info_buf` (6 slots each) — auxiliary command channels;
-  buffers exist but the AUX feature isn't wired (intentionally
-  drained).
 - `reMP_info_ridx` (32 slots) — outbound msgpack reply + push
   events. On overflow, oldest is consumed and `ReMpDropCount` bumps.
   Send-stall counter (`SendStallDropCount`) caps retries when

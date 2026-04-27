@@ -8,24 +8,14 @@ VAR
     // --- The Server Function Block Instance ---
     fbMyServer            : FB_TcpMsgPakServer;
 
-    fbMsgUnpacker         : FB_MpUnpacker;      // Unpacker to process the received data packet.
-    
     // --- Logic for Packet Flow Control ---
     REEN_CD               : INT := 0;
-   
+
     recv_counter          : INT := 0;
     TMP_PKT_IDX           : UDINT := 0;
-	
-	
-	pkt_type:STRING;
+
 	tmp_MsgPakInfo_ptr:POINTER TO MsgPakInfo;
-	
 	tmp_ptr:POINTER TO BYTE;
-	tmp_aux_ptr:POINTER TO BYTE;
-	auxThreadId: DINT := -1;
-	id: DINT := 0;
-	auxPacketStored: BOOL := FALSE;
-	auxAckPacker: FB_MpPacker;
 
 	// Send-stall recovery: if Send() keeps returning FALSE while the
 	// socket reports xActive=TRUE (half-open / TX backpressure), the
@@ -63,91 +53,21 @@ fbMyServer(
 IF fbMyServer.PKT_IDX > TMP_PKT_IDX THEN
 	REEN_CD:=50;
     recv_counter := recv_counter + 1;
-	
-	//IF pkt_type==
-	pkt_type := '';
-	auxThreadId := -1;
-	auxPacketStored := FALSE;
-	fbMsgUnpacker.Init(ADR(fbMyServer.BUFFER_PTR[0]), fbMyServer.BUFFER_LEN);
-	pkt_type := fbMsgUnpacker.TryReadString('type', '');
-	auxThreadId := TO_DINT(fbMsgUnpacker.TryReadINT64('thread_id', -1));
 
-	IF (pkt_type = 'AUX' AND auxThreadId >= 0 AND auxThreadId <= 2) THEN
-		id := TO_DINT(fbMsgUnpacker.TryReadINT64('id', 0));
-		// Length guard: slots are 256 bytes (1 len + 255 payload). Over-length
-		// packets would wrap via DINT_TO_BYTE and corrupt the slot silently.
-		// See doc/ringbuf-bugs.md #1.
-		IF (fbMyServer.BUFFER_LEN > GVL.MAX_SLOT_PAYLOAD) THEN
-			GVL.OverlenDropCount := GVL.OverlenDropCount + 1;
-		ELSE
-			CASE auxThreadId OF
-				0:
-					IF (GVL.aux0_info_buf_ridx.space() > 0) THEN
-						tmp_aux_ptr := ADR(GVL.aux0_info_buf[GVL.aux0_info_buf_ridx.getHead()][0]);
-						tmp_aux_ptr[0] := DINT_TO_BYTE(fbMyServer.BUFFER_LEN);
-						MEMUtils.MemCpy(ADR(tmp_aux_ptr[1]), ADR(fbMyServer.BUFFER_PTR[0]), DINT_TO_UINT(fbMyServer.BUFFER_LEN));
-						GVL.aux0_info_buf_ridx.pushHead();
-						auxPacketStored := TRUE;
-					END_IF;
-
-				1:
-					IF (GVL.aux1_info_buf_ridx.space() > 0) THEN
-						tmp_aux_ptr := ADR(GVL.aux1_info_buf[GVL.aux1_info_buf_ridx.getHead()][0]);
-						tmp_aux_ptr[0] := DINT_TO_BYTE(fbMyServer.BUFFER_LEN);
-						MEMUtils.MemCpy(ADR(tmp_aux_ptr[1]), ADR(fbMyServer.BUFFER_PTR[0]), DINT_TO_UINT(fbMyServer.BUFFER_LEN));
-						GVL.aux1_info_buf_ridx.pushHead();
-						auxPacketStored := TRUE;
-					END_IF;
-
-				2:
-					IF (GVL.aux2_info_buf_ridx.space() > 0) THEN
-						tmp_aux_ptr := ADR(GVL.aux2_info_buf[GVL.aux2_info_buf_ridx.getHead()][0]);
-						tmp_aux_ptr[0] := DINT_TO_BYTE(fbMyServer.BUFFER_LEN);
-						MEMUtils.MemCpy(ADR(tmp_aux_ptr[1]), ADR(fbMyServer.BUFFER_PTR[0]), DINT_TO_UINT(fbMyServer.BUFFER_LEN));
-						GVL.aux2_info_buf_ridx.pushHead();
-						auxPacketStored := TRUE;
-					END_IF;
-			END_CASE;
-		END_IF;
-		// Always ack an AUX packet so the client never hangs on timeout; ack
-		// value reflects whether the packet was actually stored. Route via
-		// the reMP reply ring so a failed Send() gets retried next scan
-		// instead of being silently lost (doc/ringbuf-bugs.md #2, #8).
-		IF (GVL.reMP_info_ridx.space() = 0) THEN
-			GVL.reMP_info_ridx.consumeTail();
-			GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
-		END_IF;
-		tmp_MsgPakInfo_ptr := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
-		MsgPakInfoClear(tmp_MsgPakInfo_ptr^);
-		tmp_MsgPakInfo_ptr^.ele_count := 2;
-		tmp_MsgPakInfo_ptr^.whead := auxAckPacker.PackString(pStart := tmp_MsgPakInfo_ptr^.whead, psValue := ADR('id'));
-		tmp_MsgPakInfo_ptr^.whead := auxAckPacker.PackDINT(pStart := tmp_MsgPakInfo_ptr^.whead, diValue := id);
-		tmp_MsgPakInfo_ptr^.whead := auxAckPacker.PackString(pStart := tmp_MsgPakInfo_ptr^.whead, psValue := ADR('ack'));
-		tmp_MsgPakInfo_ptr^.whead := auxAckPacker.PackBool(pStart := tmp_MsgPakInfo_ptr^.whead, bValue := auxPacketStored);
-		MsgPakInfoWrapup(tmp_MsgPakInfo_ptr^);
-		GVL.reMP_info_ridx.pushHead();
-
-
-	ELSE
-		// Minfo length guard, same reasoning as the AUX branch. Silent drop
-		// (no inline ACK on this path; AxisGroupSM responds after it drains
-		// the slot, so an overlen packet just never gets a reply, and the
-		// client timeout handles it).
-		IF (fbMyServer.BUFFER_LEN > GVL.MAX_SLOT_PAYLOAD) THEN
-			GVL.OverlenDropCount := GVL.OverlenDropCount + 1;
-		ELSIF (GVL.minfo_buf_ridx.space() > 0) THEN
-			tmp_ptr:=ADR(GVL.minfo_buf[GVL.minfo_buf_ridx.getHead()][0]);
-			tmp_ptr[0]:=DINT_TO_BYTE(fbMyServer.BUFFER_LEN);//keep data len
-			MEMUtils.MemCpy(ADR(tmp_ptr[1]),ADR(fbMyServer.BUFFER_PTR[0]),DINT_TO_UINT(fbMyServer.BUFFER_LEN));
-			GVL.minfo_buf_ridx.pushHead();
-		END_IF;
+	// Length guard: slots are 256 bytes (1 len + 255 payload). Over-length
+	// packets would wrap via DINT_TO_BYTE and corrupt the slot silently.
+	// See doc/ringbuf-bugs.md #1. Type/cmd dispatch happens in AxisGroupSM
+	// after the slot is drained; unrecognised types NAK with
+	// 'missing_type_field'.
+	IF (fbMyServer.BUFFER_LEN > GVL.MAX_SLOT_PAYLOAD) THEN
+		GVL.OverlenDropCount := GVL.OverlenDropCount + 1;
+	ELSIF (GVL.minfo_buf_ridx.space() > 0) THEN
+		tmp_ptr:=ADR(GVL.minfo_buf[GVL.minfo_buf_ridx.getHead()][0]);
+		tmp_ptr[0]:=DINT_TO_BYTE(fbMyServer.BUFFER_LEN);
+		MEMUtils.MemCpy(ADR(tmp_ptr[1]),ADR(fbMyServer.BUFFER_PTR[0]),DINT_TO_UINT(fbMyServer.BUFFER_LEN));
+		GVL.minfo_buf_ridx.pushHead();
 	END_IF;
-
-	
-	
-	
-	
-	END_IF;
+END_IF;
 
 // Update the packet index tracker
 TMP_PKT_IDX := fbMyServer.PKT_IDX;

@@ -170,9 +170,8 @@ PROGRAM AxisGroupSM
     TempMovementId : SMC_Movement_Id;
     
     MessageBufferPointer : POINTER TO BYTE;
-    AuxCommandBufferPointer : POINTER TO BYTE;
 
-    
+
     TriggerActive : BOOL;
     TriggerErrorCode : INT;
     TempByte : BYTE;
@@ -827,26 +826,6 @@ PROGRAM AxisGroupSM
     END_WHILE;
 
 
-    IF TRUE THEN//ProcessAuxCommands
-        // AUX command threads: currently drained without parsing so their ring
-        // buffers don't back up and block the client. Wire a real handler here
-        // when the AUX command feature is implemented (see README §P2 #10).
-        IF (GVL.aux0_info_buf_ridx.size() > 0) THEN
-            AuxCommandBufferPointer := ADR(GVL.aux0_info_buf[GVL.aux0_info_buf_ridx.getTail()][0]);
-            GVL.aux0_info_buf_ridx.consumeTail();
-        END_IF;
-
-        IF (GVL.aux1_info_buf_ridx.size() > 0) THEN
-            AuxCommandBufferPointer := ADR(GVL.aux1_info_buf[GVL.aux1_info_buf_ridx.getTail()][0]);
-            GVL.aux1_info_buf_ridx.consumeTail();
-        END_IF;
-
-        IF (GVL.aux2_info_buf_ridx.size() > 0) THEN
-            AuxCommandBufferPointer := ADR(GVL.aux2_info_buf[GVL.aux2_info_buf_ridx.getTail()][0]);
-            GVL.aux2_info_buf_ridx.consumeTail();
-        END_IF;
-    END_IF;
-	
 	
 	
 	

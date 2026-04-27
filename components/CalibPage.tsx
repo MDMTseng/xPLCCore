@@ -3009,9 +3009,6 @@ recheck:
 
 
       <button onClick={async() =>{
-        // await sendTcpMsgPack({ "type": "AUX", "thread_id": 1, "cmd": "M4","group":0, "pin": 1<<3|1<<(6+8), "state": 1<<3|1<<(6+8),reset_ms:25 });
-
-
         let slight_pin=0;//1<<IO_Pins.O.CAM_Side_Light0;
 
         sendTcpMsgPack(cmd.M4({

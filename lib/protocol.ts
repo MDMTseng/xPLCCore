@@ -7,7 +7,7 @@
 // `id` and `protocol_version` are stamped by sendTcpMsgPack; do not set
 // them here.
 
-export type PacketType = 'M' | 'SYS' | 'AUX';
+export type PacketType = 'M' | 'SYS';
 
 // Phantom reply-type carrier. The `R` parameter is never set at runtime;
 // it exists only so `send<R>` (below) can recover the reply shape for a

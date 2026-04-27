@@ -35,7 +35,7 @@ required keys depend on direction.
 
 | Key | Type | Required | Notes |
 |---|---|---|---|
-| `type` | string | **yes** | One of `"M"` (motion / IO / dispatch), `"SYS"` (heartbeat / diagnostics), `"AUX"` (reserved). Missing → NAK `err='missing_type_field'`. |
+| `type` | string | **yes** | One of `"M"` (motion / IO / dispatch) or `"SYS"` (heartbeat / diagnostics). Missing or unrecognised → NAK `err='missing_type_field'`. |
 | `cmd` | string | **yes** | Command name. See §"Commands" below. |
 | `id` | int | recommended | Echoed back in the ack/NAK so the renderer can correlate replies to awaited promises. Auto-stamped by `sendTcpMsgPack`. |
 | `protocol_version` | uint | recommended | Currently `1`. Auto-stamped by `sendTcpMsgPack`. PLC NAKs `err='protocol_version_mismatch'` if present and not `1`. Absent (legacy) is allowed. |
@@ -113,13 +113,6 @@ parameters.
 | `GET_DIAG` | — | `{runtime_ms, sm_scans, remp_drop, overlen_drop, send_stall_drop, group_not_ready_nak, missing_type_nak, coord_not_cfg_nak, proto_mismatch_nak, idle_reset, read_err_reset, parser_err_reset, ui_ping_count, ui_hb_stale_count, ping_max_gap_ms, last_ui_ping_ms, st_chg_event_count}` | Comm-stability counter dump for `DiagPanel`. Pure read. Resettable via `RESET_DBG_INFO`. |
 | `RESET_DBG_INFO` | — | `{reset:true}` | SYS-side branch — clears all counters above. Does **not** require FSM=Ready (the M-side variant does). |
 | `GA_EV` | `ev` (int — `E_RobotEvent` ordinal) | `{st, st_str, err_src, err_id}` | Drive FSM transition. UI uses this to step `EV_POWER_ON` / `EV_GROUP_ENABLE` / `EV_HOME_GO` / `EV_RESET`. SYS-only — there is no `type:'M'` GA_EV handler (the dead `IF FALSE` block at [AxisGroupSM.st:910](../codesys_code/Application/APPs/AxisGroupSM.st#L910) is not live). See [memory: E_RobotEvent numeric values](../../../../.claude/projects/c--Users-X1-Desktop-X2-5-TCP-UI-TCP-UI/memory/plc_event_numeric_values.md). |
-
-### Auxiliary (`type:"AUX"`)
-
-Reserved. Currently drained by AxisGroupSM with no handlers; do not
-send from the UI.
-
----
 
 ## Push events (PLC → UI, no `id`)
 
