@@ -14,6 +14,11 @@ Usage:
     # run a snippet from stdin
     echo 'print(projects.primary.path)' | python rpc.py exec --label whereami
 
+    # full push: import_all -> online_change -> pytest regression
+    # (this is the default code-push path; --no-tests for hot fixes)
+    python rpc.py push
+    python rpc.py push --no-tests
+
     # tell the daemon to exit (server-side Ctrl+C also works)
     python rpc.py stop
 
@@ -24,10 +29,11 @@ Exit codes:
     3  socket timeout waiting for reply
     4  bad request / bad reply
 """
-import sys, json, socket, argparse, os
+import sys, json, socket, argparse, os, subprocess
 
 HOST = "127.0.0.1"
 PORT = 7420
+HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def call(req, timeout):
@@ -60,12 +66,24 @@ def call(req, timeout):
 
 def main():
     ap = argparse.ArgumentParser(description="CODESYS scripting RPC client")
-    ap.add_argument("cmd", choices=["ping", "exec", "stop"])
+    ap.add_argument("cmd", choices=["ping", "exec", "stop", "push"])
     ap.add_argument("--file", help="path to .py file (else read from stdin)")
     ap.add_argument("--label", default="", help="short tag for daemon log")
     ap.add_argument("--timeout", type=float, default=180,
                     help="socket timeout in seconds (default 180)")
+    ap.add_argument("--no-tests", action="store_true",
+                    help="(push only) skip the pytest regression after online_change")
     args = ap.parse_args()
+
+    if args.cmd == "push":
+        # Delegate to the dedicated wrapper so the regression-gated push has
+        # one implementation. Anything else (rpc.py ping/exec/stop) keeps
+        # talking to the daemon directly.
+        wrapper = os.path.join(HERE, "online_change_with_regression.py")
+        argv = [sys.executable, wrapper]
+        if args.no_tests:
+            argv.append("--skip-tests")
+        sys.exit(subprocess.call(argv))
 
     req = {"cmd": args.cmd}
     if args.cmd == "exec":
