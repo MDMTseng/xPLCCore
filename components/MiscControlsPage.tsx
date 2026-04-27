@@ -2,6 +2,7 @@ import React, { useCallback, useState } from 'react';
 import { JoggingPad } from '../JoggingPad';
 import { Modal } from '../Modal';
 import { DiagPanel } from './DiagPanel';
+import { PlcEventLog } from './PlcEventLog';
 import type { COMCtrlObj } from '../types';
 import { delay } from '../utils/async';
 import { t, type UILang } from '../i18n';
@@ -397,6 +398,7 @@ export const MiscControlsPage: React.FC<{
       </div>
 
       <DiagPanel sendTcpMsgPack={sendTcpMsgPack} />
+      <PlcEventLog />
     </div>
   )
 }
