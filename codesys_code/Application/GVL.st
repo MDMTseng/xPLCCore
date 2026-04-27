@@ -7,10 +7,27 @@ VAR_GLOBAL
 
 
 	reMP_info_SIZE:INT:=32;
-	reMP_info_buff_SIZE:INT:=256;
-	reMP_info_buf: ARRAY [0..32-1] OF ARRAY [0..256-1]OF BYTE; 
-	reMP_info_arr: ARRAY [0..32-1] OF MsgPakInfo; 
+	// Reply-buffer slot size. Bumped from 256 to 1024 on 2026-04-27 after
+	// observing slot[6].buf_size=304 in a live snapshot (GET_MACHINE_STATE
+	// reply overflowed). At 256 a >256-byte reply silently overran into the
+	// adjacent reMP_info_arr struct memory (no bounds check in Pack* path),
+	// corrupting later slots' buf pointers and crashing PLC in
+	// FB_MpPacker.PackMapHeader when ridx wrapped to a corrupted slot.
+	reMP_info_buff_SIZE:INT:=1024;
+	reMP_info_buf: ARRAY [0..32-1] OF ARRAY [0..1024-1]OF BYTE;
+	// Guard region between the byte buffers and the struct array. If any
+	// future reply overflows past buf_capacity, it lands here (harmless
+	// scratch) rather than smashing reMP_info_arr[0]'s buf pointer field.
+	// Sized at 1KB -- larger than any plausible single-Pack* overrun.
+	reMP_info_buf_guard: ARRAY [0..1023] OF BYTE;
+	reMP_info_arr: ARRAY [0..32-1] OF MsgPakInfo;
 	reMP_info_ridx:FB_RingBufferIndex(32);
+
+	// Bumped by MsgPakInfoWrapup when whead has already passed buf_capacity --
+	// i.e. some Pack* call wrote past the slot's byte buffer. Diagnostic only;
+	// the corruption already happened upstream, but a non-zero count means
+	// the buf size needs raising or a reply path is unbounded.
+	ReMpOverflowDropCount : UDINT := 0;
 
 
 	(* --- MsgPack self-test harness (bypasses web UI).

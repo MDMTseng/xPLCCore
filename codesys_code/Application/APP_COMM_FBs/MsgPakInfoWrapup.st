@@ -8,7 +8,18 @@ END_VAR
 (* =========== IMPLEMENTATION =========== *)
 IF msgpak.useLargeElementCountField=FALSE AND msgpak.ele_count>15 THEN//the size field does not fit
 	MsgPakInfoWrapup:=FALSE;
-	//TODO: it's possible to move buffer around 
+	//TODO: it's possible to move buffer around
+	RETURN;
+END_IF
+
+// Overflow detection: if whead got pushed past buf_capacity, a Pack* call
+// already wrote past the buffer end. We can't undo the corruption (the
+// bytes are gone), but we bump a counter so it's visible in DiagPanel and
+// refuse to push the (already-mangled) header. Caller still calls
+// pushHead() unconditionally today; that's a follow-up to make conditional.
+IF (msgpak.whead - msgpak.buf) > TO_DINT(msgpak.buf_capacity) THEN
+	GVL.ReMpOverflowDropCount := GVL.ReMpOverflowDropCount + 1;
+	MsgPakInfoWrapup := FALSE;
 	RETURN;
 END_IF
 
