@@ -9,6 +9,7 @@ ACTIONS_TO_ENSURE = [
     "UpdateRuntimeAndInputEvent",
     "UpdateMotionProgress",
     "CheckAxisGroupReady",
+    "ProcessFlyEventsAndIo",
 ]
 
 proj = projects.primary
