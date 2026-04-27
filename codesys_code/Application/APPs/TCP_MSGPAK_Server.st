@@ -23,7 +23,10 @@ VAR
 	// SEND_MAX_RETRIES consecutive cycles and count it. See
 	// doc/ringbuf-bugs.md #7.
 	send_retry_count: UDINT := 0;
-	SEND_MAX_RETRIES: UDINT := 100;
+	// Comm task is 5ms; 20 cycles ~= 100ms before head-drop. Keeps the
+	// ring from filling up behind one stuck packet during a half-open TX
+	// stall (xActive=TRUE but Send returns FALSE). See ringbuf-bugs.md #7.
+	SEND_MAX_RETRIES: UDINT := 20;
 
 	DBG_reMP_info_ridx_size:INT;
 END_VAR
