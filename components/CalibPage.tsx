@@ -157,6 +157,12 @@ export const CalibPage: React.FC<{
 
   const [stepMode, setStepMode] = useState<boolean>(false);
   const [tossPauseMode, setTossPauseMode] = useState<boolean>(false);
+  // F3: per-pin flip counts for the named input pins. PLC counts every
+  // edge in `getDigitalInputFlipCount.fc[pin]`; surfacing them lets the
+  // operator see "did the press-roller sensor actually toggle on the
+  // last reel advance" without scope-probing IO. Polled at 2Hz while
+  // mounted; the call is cheap (single msgpack RTT, no PLC side-effect).
+  const [flipCountSnapshot, setFlipCountSnapshot] = useState<{ raw: number; fc: number[] } | null>(null);
   // Check IDs are now module-level constants (FFeederCheckID, etc.).
 
   const loadCalibData = useCallback(async () => {
@@ -179,6 +185,29 @@ export const CalibPage: React.FC<{
   useEffect(()=>{
     loadCalibData();
   },[loadCalibData]);
+
+  // F3: 2Hz poll of getDigitalInputFlipCount. We pull both `raw` (current
+  // input bitmask) and `fc` (per-pin edge counter). The badge below uses
+  // these to show live state + edge totals for the four named reel-side
+  // input pins. Best-effort: a transient PLC NAK shouldn't break the page.
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const rep: any = await COMCtrlObj.sendTcpMsgPack(cmd.GetDigitalInputFlipCount());
+        if (!cancelled && rep && Array.isArray(rep.fc)) {
+          setFlipCountSnapshot({
+            raw: typeof rep.raw === 'number' ? rep.raw : 0,
+            fc: rep.fc.map((n: any) => Number(n) | 0),
+          });
+        }
+      } catch { /* best-effort */ }
+    };
+    tick();
+    const id = setInterval(tick, 500);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [COMCtrlObj.sendTcpMsgPack]);
 
 
   useEffect(()=>{
@@ -2045,6 +2074,49 @@ export const CalibPage: React.FC<{
             {stepMode ? t(uiLang, 'stepMode') : t(uiLang, 'autoMode')}
           </span>
         </div>
+        {flipCountSnapshot && (
+          <div
+            style={{
+              marginTop: 10,
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 6,
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+              fontSize: 11,
+            }}
+          >
+            {([
+              ['ReelLacking', IO_Pins.I.ReelLacking],
+              ['ReelTapeHTension', IO_Pins.I.ReelTapeHTension],
+              ['ReelPressRollerInPlace', IO_Pins.I.ReelPressRollerInPlace],
+              ['PackedReelNoProtrusion', IO_Pins.I.PackedReelNoProtrusion],
+            ] as const).map(([label, pin]) => {
+              const high = ((flipCountSnapshot.raw >> pin) & 1) === 1;
+              const flips = flipCountSnapshot.fc[pin] ?? 0;
+              return (
+                <div
+                  key={pin}
+                  title={`pin ${pin}`}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '3px 8px',
+                    borderRadius: 6,
+                    border: `1px solid ${high ? '#86efac' : '#cbd5e1'}`,
+                    background: high ? '#f0fdf4' : '#f8fafc',
+                    color: high ? '#166534' : '#475569',
+                  }}
+                >
+                  <span style={{ fontWeight: 700 }}>{label}</span>
+                  <span>{high ? '1' : '0'}</span>
+                  <span style={{ color: '#94a3b8' }}>·</span>
+                  <span>flips {flips}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div style={{ ...cardStyle, borderRadius: 14 }}>
