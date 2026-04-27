@@ -37,17 +37,25 @@ def test_reelgo_acks(fsm_ready):
     _expect_ack(reply, "ReelGo")
 
 
-@pytest.mark.xfail(
-    reason="PLC M4 reply path crashes in FB_MpPacker.PackMapHeader with "
-    "pStart=NULL (observed 2026-04-27). Wedges the entire comm task -- "
-    "dispatcher stops responding until PLC reset. run=False so this test "
-    "doesn't take the PLC down for the rest of the suite; remove xfail and "
-    "flip run=True once the packer is fixed.",
-    strict=False, run=False,
-)
+def _seed_motion():
+    """M4 attaches its FlyEvent to the most recently accepted motion --
+    if no G1 has run since boot, MotionTargetMovementId resolves to 0 and
+    PLC silently drops the M4 (no FlyEvent queued -> ShouldReturn=FALSE
+    -> no reply pushed, harness times out). Fire one tiny G1 first so
+    LastAcceptedMovementId is non-zero before M4 dispatches."""
+    reply = tms.harness_send(
+        {"type": "M", "cmd": "G1",
+         "X": 0.0, "Y": 0.0, "Z": 0.0,
+         "F": 10.0, "ACC": 100.0, "DEA": 100.0, "JERK": 1000.0},
+        timeout=3.0,
+    )
+    assert reply.get("err") is None, f"seed G1 failed: {reply}"
+
+
 def test_m4_simple_pulse_acks(fsm_ready):
     """M4 simple-pulse form: pin + state + reset_ms. PLC parses pin/state
     into a FlyEvent struct and queues it; reply carries ev_buf_space."""
+    _seed_motion()
     reply = tms.harness_send(
         {"type": "M", "cmd": "M4",
          "pin": 1, "state": 1, "reset_ms": 50,
@@ -64,16 +72,11 @@ def test_m4_simple_pulse_acks(fsm_ready):
     assert isinstance(reply["ev_buf_space"], int), reply
 
 
-@pytest.mark.xfail(
-    reason="Same PLC M4 reply-path crash as test_m4_simple_pulse_acks; "
-    "remove xfail and flip run=True once the FB_MpPacker.PackMapHeader "
-    "NULL pStart is fixed.",
-    strict=False, run=False,
-)
 def test_m4_multistage_pin_op_seq_acks(fsm_ready):
     """M4 multi-pulse form via pin_op_seq: array of [delay, pin, state]
     triplets. Exercises the array-unpacker code path, separate from
     simple-pulse parsing."""
+    _seed_motion()
     reply = tms.harness_send(
         {"type": "M", "cmd": "M4",
          "pin_op_seq": [
