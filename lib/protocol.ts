@@ -145,6 +145,10 @@ export interface MachineState {
   // Per-axis DS402 uiDriveInterfaceError mirror, same ordering as
   // axes_err_mask bits 0..3 (EAxis0/1/2/reelpullmotor). 0 = no fault.
   axes_err_id: number[];
+  // Axis labels in the same order as axes_err_id / axes_err_mask bits.
+  // Source of truth for axis ordering -- UI must consume this rather
+  // than hardcoding, so a PLC reorder propagates automatically.
+  axes_labels: string[];
 }
 
 export interface DiagSnapshot {
@@ -240,7 +244,7 @@ export const REQUIRED_KEYS = {
   MachineState: [
     'st', 'st_str', 'err_src', 'err_id', 'motion_buffer_size',
     'movement_id', 'runtime_ms', 'coord_set',
-    'axes_err_mask', 'axes_state', 'axes_err_id',
+    'axes_err_mask', 'axes_state', 'axes_err_id', 'axes_labels',
   ],
   DiagSnapshot: [
     'runtime_ms', 'sm_scans', 'remp_drop', 'overlen_drop', 'send_stall_drop',

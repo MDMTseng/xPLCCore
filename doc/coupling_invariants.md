@@ -77,15 +77,20 @@ and reversing it at the axis. See [`memory/a_axis_div10_workaround.md`](../../.c
 ---
 
 ## `axes_err_id` axis ordering
-**Sites:**
-- [`AxisGroupSM.st`](../codesys_code/Application/APPs/AxisGroupSM/AxisGroupSM.st) — packs `[EAxis0, EAxis1, EAxis2, reelpullmotor]` in this order
-- [`GVL.st`](../codesys_code/Application/GVL.st) — `LastAxesErrorIDs` array, same ordering, populated cyclically
-- [`OperationPage.tsx`](../components/OperationPage.tsx) — `AXIS_LABELS` array, same ordering
+**Sites (post-2026-04-27 self-describing reply):**
+- [`AxisGroupSM.st`](../codesys_code/Application/APPs/AxisGroupSM/AxisGroupSM.st) — packs `axes_err_id` AND `axes_labels` in the same iteration; both arrays must walk the axes in identical order
+- [`GVL.st`](../codesys_code/Application/GVL.st) — `LastAxesErrorIDs` array populated cyclically in that same order
 - `axes_err_mask` bit positions 0..3 must match the array indices
 
-**Constraint:** Four places must share the same axis order.
+**Constraint:** PLC is now the single source of truth — UI consumes
+`axes_labels` from `GET_MACHINE_STATE` and indexes into `axes_err_id` /
+`axes_err_mask` by the same i. Hardcoded label arrays in the UI are gone
+(except for a tiny fallback used only before the first snapshot lands).
 
-**Failure mode if broken:** Operator sees "Axis 2 fault" when it's actually the reel motor.
+**Failure mode if broken:** PLC packs `axes_labels` and `axes_err_id` in
+different orders — operator sees the wrong axis name on a fault. Lower
+risk than before because they're packed in the same handler in
+AxisGroupSM.st; a reorder requires editing two adjacent blocks.
 
 ---
 

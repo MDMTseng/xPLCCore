@@ -29,12 +29,16 @@ export const OperationPage: React.FC<{
   // Index layout matches PLC's axes_err_mask bits 0..3.
   const [axesErrId, setAxesErrId] = useState<number[] | null>(null);
   const [axesErrMask, setAxesErrMask] = useState<number | null>(null);
+  const [axesLabels, setAxesLabels] = useState<string[] | null>(null);
   // Coord-system gate. PLC clears it on UnInited entry (any reset/recovery)
   // and rejects G1 with err='coord_not_configured' until SetCoord0/1 is
   // re-called. Surface it so the operator can spot the gate state at a
   // glance instead of seeing a cryptic NAK on the first move.
   const [coordSet, setCoordSet] = useState<boolean | null>(null);
-  const AXIS_LABELS = ['EAxis0 (arm1)', 'EAxis1 (arm2)', 'EAxis2 (arm3)', 'reelpullmotor'];
+  // Static fallback used only until the first GET_MACHINE_STATE arrives
+  // and gives us the PLC-provided axes_labels. Anything visible to the
+  // operator should come from the live array, not this constant.
+  const AXIS_LABELS_FALLBACK = ['EAxis0', 'EAxis1', 'EAxis2', 'reel'];
 
   const refreshMachineState = useCallback(async () => {
     try {
@@ -48,6 +52,9 @@ export const OperationPage: React.FC<{
       }
       if (reply && typeof reply.coord_set === 'boolean') {
         setCoordSet(reply.coord_set);
+      }
+      if (reply && Array.isArray(reply.axes_labels)) {
+        setAxesLabels(reply.axes_labels.map((s: any) => String(s)));
       }
     } catch {
       /* swallow — best-effort enrichment */
@@ -263,7 +270,7 @@ export const OperationPage: React.FC<{
             Last error: {plcLastError.src} (id={plcLastError.id})
             {(axesErrId || axesErrMask !== null) && (
               <div style={{ marginTop: 6, fontWeight: 500, fontSize: 11 }}>
-                {AXIS_LABELS.map((label, i) => {
+                {(axesLabels ?? AXIS_LABELS_FALLBACK).map((label: string, i: number) => {
                   const eid = axesErrId?.[i] ?? 0;
                   const faulted = axesErrMask !== null
                     ? ((axesErrMask >> i) & 1) === 1
