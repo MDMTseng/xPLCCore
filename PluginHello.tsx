@@ -473,6 +473,25 @@ export const PluginHello: React.FC<{
               continue;
             }
 
+            // Defensive: a reply that *also* declared kind!=='event' (or any
+            // value other than missing) is not a normal request reply -- drop
+            // it before RX_lookup match so a future protocol extension can't
+            // accidentally resolve a stale pending entry.
+            if (message && message.kind !== undefined) {
+              continue;
+            }
+
+            // Protocol-version sanity: if PLC tags its replies with a version
+            // that no longer matches what we compiled against, treat the reply
+            // as foreign and skip RX_lookup match. Prevents a half-upgraded
+            // PLC from resolving requests with a payload shape we'd misparse.
+            if (message && message.protocol_version !== undefined
+                && message.protocol_version !== PROTOCOL_VERSION) {
+              console.warn('PLC reply protocol_version mismatch:',
+                message.protocol_version, 'expected', PROTOCOL_VERSION);
+              continue;
+            }
+
             if (message && message.id) {
               if (message.id in _this.RX_lookup) {
                 const entry = _this.RX_lookup[message.id];
