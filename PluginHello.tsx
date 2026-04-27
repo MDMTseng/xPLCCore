@@ -635,46 +635,58 @@ export const PluginHello: React.FC<{
   const lastPongMsRef = useRef<number>(0);
   const lastPingLatencyMsRef = useRef<number>(0);
   const plcRuntimeMsRef = useRef<number>(0);
+  // The setInterval timer is driven by the renderer's main-thread event loop,
+  // which Chromium throttles to ~1Hz when the BrowserWindow is hidden / the
+  // tab is backgrounded. That throttling has caused PING to miss the PLC's
+  // UI_HEARTBEAT_TIMEOUT_MS window, tripping a spurious A3 fault. A Worker
+  // timer runs on a dedicated thread and is NOT subject to visibility
+  // throttling, so we drive ticks from there and only post a message back to
+  // the main thread to fire the actual PING send.
   useEffect(() => {
-    if (tcpConnected) {
-      if (!keepaliveTimerRef.current) {
-        // Reset staleness tracking on fresh connection so get_heartbeat_status
-        // doesn't report stale based on a previous session's last pong.
-        lastPongMsRef.current = Date.now();
-        keepaliveTimerRef.current = window.setInterval(() => {
-          try {
-            if (!sentFlagRef.current) {
-              const sentAt = Date.now();
-              const p = sendTcpMsgPack(cmd.Ping(), true, HEARTBEAT_STALE_MS) as Promise<any>;
-              if (p && typeof (p as any).then === 'function') {
-                p.then((reply: any) => {
-                  if (reply && reply.pong) {
-                    lastPongMsRef.current = Date.now();
-                    lastPingLatencyMsRef.current = lastPongMsRef.current - sentAt;
-                    plcRuntimeMsRef.current = Number(reply.runtime_ms ?? 0);
-                  }
-                }).catch(() => {
-                  // PING timed out or socket errored — leave lastPongMsRef
-                  // untouched so staleness will latch after HEARTBEAT_STALE_MS.
-                });
-              }
-            }
-            sentFlagRef.current = false;
-          } catch (e) {
-            console.error('PING send error:', e);
-          }
-        }, HEARTBEAT_INTERVAL_MS);
-      }
-    } else if (keepaliveTimerRef.current) {
-      clearInterval(keepaliveTimerRef.current);
-      keepaliveTimerRef.current = null;
-    }
-
-    return () => {
+    if (!tcpConnected) {
       if (keepaliveTimerRef.current) {
-        clearInterval(keepaliveTimerRef.current);
+        try { keepaliveTimerRef.current.terminate(); } catch (_) {}
         keepaliveTimerRef.current = null;
       }
+      return;
+    }
+    if (keepaliveTimerRef.current) return;
+
+    lastPongMsRef.current = Date.now();
+
+    const workerSrc =
+      "let id=null;onmessage=(e)=>{const d=e.data||{};if(d.cmd==='start'){if(id)clearInterval(id);id=setInterval(()=>postMessage('tick'),d.ms||1000);}else if(d.cmd==='stop'){if(id){clearInterval(id);id=null;}}};";
+    const blob = new Blob([workerSrc], { type: 'application/javascript' });
+    const url = URL.createObjectURL(blob);
+    const worker = new Worker(url);
+    keepaliveTimerRef.current = worker;
+
+    worker.onmessage = () => {
+      try {
+        if (!sentFlagRef.current) {
+          const sentAt = Date.now();
+          const p = sendTcpMsgPack(cmd.Ping(), true, HEARTBEAT_STALE_MS) as Promise<any>;
+          if (p && typeof (p as any).then === 'function') {
+            p.then((reply: any) => {
+              if (reply && reply.pong) {
+                lastPongMsRef.current = Date.now();
+                lastPingLatencyMsRef.current = lastPongMsRef.current - sentAt;
+                plcRuntimeMsRef.current = Number(reply.runtime_ms ?? 0);
+              }
+            }).catch(() => {});
+          }
+        }
+        sentFlagRef.current = false;
+      } catch (e) {
+        console.error('PING send error:', e);
+      }
+    };
+    worker.postMessage({ cmd: 'start', ms: HEARTBEAT_INTERVAL_MS });
+    URL.revokeObjectURL(url);
+
+    return () => {
+      try { worker.terminate(); } catch (_) {}
+      if (keepaliveTimerRef.current === worker) keepaliveTimerRef.current = null;
     };
   }, [tcpConnected, sendTcpMsgPack]);
 
