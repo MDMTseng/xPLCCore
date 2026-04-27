@@ -252,18 +252,7 @@ PROGRAM AxisGroupSM
     GVL.LastAxesErrorIDs[2] := IoConfig_Globals.EAxis2.uiDriveInterfaceError;
     GVL.LastAxesErrorIDs[3] := reelpullmotor.uiDriveInterfaceError;
 
-    //InitRuntime();
-    IF TRUE THEN
-        IF RuntimeMs = 0 THEN
-            FOR Index := 0 TO GVL.reMP_info_ridx.capacity() - 1 DO
-                GVL.reMP_info_arr[Index] := MsgPakInfoInit(
-                    buff := ADR(GVL.reMP_info_buf[Index]),
-                    buffer_size := GVL.reMP_info_buff_SIZE,
-                    useLargeElementCountField := TRUE
-                );
-            END_FOR
-        END_IF;
-    END_IF;
+    InitRuntime();
 
     // Virtual-motors TTL gate. Derive GVL.bVirtualMotorsMode from
     // GVL.bVirtualMotorsMode_Request (which the operator forces via
