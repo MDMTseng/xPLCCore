@@ -17,3 +17,4 @@ codesys_scripts/jobs/daemon.rpc.log
 Thumbs.db
 .DS_Store
 *.swp
+__pycache__/
