@@ -430,6 +430,12 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
             MotionPose.c.X := MessageUnpackerFb.TryReadREAL('X', MotionPose.c.X);
             MotionPose.c.Y := MessageUnpackerFb.TryReadREAL('Y', MotionPose.c.Y);
             MotionPose.c.Z := MessageUnpackerFb.TryReadREAL('Z', MotionPose.c.Z);
+            // A-axis /10 workaround: SpiderR's Kin_CAxis treats c.A as orientation,
+            // wraps to +/-180 deg structurally. UI sends +/-360 deg; we scale 10x
+            // here and the axis-side scaling reverses it. Decision 2026-04-27 to
+            // keep this rather than restructure (axis is Finite 0..1000u, not the
+            // wrap source; wrap is in Kin_CAxis inverse). Don't "fix" without
+            // confirming the matching scaling on the SM_Drive_GenericDSP402 side.
             MotionPoseTempReal := MessageUnpackerFb.TryReadREAL('A', G1_A_UNSET_SENTINEL);
             IF (MotionPoseTempReal <> G1_A_UNSET_SENTINEL) THEN
                 MotionPose.c.A := MotionPoseTempReal / 10;
