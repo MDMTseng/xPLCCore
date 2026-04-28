@@ -112,6 +112,14 @@ PROGRAM AxisGroupSM
 
         MessagePackerFb: FB_MpPacker;
         ResponsePacketPointer: POINTER TO MsgPakInfo;
+        // Drop-newest gating flag for reMP_info_ridx emission paths whose
+        // pack-into-slot block spans many lines and many branches (the SYS
+        // and motion handlers below). When the ring is full the producer
+        // routes ResponsePacketPointer to GVL.reMP_info_scratch instead of
+        // slot[head] (writing slot[head] when full would corrupt the slot
+        // the Comm task is about to read), and pushHead is skipped. Short
+        // emission blocks use a direct IF (space>0) wrap instead.
+        SlotAvailable: BOOL := FALSE;
 
         // MaxVelocity: REAL := 1000;
         // MaxAcceleration: REAL := 4000;
@@ -356,23 +364,26 @@ PROGRAM AxisGroupSM
         // W1 A5: if the client declared a version and it doesn't match,
         // NAK before any dispatch. 0 (absent / legacy) is allowed through.
         IF (ProtocolVersionGot <> 0 AND TO_UDINT(ProtocolVersionGot) <> GVL.PROTOCOL_VERSION) THEN
-            IF (GVL.reMP_info_ridx.space() = 0) THEN
-                GVL.reMP_info_ridx.consumeTail();
+            // Drop-newest on overflow (see UpdateMotionProgress). The
+            // minfo_buf consumeTail and counter still run so a full reply
+            // ring doesn't infinitely re-NAK the same packet.
+            IF (GVL.reMP_info_ridx.space() > 0) THEN
+                ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+                MsgPakInfoClear(ResponsePacketPointer^);
+                ResponsePacketPointer^.ele_count := 4;
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('protocol_version_mismatch'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_got'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := ProtocolVersionGot);
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('id'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := CommandId);
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := FALSE);
+                MsgPakInfoWrapup(ResponsePacketPointer^);
+                GVL.reMP_info_ridx.pushHead();
+            ELSE
                 GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
             END_IF;
-            ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
-            MsgPakInfoClear(ResponsePacketPointer^);
-            ResponsePacketPointer^.ele_count := 4;
-            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
-            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('protocol_version_mismatch'));
-            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_got'));
-            ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := ProtocolVersionGot);
-            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('id'));
-            ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := CommandId);
-            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
-            ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := FALSE);
-            MsgPakInfoWrapup(ResponsePacketPointer^);
-            GVL.reMP_info_ridx.pushHead();
 
             GVL.minfo_buf_ridx.consumeTail();
             GVL.ProtocolVersionMismatchCount := GVL.ProtocolVersionMismatchCount + 1;
@@ -384,14 +395,21 @@ PROGRAM AxisGroupSM
             SysDrainIter := SysDrainIter + 1;
 
         ELSIF (PacketType = 'SYS') THEN
-            // reMP overflow guard: if the reply ring is full, drop the oldest
-            // queued reply to make room. getHead() returning -1 would index
-            // reMP_info_arr[-1] and fault the task. See doc/ringbuf-bugs.md #4.
-            IF (GVL.reMP_info_ridx.space() = 0) THEN
-                GVL.reMP_info_ridx.consumeTail();
+            // reMP overflow: drop-newest. Producer must NOT consumeTail
+            // (Comm task is sole consumer; two consumers race on _tail).
+            // The SYS handler block below has many branches that all pack
+            // into ResponsePacketPointer^; route to GVL.reMP_info_scratch
+            // when full so the inline pack code stays unchanged. The
+            // pushHead at the bottom of this branch is gated on
+            // SlotAvailable.
+            IF (GVL.reMP_info_ridx.space() > 0) THEN
+                SlotAvailable := TRUE;
+                ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+            ELSE
+                SlotAvailable := FALSE;
                 GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+                ResponsePacketPointer := ADR(GVL.reMP_info_scratch);
             END_IF;
-            ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]); // prepare for return data buffer
 
             MsgPakInfoClear(ResponsePacketPointer^);
 
@@ -591,7 +609,15 @@ PROGRAM AxisGroupSM
 
                 ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 2;
                 MsgPakInfoWrapup(ResponsePacketPointer^);
-                GVL.reMP_info_ridx.pushHead();
+                // Drop-newest: only commit if the real ring slot was reserved.
+                // If SlotAvailable=FALSE we packed into the scratch slot and
+                // must NOT pushHead (would corrupt the slot a consumer is
+                // currently reading). See GVL.reMP_info_scratch note.
+                IF SlotAvailable THEN
+                    GVL.reMP_info_ridx.pushHead();
+                ELSE
+                    GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+                END_IF;
             END_IF;
             SysDrainIter := SysDrainIter + 1;
 
@@ -602,23 +628,25 @@ PROGRAM AxisGroupSM
             // blocked PINGs, supervisor tripped at 5s). NAK inline so a
             // future caller fails fast instead of "stalling" -- and so any
             // SYS packets queued behind it can drain in this same loop.
-            IF (GVL.reMP_info_ridx.space() = 0) THEN
-                GVL.reMP_info_ridx.consumeTail();
+            // Drop-newest: skip the NAK entirely if the reply ring is full
+            // rather than overwrite a slot the Comm-task consumer is reading.
+            IF (GVL.reMP_info_ridx.space() > 0) THEN
+                ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+                MsgPakInfoClear(ResponsePacketPointer^);
+                ResponsePacketPointer^.ele_count := 4;
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('missing_type_field'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_got_type'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(PacketType));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('id'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := CommandId);
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := FALSE);
+                MsgPakInfoWrapup(ResponsePacketPointer^);
+                GVL.reMP_info_ridx.pushHead();
+            ELSE
                 GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
             END_IF;
-            ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
-            MsgPakInfoClear(ResponsePacketPointer^);
-            ResponsePacketPointer^.ele_count := 4;
-            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
-            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('missing_type_field'));
-            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_got_type'));
-            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(PacketType));
-            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('id'));
-            ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := CommandId);
-            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
-            ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := FALSE);
-            MsgPakInfoWrapup(ResponsePacketPointer^);
-            GVL.reMP_info_ridx.pushHead();
 
             GVL.minfo_buf_ridx.consumeTail();
             GVL.MissingTypeFieldNakCount := GVL.MissingTypeFieldNakCount + 1;
@@ -634,21 +662,22 @@ PROGRAM AxisGroupSM
             // packets queued behind it. When Ready, EXIT and let
             // ProcessMotionPacket handle the tail.
             IF NOT AxisGroupReady THEN
-                IF (GVL.reMP_info_ridx.space() = 0) THEN
-                    GVL.reMP_info_ridx.consumeTail();
+                // Drop-newest: skip the NAK entirely if the reply ring is full.
+                IF (GVL.reMP_info_ridx.space() > 0) THEN
+                    ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+                    MsgPakInfoClear(ResponsePacketPointer^);
+                    ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 3;
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('group_not_ready'));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('id'));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := CommandId);
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := FALSE);
+                    MsgPakInfoWrapup(ResponsePacketPointer^);
+                    GVL.reMP_info_ridx.pushHead();
+                ELSE
                     GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
                 END_IF;
-                ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
-                MsgPakInfoClear(ResponsePacketPointer^);
-                ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 3;
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('group_not_ready'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('id'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := CommandId);
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := FALSE);
-                MsgPakInfoWrapup(ResponsePacketPointer^);
-                GVL.reMP_info_ridx.pushHead();
 
                 GVL.minfo_buf_ridx.consumeTail();
                 GVL.GroupNotReadyNakCount := GVL.GroupNotReadyNakCount + 1;

@@ -23,6 +23,19 @@ VAR_GLOBAL
 	reMP_info_arr: ARRAY [0..32-1] OF MsgPakInfo;
 	reMP_info_ridx:FB_RingBufferIndex(32);
 
+	// Scratch slot used by long emission blocks (ProcessMotionPacket,
+	// AxisGroupSM SYS handlers) when the ring is full. Drop-newest policy
+	// (see UpdateMotionProgress comment) means the producer never writes
+	// to slot[head] when full -- writing there would corrupt the slot the
+	// Comm task is about to consume. Routing the pack into this scratch
+	// slot keeps the inline pack code unchanged; the gate on pushHead
+	// then quietly drops the packet and bumps ReMpDropCount.
+	reMP_info_scratch: MsgPakInfo;
+	// Same dedicated buffer for the scratch slot. Sized like reMP_info_buf
+	// rows; never sent on the wire, just absorbs writes when the ring is
+	// full.
+	reMP_info_scratch_buf: ARRAY [0..1024-1] OF BYTE;
+
 	// Bumped by MsgPakInfoWrapup when whead has already passed buf_capacity --
 	// i.e. some Pack* call wrote past the slot's byte buffer. Diagnostic only;
 	// the corruption already happened upstream, but a non-zero count means

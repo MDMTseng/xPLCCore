@@ -49,27 +49,30 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
 
 
     IF (TriggerErrorCode <> 0) THEN
-        // reMP overflow guard (see doc/ringbuf-bugs.md #4).
-        IF (GVL.reMP_info_ridx.space() = 0) THEN
-            GVL.reMP_info_ridx.consumeTail();
+        // Drop-newest on overflow (see UpdateMotionProgress for SPSC race
+        // rationale). The action-clear below still runs even if the error
+        // event was dropped -- the FlyEvent itself is one-shot, not the
+        // notification.
+        IF (GVL.reMP_info_ridx.space() > 0) THEN
+            ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+            MsgPakInfoClear(ResponsePacketPointer^);
+            ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 3;
+
+            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('error_code'));
+            ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TriggerErrorCode);
+
+            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('src_id'));
+            ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := FlyEventBuffer[Index].SourceCommandId);
+
+
+            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('event_id'));
+            ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := TO_LINT(FlyEventBuffer[Index].EventId));
+
+            MsgPakInfoWrapup(ResponsePacketPointer^);
+            GVL.reMP_info_ridx.pushHead();
+        ELSE
             GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
         END_IF;
-        ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]); // prepare for return data buffer
-        MsgPakInfoClear(ResponsePacketPointer^);
-        ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 3;
-
-        ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('error_code'));
-        ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TriggerErrorCode);
-
-        ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('src_id'));
-        ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := FlyEventBuffer[Index].SourceCommandId);
-
-
-        ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('event_id'));
-        ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := TO_LINT(FlyEventBuffer[Index].EventId));
-
-        MsgPakInfoWrapup(ResponsePacketPointer^);
-        GVL.reMP_info_ridx.pushHead();
 
 
         FlyEventBuffer[Index].ActionType := FlyEventActType.NOP;
@@ -112,36 +115,33 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
                 IoTriggerCount := IoTriggerCount + 1;
 
             FlyEventActType.ACK_SRC_ID://send ack with source command id
-                // reMP overflow guard (see doc/ringbuf-bugs.md #4).
-                IF (GVL.reMP_info_ridx.space() = 0) THEN
-                    GVL.reMP_info_ridx.consumeTail();
+                // Drop-newest on overflow (SPSC race rationale in
+                // UpdateMotionProgress). FlyEvent state is cleared either way
+                // so we don't loop on the same one-shot.
+                IF (GVL.reMP_info_ridx.space() > 0) THEN
+                    ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+                    MsgPakInfoClear(ResponsePacketPointer^);
+
+
+                    ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count +3;//three elements: event_id, id, ack
+
+
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('event_id'));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := TO_LINT(FlyEventBuffer[Index].EventId));
+
+
+
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('id'));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := FlyEventBuffer[Index].SourceCommandId);
+
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := TRUE);
+
+                    MsgPakInfoWrapup(ResponsePacketPointer^);
+                    GVL.reMP_info_ridx.pushHead();
+                ELSE
                     GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
                 END_IF;
-
-                ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]); // prepare for return data buffer
-                MsgPakInfoClear(ResponsePacketPointer^);
-
-
-                ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count +3;//three elements: event_id, id, ack
-
-
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('event_id'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := TO_LINT(FlyEventBuffer[Index].EventId));
-
-
-
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('id'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := FlyEventBuffer[Index].SourceCommandId);
-
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := TRUE);
-
-                MsgPakInfoWrapup(ResponsePacketPointer^);
-                GVL.reMP_info_ridx.pushHead();
-
-                // IF (FlyEventBuffer[Index].SourceCommandId = CommandId) THEN
-                //     TriggerActive := TRUE;
-                // END_IF;
 
                 FlyEventBuffer[Index].ActionType := FlyEventActType.NOP;
                 FlyEventBuffer[Index].TriggerType := FlyEventTriggerType.NOP;

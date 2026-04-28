@@ -4,12 +4,19 @@
         ShouldReturn := FALSE;
         CommandAck := FALSE;
 
-        // reMP overflow guard (see doc/ringbuf-bugs.md #4).
-        IF (GVL.reMP_info_ridx.space() = 0) THEN
-            GVL.reMP_info_ridx.consumeTail();
+        // reMP overflow guard: drop-newest. Producer must NOT consumeTail
+        // (Comm task is sole consumer; two consumers race on _tail). When
+        // the ring is full we route the pack into a scratch slot so the
+        // long branchy block below can stay unchanged; pushHead at the
+        // bottom is gated on SlotAvailable. See GVL.reMP_info_scratch.
+        IF (GVL.reMP_info_ridx.space() > 0) THEN
+            SlotAvailable := TRUE;
+            ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+        ELSE
+            SlotAvailable := FALSE;
             GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+            ResponsePacketPointer := ADR(GVL.reMP_info_scratch);
         END_IF;
-        ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]); // prepare for return data buffer
         MsgPakInfoClear(ResponsePacketPointer^);
 
         IF (GroupReadStatusFb.Error = TRUE OR GroupReadStatusFb.GroupErrorStop) THEN
@@ -540,6 +547,10 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
             ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := CommandAck);
 
             MsgPakInfoWrapup(ResponsePacketPointer^);
-            GVL.reMP_info_ridx.pushHead();
+            // Only commit the slot if we actually reserved one above.
+            // SlotAvailable=FALSE means the pack wrote to the scratch slot.
+            IF SlotAvailable THEN
+                GVL.reMP_info_ridx.pushHead();
+            END_IF;
         END_IF;
     END_IF;

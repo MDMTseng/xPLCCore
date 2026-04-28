@@ -10,6 +10,14 @@ push/consume returns) is correct; the holes are all in the usage.
 > #11 closed by SPSC lock-free refactor of FB_RingBufferIndex; **#12
 > closed by AUX removal** — `reMP_info_ridx` is now single-producer
 > (AxisGroupSM only).
+>
+> **Status sweep 2026-04-28:** #12 reopened+closed — the post-#11
+> "drop-oldest" guard pattern (`IF space()=0 THEN consumeTail()`)
+> turned EC_Task into a *second* `_tail` writer alongside the Comm
+> task, re-creating an MPSC race on the consumer side. All seven
+> EC_Task emission sites converted to drop-newest (skip the write,
+> or pack into `GVL.reMP_info_scratch` and decline `pushHead`); see
+> #12 below for the full story.
 > Remaining open: #3 (closed-with-rationale), #9 (defensive-only, no fix
 > needed), #10 (observation).
 > See per-item notes for current state.
@@ -112,19 +120,57 @@ call it from a single-task context. The legacy in-loop `clear()` in
 the AxisGroupSM not-Ready drain was already removed when that path
 became per-packet NAK.
 
-### 12. `reMP_info_ridx` is MPSC, FB only guarantees SPSC — **Closed 2026-04-27 by AUX removal**
-Previously both `AxisGroupSM` (replies) and `TCP_MSGPAK_Server` (AUX
-acks) wrote `reMP_info_ridx`, so the lock-free SPSC FB (#11) didn't
-cover the producer side. AUX was a reserved-but-unused channel (no UI
-sender, no PLC handler — packets were just drained), so the entire AUX
-path was deleted: `aux{0,1,2}_info_buf[_ridx]` removed from GVL,
-TCP_MSGPAK_Server collapsed to the minfo branch, AxisGroupSM's
-`ProcessAuxCommands` drain block deleted. `reMP_info_ridx` is now
-single-producer (AxisGroupSM EC task) / single-consumer
-(TCP_MSGPAK_Server Comm task) — pure SPSC, fully covered by #11.
+### 12. `reMP_info_ridx` is MPSC, FB only guarantees SPSC — **Reopened then closed 2026-04-28 (drop-newest)**
+First pass (2026-04-27, AUX removal): both `AxisGroupSM` (replies) and
+`TCP_MSGPAK_Server` (AUX acks) wrote `reMP_info_ridx`, so the lock-free
+SPSC FB (#11) didn't cover the producer side. AUX was a
+reserved-but-unused channel (no UI sender, no PLC handler — packets
+were just drained), so the entire AUX path was deleted:
+`aux{0,1,2}_info_buf[_ridx]` removed from GVL, TCP_MSGPAK_Server
+collapsed to the minfo branch, AxisGroupSM's `ProcessAuxCommands`
+drain block deleted.
+
+Second pass (2026-04-28): the producer side was indeed clean, but the
+**consumer** side wasn't. Item #4's "drop-oldest" guard
+(`IF space()=0 THEN consumeTail(); ... END_IF;`) is itself a
+`consumeTail` call, and EC_Task (prio 0) was running it inline at
+seven emission sites. The Comm task (prio 20) is the legitimate
+consumer; EC_Task pre-empting Comm mid-`consumeTail` re-introduced
+exactly the MPSC `_tail` race that #11 was meant to remove. Worse,
+even when the race was won, EC_Task's overflow path then *wrote* to
+`slot[getHead()]` — which is `slot[_tail]` when the ring is full —
+corrupting the very packet Comm was trying to send.
+
+**Fix:** drop-newest at every EC_Task emission site. Two patterns:
+
+1. Short pack blocks (NAK/ack stubs): wrap in
+   `IF (space() > 0) THEN ... pack ... pushHead(); ELSE
+   ReMpDropCount := ReMpDropCount + 1; END_IF;`. The reply is dropped
+   entirely on overflow. UI eventually retries via timeout.
+2. Long pack blocks (SYS dispatcher): pre-check `space()` once and
+   either point `ResponsePacketPointer` at the real ring slot
+   (`SlotAvailable := TRUE`) or at the dedicated scratch slot
+   (`GVL.reMP_info_scratch`, `SlotAvailable := FALSE`). All `pack`
+   calls run unconditionally. At the end, gate `pushHead()` on
+   `SlotAvailable`. The scratch buffer prevents trashing the consumer's
+   slot while letting the unrolled emit code stay flat.
+
+Sites converted: AxisGroupSM SYS-dispatcher head + tail-pushHead,
+missing-type-field NAK, inline group-not-ready NAK,
+ProcessMotionPacket head + pushHead, UpdateMotionProgress (MOVE_DONE),
+UpdateRuntimeAndInputEvent (ST_CHG, COORD_SET), CheckAxisGroupReady
+(group_not_ready drain), ProcessFlyEventsAndIo (TriggerErrorCode,
+ACK_SRC_ID).
+
+Verification: `grep reMP_info_ridx\.consumeTail` returns hits only
+inside `TCP_MSGPAK_Server.st` (the legitimate Comm-task consumer).
+EC_Task is now strictly producer-only on this ring; FB_RingBufferIndex
+SPSC contract holds.
 
 If AUX is ever revived, design the new dispatcher with a separate
-`aux_reply_ridx` so `reMP_info_ridx` stays SPSC.
+`aux_reply_ridx` so `reMP_info_ridx` stays SPSC, and keep the new
+producer drop-newest as well — never let a producer call
+`consumeTail()` on the ring it produces into.
 
 ### 10. Ring capacities — **Observation only**
 minfo=6, reply=32. 32-slot reply ring measured to absorb a 400-packet

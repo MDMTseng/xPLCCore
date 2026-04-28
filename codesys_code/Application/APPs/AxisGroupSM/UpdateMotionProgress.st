@@ -48,24 +48,28 @@ IF (PrevMotionBufferSizeForEvent > 0
     AND MotionBufferSize = 0
     AND GroupReadStatusFb.LastAcceptedMovementId <> 0
     AND GroupReadStatusFb.LastAcceptedMovementId <> PrevCompletedMovementId) THEN
-    IF (GVL.reMP_info_ridx.space() = 0) THEN
-        GVL.reMP_info_ridx.consumeTail();
+    // Drop-newest on overflow (was drop-oldest pre-2026-04-28). Producer
+    // (EC_Task) must NOT call consumeTail because Comm task is the sole
+    // consumer; two consumers race on _tail. Skip the push and bump the
+    // drop counter instead -- the UI reconciles via GET_MACHINE_STATE.
+    IF (GVL.reMP_info_ridx.space() > 0) THEN
+        EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+        MsgPakInfoClear(EventPacketPointer^);
+        EventPacketPointer^.ele_count := 4;
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('event'));
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('name'));
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('MOVE_DONE'));
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('movement_id'));
+        EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := TO_LINT(GroupReadStatusFb.LastAcceptedMovementId));
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('runtime_ms'));
+        EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
+        MsgPakInfoWrapup(EventPacketPointer^);
+        GVL.reMP_info_ridx.pushHead();
+        PrevCompletedMovementId := GroupReadStatusFb.LastAcceptedMovementId;
+    ELSE
         GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
     END_IF;
-    EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
-    MsgPakInfoClear(EventPacketPointer^);
-    EventPacketPointer^.ele_count := 4;
-    EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
-    EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('event'));
-    EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('name'));
-    EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('MOVE_DONE'));
-    EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('movement_id'));
-    EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := TO_LINT(GroupReadStatusFb.LastAcceptedMovementId));
-    EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('runtime_ms'));
-    EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
-    MsgPakInfoWrapup(EventPacketPointer^);
-    GVL.reMP_info_ridx.pushHead();
-    PrevCompletedMovementId := GroupReadStatusFb.LastAcceptedMovementId;
 END_IF;
 PrevMotionBufferSizeForEvent := MotionBufferSize;
 

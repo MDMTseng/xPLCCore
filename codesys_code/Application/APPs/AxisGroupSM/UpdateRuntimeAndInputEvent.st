@@ -27,28 +27,31 @@ IF TO_INT(AxisGroupManagerFb._eState) <> PrevAxisGroupState THEN
     // have to poll GA_EV to learn the FSM moved. Skip PrevAxisGroupState=-1
     // which is the cold-boot sentinel (no "from" state to report).
     IF (PrevAxisGroupState >= 0) THEN
-        IF (GVL.reMP_info_ridx.space() = 0) THEN
-            GVL.reMP_info_ridx.consumeTail();
+        // Drop-newest on overflow: producer (EC_Task) must not consumeTail
+        // because Comm task is the sole consumer. See UpdateMotionProgress
+        // for the full rationale.
+        IF (GVL.reMP_info_ridx.space() > 0) THEN
+            EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+            MsgPakInfoClear(EventPacketPointer^);
+            EventPacketPointer^.ele_count := 6;
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('event'));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('name'));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('ST_CHG'));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('st'));
+            EventPacketPointer^.whead := MessagePackerFb.PackDINT(pStart := EventPacketPointer^.whead, diValue := AxisGroupManagerFb._eState);
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('st_str'));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR(StateString));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('from'));
+            EventPacketPointer^.whead := MessagePackerFb.PackDINT(pStart := EventPacketPointer^.whead, diValue := TO_DINT(PrevAxisGroupState));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('runtime_ms'));
+            EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
+            MsgPakInfoWrapup(EventPacketPointer^);
+            GVL.reMP_info_ridx.pushHead();
+            GVL.StateChangeEventCount := GVL.StateChangeEventCount + 1;
+        ELSE
             GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
         END_IF;
-        EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
-        MsgPakInfoClear(EventPacketPointer^);
-        EventPacketPointer^.ele_count := 6;
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('event'));
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('name'));
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('ST_CHG'));
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('st'));
-        EventPacketPointer^.whead := MessagePackerFb.PackDINT(pStart := EventPacketPointer^.whead, diValue := AxisGroupManagerFb._eState);
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('st_str'));
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR(StateString));
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('from'));
-        EventPacketPointer^.whead := MessagePackerFb.PackDINT(pStart := EventPacketPointer^.whead, diValue := TO_DINT(PrevAxisGroupState));
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('runtime_ms'));
-        EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
-        MsgPakInfoWrapup(EventPacketPointer^);
-        GVL.reMP_info_ridx.pushHead();
-        GVL.StateChangeEventCount := GVL.StateChangeEventCount + 1;
     END_IF;
     PrevAxisGroupState := TO_INT(AxisGroupManagerFb._eState);
 END_IF;
@@ -62,22 +65,23 @@ END_IF;
 // Envelope matches ST_CHG: kind='event', name='COORD_SET', plus a BOOL
 // `value` carrying the new gate state.
 IF (GVL.CoordSystemConfigured <> PrevCoordSet) THEN
-    IF (GVL.reMP_info_ridx.space() = 0) THEN
-        GVL.reMP_info_ridx.consumeTail();
+    // Drop-newest on overflow (see UpdateMotionProgress for rationale).
+    IF (GVL.reMP_info_ridx.space() > 0) THEN
+        EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+        MsgPakInfoClear(EventPacketPointer^);
+        EventPacketPointer^.ele_count := 4;
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('event'));
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('name'));
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('COORD_SET'));
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('value'));
+        EventPacketPointer^.whead := MessagePackerFb.PackBool(pStart := EventPacketPointer^.whead, bValue := GVL.CoordSystemConfigured);
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('runtime_ms'));
+        EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
+        MsgPakInfoWrapup(EventPacketPointer^);
+        GVL.reMP_info_ridx.pushHead();
+    ELSE
         GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
     END_IF;
-    EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
-    MsgPakInfoClear(EventPacketPointer^);
-    EventPacketPointer^.ele_count := 4;
-    EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
-    EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('event'));
-    EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('name'));
-    EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('COORD_SET'));
-    EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('value'));
-    EventPacketPointer^.whead := MessagePackerFb.PackBool(pStart := EventPacketPointer^.whead, bValue := GVL.CoordSystemConfigured);
-    EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('runtime_ms'));
-    EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
-    MsgPakInfoWrapup(EventPacketPointer^);
-    GVL.reMP_info_ridx.pushHead();
 END_IF;
 PrevCoordSet := GVL.CoordSystemConfigured;

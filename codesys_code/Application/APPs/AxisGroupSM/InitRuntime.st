@@ -10,4 +10,10 @@ IF RuntimeMs = 0 THEN
             useLargeElementCountField := TRUE
         );
     END_FOR
+    // Scratch slot for ring-full drop-newest fallback (see GVL note).
+    GVL.reMP_info_scratch := MsgPakInfoInit(
+        buff := ADR(GVL.reMP_info_scratch_buf),
+        buffer_size := GVL.reMP_info_buff_SIZE,
+        useLargeElementCountField := TRUE
+    );
 END_IF;
