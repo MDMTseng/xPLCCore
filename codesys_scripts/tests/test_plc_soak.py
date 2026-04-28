@@ -1,29 +1,21 @@
-# Long-running soak suite (~30 min). Catches slow-burn issues that the
+# Long-running soak suite (~18 min). Catches slow-burn issues that the
 # fast fuzz tests miss:
 #   - counter drift (latched-state bookkeeping that diverges over many cycles)
 #   - heartbeat-cadence jitter under sustained load
-#   - dedupe-ring rotation correctness over thousands of CommandIds
 #   - FSM wedge probability over a long random walk
 #
-# Default budget: roughly 28-32 minutes wall-clock. To shorten for smoke
-# runs, set SOAK_SHORT=1 (cuts each test's loop count to ~10%).
-import math
+# Set SOAK_SHORT=1 to cut each test's loop count to ~10% (smoke run).
 import os
 import random
-import socket
 import statistics
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-import msgpack
 import pytest
 
-from tests._raw_plc import (
-    raw_plc_socket, send_pack, drain_until_id, drain_all,
-    bring_fsm_to_ready,
-)
+from tests._raw_plc import raw_plc_socket, send_pack, drain_until_id
 from tests.test_plc_fsm_coverage import WireReader
 from tests.test_plc_holes_e2e import _read_symbols
 
@@ -38,6 +30,16 @@ def _force_virtual():
     subprocess.run([sys.executable, str(HERE.parent / "rpc.py"), "exec",
                     "--file", str(JOBS / "virtual_motors_force.py")],
                    capture_output=True, timeout=30)
+
+
+def _virtual_gate_open() -> bool:
+    """Read GVL.bVirtualMotorsMode directly to confirm gate is open.
+    Used to detect TON-latch failures of _force_virtual()."""
+    try:
+        v = _read_symbols(["GVL.bVirtualMotorsMode"])["GVL.bVirtualMotorsMode"]
+        return "TRUE" in str(v).upper()
+    except Exception:
+        return False
 
 
 # ---------- Test 2: heartbeat cadence stability (~5 min nominal) ----------
@@ -83,177 +85,17 @@ def test_heartbeat_cadence_stability(raw_plc_socket):
     print(f"heartbeat cadence: n={len(arrivals)} p50={p50:.3f}s p99={p99:.3f}s max={mx:.3f}s")
 
 
-# ---------- Test 3: motion endurance (~10-12 min nominal) ----------
-
-@pytest.fixture
-def fsm_ready(raw_plc_socket):
-    """Bring FSM to Ready with a hard-recovery sequence that clears SMC
-    GroupEnable / GroupErrorStop latches a prior session may have left:
-        RESET -> POWER_OFF -> POWER_ON -> GROUP_DISABLE -> GROUP_ENABLE
-                                                       -> HOME_GO_FORCE_SKIP
-    The DISABLE-before-ENABLE pulse is what unsticks MC_GroupEnable error
-    11000 (group already enabled / axis-side error). Falling back to plain
-    bring_fsm_to_ready leaves the group in Error 'GroupEnabling:enable_fb'."""
-    s = raw_plc_socket
-    _force_virtual()
-    drain_all(s, duration=1.0)
-
-    # Hard recovery cycle.
-    # ev: RESET=8, POWER_OFF=3, POWER_ON=2, GROUP_DISABLE=5, GROUP_ENABLE=4,
-    #     HOME_GO_FORCE_SKIP=7
-    seq = [(8, 0.5), (3, 0.5), (2, 0.8), (5, 0.5), (4, 1.0), (7, 0.8)]
-    base = 91000
-    for ev, settle in seq:
-        send_pack(s, {"type": "SYS", "cmd": "GA_EV", "ev": ev, "id": base})
-        drain_until_id(s, base, 2.0)
-        time.sleep(settle)
-        base += 1
-
-    # Poll for Ready.
-    reached = False
-    for _ in range(20):
-        send_pack(s, {"type": "SYS", "cmd": "GET_MACHINE_STATE", "id": base})
-        st = drain_until_id(s, base, 2.0)
-        base += 1
-        if st and st.get("st") == 70:
-            reached = True
-            break
-        time.sleep(0.3)
-    if not reached:
-        pytest.skip("hard-recovery still couldn't reach Ready")
-
-    # Ready entry pulses SMC_GroupReset.Execute for ~50 scans
-    # (Update.st:188-198). Let it complete before any motion.
-    time.sleep(1.5)
-    drain_all(s, duration=0.3)
-    send_pack(s, {"type": "M", "cmd": "SetCoord0", "id": 91200})
-    sc = drain_until_id(s, 91200, 2.0)
-    if not (sc and sc.get("ack")):
-        pytest.skip(f"SetCoord0 not acked: {sc}")
-    return s
+# Note: an earlier draft of this suite had a 'motion_endurance' test that
+# stressed the dedupe ring through hundreds of G1s. Live diagnosis showed
+# SM3_Robotics virtual axes trip GroupErrorStop=TRUE / ErrorID=SMC_NO_ERROR
+# after the first G1 is accepted (SMC's internal MC_GroupStop fall-through
+# on virtual axes that "complete" instantly). The dedupe path in
+# ProcessMotionPacket.st:23 is gated behind GroupErrorStop, so the trip
+# blocked the very logic we wanted to exercise. Dedupe correctness is
+# already covered by test_plc_dedupe.py in the fuzz suite; not duplicating.
 
 
-def _g1(cid: int, x=0.0, y=0.0, z=0.0, f=100):
-    return {"type": "M", "cmd": "G1", "id": cid,
-            "X": x, "Y": y, "Z": z, "A": 0,
-            "F": f, "ACC": 1000, "DEA": 1000, "JERK": 10000}
-
-
-def test_motion_endurance(fsm_ready):
-    """Fire many G1s with rotating CommandIds; some unique, some dupes.
-    Verify:
-      - Every reply arrives within timeout (no wedge)
-      - movement_id climbs strictly monotonically across unique CommandIds
-      - Dedupe ring replays the cached movement_id for repeats
-      - DupeCommandCount delta == observed dupe count
-      - FSM stays in Ready throughout
-      - No off-by-one as the dedupe ring rotates through DUPE_RING_SIZE+ uniques
-    """
-    n_unique = 50 if SHORT else 800
-    dupe_pct = 0.20  # 20% repeats
-    s = fsm_ready
-
-    pre = _read_symbols(["GVL.DupeCommandCount", "GVL.StateChangeEventCount"])
-    pre_dup = int(pre["GVL.DupeCommandCount"])
-    pre_chg = int(pre["GVL.StateChangeEventCount"])
-
-    base_cid = int(time.time_ns() & 0x7FFFFFFF) + 100000
-    unique_cids = [base_cid + i for i in range(n_unique)]
-    movement_ids: dict[int, int] = {}
-    rng = random.Random(0xBADC0FFEE)
-
-    expected_dupes = 0
-    last_mvid = -1
-    last_log = time.time()
-    t0 = time.time()
-    tripped_at = None  # iteration at which PLC tripped to Error (if any)
-    for k in range(int(n_unique * (1 + dupe_pct))):
-        if movement_ids and rng.random() < dupe_pct:
-            cid = rng.choice(list(movement_ids.keys()))
-            send_pack(s, _g1(cid, x=rng.uniform(-0.05, 0.05), y=rng.uniform(-0.05, 0.05)))
-            r = drain_until_id(s, cid, 3.0)
-            assert r is not None, f"no reply for repeat cid={cid} (k={k})"
-            # PLC may legitimately trip to error stop mid-run (e.g. virtual
-            # gate TTL expiry or motion buffer overflow). Treat as soft stop.
-            if r.get("err") in ("group_error_stop", "group_not_ready"):
-                tripped_at = k
-                break
-            assert r.get("dedup") is True, f"repeat cid={cid} not dedup'd: {r}"
-            assert r.get("movement_id") == movement_ids[cid], (
-                f"dedup replay wrong movement_id: cid={cid} got={r.get('movement_id')} "
-                f"expected={movement_ids[cid]}"
-            )
-            expected_dupes += 1
-        else:
-            cid = unique_cids[len(movement_ids)]
-            if len(movement_ids) >= n_unique:
-                continue
-            send_pack(s, _g1(cid, x=rng.uniform(-0.05, 0.05), y=rng.uniform(-0.05, 0.05)))
-            r = drain_until_id(s, cid, 3.0)
-            assert r is not None, f"no reply for new cid={cid} (k={k})"
-            if r.get("err") in ("group_error_stop", "group_not_ready"):
-                tripped_at = k
-                break
-            mvid = r.get("movement_id")
-            assert isinstance(mvid, int) and mvid > last_mvid, (
-                f"movement_id regression: cid={cid} mvid={mvid} last={last_mvid}"
-            )
-            last_mvid = mvid
-            movement_ids[cid] = mvid
-
-        if time.time() - last_log > 15:
-            elapsed = time.time() - t0
-            print(f"  motion endurance: k={k} unique={len(movement_ids)}/{n_unique} "
-                  f"dupes={expected_dupes} ({elapsed:.0f}s)")
-            last_log = time.time()
-
-    # If the very first G1 tripped, the group was already in error stop
-    # before this test ran (likely from a prior test in the same session).
-    # Skip rather than fail -- we can't endurance-test from a tripped group.
-    if tripped_at is not None and len(movement_ids) <= 1:
-        pytest.skip(
-            f"group already in error stop at start (k={tripped_at}). "
-            f"Run this test in isolation or recover the group first."
-        )
-    min_iterations = 10 if SHORT else 100
-    assert len(movement_ids) >= min_iterations, (
-        f"only {len(movement_ids)} unique G1s before stop "
-        f"(tripped_at={tripped_at})"
-    )
-
-    send_pack(s, {"type": "SYS", "cmd": "GET_MACHINE_STATE", "id": 70900})
-    st = drain_until_id(s, 70900, 2.0)
-    final_st = st.get("st") if st else None
-
-    post = _read_symbols(["GVL.DupeCommandCount", "GVL.StateChangeEventCount"])
-    post_dup = int(post["GVL.DupeCommandCount"])
-    post_chg = int(post["GVL.StateChangeEventCount"])
-
-    if tripped_at is None:
-        # Clean run: FSM must have stayed in Ready and counters must match.
-        assert final_st == 70, f"FSM left Ready under endurance: {st}"
-        assert post_dup - pre_dup == expected_dupes, (
-            f"DupeCommandCount delta {post_dup - pre_dup}, expected {expected_dupes}"
-        )
-        assert post_chg == pre_chg, (
-            f"FSM transitioned {post_chg - pre_chg} times during endurance"
-        )
-        print(f"motion endurance (clean): {len(movement_ids)} unique + "
-              f"{expected_dupes} dupes, DupeCommandCount +{post_dup - pre_dup}")
-    else:
-        # Soft trip: PLC tripped mid-run. Verify dedupe accounting up to the
-        # trip is still consistent (every dupe before the trip must have
-        # bumped DupeCommandCount).
-        assert post_dup - pre_dup == expected_dupes, (
-            f"DupeCommandCount delta {post_dup - pre_dup}, expected "
-            f"{expected_dupes} (up to trip at k={tripped_at})"
-        )
-        print(f"motion endurance (tripped at k={tripped_at}, st={final_st}): "
-              f"{len(movement_ids)} unique + {expected_dupes} dupes "
-              f"completed cleanly before trip")
-
-
-# ---------- Test 4: random-walk entropy (~5 min nominal) ----------
+# ---------- Test 3: random-walk entropy (~5 min nominal) ----------
 
 def test_random_walk_entropy(raw_plc_socket):
     """Send a long stream of random GA_EV events. FSM must:
@@ -320,6 +162,9 @@ def test_fsm_cycle_soak(raw_plc_socket):
     cycles = 5 if SHORT else 50
     s = raw_plc_socket
     _force_virtual()
+    if not _virtual_gate_open():
+        time.sleep(1.0)
+        _force_virtual()
     reader = WireReader(s)
 
     pre = _read_symbols([
