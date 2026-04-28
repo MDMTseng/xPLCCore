@@ -212,7 +212,15 @@ CASE _eState OF
         IF(uidx=-1)THEN
             GroupPower_Flag := FALSE;
             bReelPowerReq   := FALSE;
-            
+
+            // PH#6: clear the coord-system gate on Error entry too, not
+            // just on UnInited. Without this, a Ready -> Error -> Ready
+            // recovery (group reset by SMC, no operator EV_RESET) leaves
+            // CoordSystemConfigured TRUE and lets G1 fire against stale
+            // homing/coord state. UnInited entry still clears it for the
+            // full reset path; this covers the in-place recovery case.
+            GVL.CoordSystemConfigured := FALSE;
+
             SMC_GroupDisable(AxisGroup:=_agAxisGroup, Execute:=FALSE);
             SMC_GroupReset(AxisGroup:=_agAxisGroup, Execute:=FALSE);
             fbResetReel(Axis:= _axReel, Execute:=FALSE);
