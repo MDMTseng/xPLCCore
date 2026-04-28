@@ -14,14 +14,18 @@ VAR_GLOBAL
 	// corrupting later slots' buf pointers and crashing PLC in
 	// FB_MpPacker.PackMapHeader when ridx wrapped to a corrupted slot.
 	reMP_info_buff_SIZE:INT:=1024;
-	reMP_info_buf: ARRAY [0..32-1] OF ARRAY [0..1024-1]OF BYTE;
+	// Capacity bumped 32 -> 128 on 2026-04-28. With HEARTBEAT (~2/s) + PING
+	// replies + ST_CHG bursts, a 5s UI hiccup could fill 32 slots. 128 gives
+	// headroom for the A3 supervisor staleness window (5s) plus margin.
+	// Memory cost: 128 * 1024 = 128KB for buf, ~negligible struct overhead.
+	reMP_info_buf: ARRAY [0..128-1] OF ARRAY [0..1024-1]OF BYTE;
 	// Guard region between the byte buffers and the struct array. If any
 	// future reply overflows past buf_capacity, it lands here (harmless
 	// scratch) rather than smashing reMP_info_arr[0]'s buf pointer field.
 	// Sized at 1KB -- larger than any plausible single-Pack* overrun.
 	reMP_info_buf_guard: ARRAY [0..1023] OF BYTE;
-	reMP_info_arr: ARRAY [0..32-1] OF MsgPakInfo;
-	reMP_info_ridx:FB_RingBufferIndex(32);
+	reMP_info_arr: ARRAY [0..128-1] OF MsgPakInfo;
+	reMP_info_ridx:FB_RingBufferIndex(128);
 
 	// Scratch slot used by long emission blocks (ProcessMotionPacket,
 	// AxisGroupSM SYS handlers) when the ring is full. Drop-newest policy
