@@ -168,6 +168,12 @@ PROGRAM AxisGroupSM
         // PendingMoveDoneId: edge sets it, every subsequent scan retries
         // until the push lands. Stays >0 only between detection and emit.
         PendingMoveDoneId: ULINT := 0;
+        // Audit-fix: cap retries so a permanently-stuck reMP ring (e.g.,
+        // UI hung but socket alive) eventually drops the pending event
+        // instead of holding it forever. Comm task is 5ms; 600 scans = 3s.
+        // Drop bumps GVL.PendingMoveDoneDropCount for telemetry.
+        PendingMoveDoneRetryScans: UDINT := 0;
+        PENDING_RETRY_MAX_SCANS: UDINT := 600;
 
         // PH#8: same defer-and-retry shape as PendingMoveDoneId, but for
         // ST_CHG. Edge stamps the "from" state into PendingStChgFromState
@@ -177,6 +183,9 @@ PROGRAM AxisGroupSM
         // ring is full collapses to one ST_CHG{from=B,to=C} -- UI uses
         // the global seq + runtime_ms gap to surface the skipped middle.
         PendingStChgFromState: DINT := -1;
+        // Audit-fix: same retry cap as PendingMoveDoneRetryScans. Drops
+        // bump GVL.PendingStChgDropCount.
+        PendingStChgRetryScans: UDINT := 0;
 
         // PLC->UI HEARTBEAT push event. Emitted every HEARTBEAT_INTERVAL_MS
         // from UpdateRuntimeAndInputEvent so the UI can detect a dead PLC

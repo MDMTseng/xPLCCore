@@ -80,6 +80,20 @@ IF PendingMoveDoneId <> 0 THEN
         GVL.reMP_info_ridx.pushHead();
         PrevCompletedMovementId := PendingMoveDoneId;
         PendingMoveDoneId := 0;
+        PendingMoveDoneRetryScans := 0;
+    ELSE
+        // Audit-fix: ring permanently full -> drop and move on. Without
+        // this, a stuck consumer would leave PendingMoveDoneId asserted
+        // forever and silently swallow every subsequent MOVE_DONE edge
+        // (newest-wins overwrites the latch each scan; the UI has no
+        // way to know it's stuck).
+        PendingMoveDoneRetryScans := PendingMoveDoneRetryScans + 1;
+        IF PendingMoveDoneRetryScans >= PENDING_RETRY_MAX_SCANS THEN
+            PrevCompletedMovementId := PendingMoveDoneId;
+            PendingMoveDoneId := 0;
+            PendingMoveDoneRetryScans := 0;
+            GVL.PendingMoveDoneDropCount := GVL.PendingMoveDoneDropCount + 1;
+        END_IF;
     END_IF;
 END_IF;
 

@@ -256,6 +256,80 @@ def test_a3_supervisor_does_not_trip_on_idle_ready(fsm_ready):
     )
 
 
+def test_audit_fix_counters_present(fsm_ready):
+    """Audit pass added three counters: SelfReentryCount (re-running entry
+    actions on same-state EV_ERROR/EV_RESET), PendingMoveDoneDropCount and
+    PendingStChgDropCount (force-dropping deferred events when the reMP
+    ring stays full past PENDING_RETRY_MAX_SCANS). All three must read as
+    UDINTs from the online API; a regression that renames or removes them
+    surfaces as ERR: here. We don't pin specific values -- SelfReentryCount
+    legitimately climbs under stacked faults, and the drop counters should
+    be 0 on a healthy link but a slow consumer can plausibly bump them."""
+    vals = _read_symbols([
+        "GVL.SelfReentryCount",
+        "GVL.PendingMoveDoneDropCount",
+        "GVL.PendingStChgDropCount",
+        "AxisGroupSM.PENDING_RETRY_MAX_SCANS",
+    ])
+    for sym in ("GVL.SelfReentryCount",
+                "GVL.PendingMoveDoneDropCount",
+                "GVL.PendingStChgDropCount"):
+        v = vals.get(sym, "")
+        assert not v.startswith("ERR:"), f"{sym} not readable: {v}"
+        # All three are UDINTs; just sanity-check parse.
+        n = int(v)
+        assert n >= 0, f"{sym}={n} negative"
+    thr = int(vals.get("AxisGroupSM.PENDING_RETRY_MAX_SCANS", "0"))
+    assert thr > 0, (
+        f"PENDING_RETRY_MAX_SCANS={thr}; the bound must be positive or "
+        f"the retry pump never escapes a stuck ring"
+    )
+
+
+def test_dedupe_ring_clears_across_error_recovery(fsm_ready):
+    """Audit-fix: the G1 dedupe ring (RecentCmdIds[]) must be wiped when
+    the FSM enters Error or UnInited. Without this, after a fault recovery
+    the next G1 with a CommandId that happens to collide with a pre-fault
+    cached id would replay a stale movement_id (or worse, the cached
+    movement_id corresponds to a coord-gate-failed command that never ran
+    at all). Verifies by reading the ring head after EV_ERROR -> EV_RESET
+    and confirming it's back at 0 with cleared slots."""
+    # Drive the fault path. fsm_ready left us in Ready with coord gate up.
+    tms.fire_event(9, "EV_ERROR", 0.6)
+    # Ring should be cleared on Error entry. Read before recovery so a
+    # regression that only clears on UnInited is also caught.
+    in_error = _read_symbols([
+        "AxisGroupSM.RecentCmdRingHead",
+        "AxisGroupSM.RecentCmdIds[0]",
+        "AxisGroupSM.RecentCmdIds[15]",
+        "AxisGroupSM.RecentCmdMoveIds[0]",
+        "AxisGroupSM.AxisGroupManagerFb._eState",
+    ])
+    state = in_error.get("AxisGroupSM.AxisGroupManagerFb._eState", "?")
+    assert "Error" in state, f"failed to drive Error: state={state}"
+    head = in_error.get("AxisGroupSM.RecentCmdRingHead", "?")
+    assert head == "0", (
+        f"RecentCmdRingHead={head} after Error entry, expected 0 -- "
+        f"dedupe ring was not cleared on fault"
+    )
+    for slot in ("AxisGroupSM.RecentCmdIds[0]",
+                 "AxisGroupSM.RecentCmdIds[15]",
+                 "AxisGroupSM.RecentCmdMoveIds[0]"):
+        v = in_error.get(slot, "?")
+        assert v == "0", (
+            f"{slot}={v} after Error entry, expected 0 -- ring slot "
+            f"survived the clear pass"
+        )
+
+    # Recover so subsequent tests start from Ready+coord.
+    tms.fire_event(tms.EV_RESET, "EV_RESET", 0.4)
+    tms.fire_event(tms.EV_POWER_ON, "EV_POWER_ON", 1.0)
+    tms.fire_event(tms.EV_GROUP_ENABLE, "EV_GROUP_ENABLE", 1.0)
+    tms.fire_event(tms.EV_HOME_GO_FORCE_SKIP, "EV_HOME_GO_FORCE_SKIP", 0.6)
+    tms.wait_for_state(tms.READY, timeout=8.0, label="Ready (recover)")
+    tms.harness_send({"type": "M", "cmd": "SetCoord0"}, timeout=3.0)
+
+
 def test_st_chg_event_count_advances_on_transition(fsm_ready):
     """PH#8: even with the inline drop site removed, real state changes
     must still bump GVL.StateChangeEventCount. EV_ERROR forces a Ready

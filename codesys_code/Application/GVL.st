@@ -234,6 +234,19 @@ VAR_GLOBAL
 	   with no successful Send between) escalated to a forced socket
 	   reset. *)
 	TxStallResetCount      : UDINT := 0;
+	(* Audit-fix: same-state EV_ERROR/EV_RESET re-entries. Pre-fix these
+	   were swallowed (new_state == _eState so the entry actions didn't
+	   run again) and stacked faults masked each other. Counter climbs
+	   each time Transition.st re-pulses Update(1)/Update(-1) on the
+	   same state. Expected to grow only under repeated fault triggers. *)
+	SelfReentryCount       : UDINT := 0;
+	(* Audit-fix: deferred-event retry pumps (PendingMoveDoneId,
+	   PendingStChgFromState) couldn't escape a permanently-full reMP
+	   ring. After PENDING_RETRY_MAX_SCANS scans the pump now force-drops
+	   the pending event and bumps these counters. Non-zero means the UI
+	   missed an event entirely (vs the normal HEARTBEAT-bounded skip). *)
+	PendingMoveDoneDropCount : UDINT := 0;
+	PendingStChgDropCount    : UDINT := 0;
 
 	(* B1 diagnostic counters for SetCoord1 stall investigation.
 	   AxisGroupSMScans bumps once per scan at the very top of AxisGroupSM

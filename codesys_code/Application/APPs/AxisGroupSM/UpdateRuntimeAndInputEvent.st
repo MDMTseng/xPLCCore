@@ -47,6 +47,23 @@ IF TO_INT(AxisGroupManagerFb._eState) <> PrevAxisGroupState THEN
         BlockTimeoutMs := 0;
     END_IF;
 
+    // Audit-fix: clear the G1 dedupe ring on entry to Error or UnInited.
+    // The (CommandId, MovementId) pairs are scoped to the in-flight session;
+    // after a fault or full reset the cached MovementIds correspond to
+    // motions that no longer exist. If UI restarts (CommandId counter
+    // resets to 0) or a deterministic id-from-cmd-name scheme is used, an
+    // unscrubbed ring would replay a stale MovementId on the next G1 with
+    // a colliding CommandId -- silent no-op from the operator's view, or
+    // worse, the wrong motion appearing to "succeed".
+    IF (AxisGroupManagerFb._eState = E_RobotState.Error
+        OR AxisGroupManagerFb._eState = E_RobotState.UnInited) THEN
+        FOR DupeLoopIdx := 0 TO DUPE_RING_SIZE - 1 DO
+            RecentCmdIds[DupeLoopIdx] := 0;
+            RecentCmdMoveIds[DupeLoopIdx] := 0;
+        END_FOR;
+        RecentCmdRingHead := 0;
+    END_IF;
+
     PrevAxisGroupState := TO_INT(AxisGroupManagerFb._eState);
 END_IF;
 
@@ -56,7 +73,19 @@ END_IF;
 // Producer-only on reMP_info_ridx -- never consumeTail here. No drop
 // counter bump: ring-full just means "try again next scan", not loss.
 IF (PendingStChgFromState >= 0) THEN
-    IF (GVL.reMP_info_ridx.space() > 0) THEN
+    IF (GVL.reMP_info_ridx.space() <= 0) THEN
+        // Audit-fix: bound the wait. Drop after PENDING_RETRY_MAX_SCANS
+        // so a permanently-stuck ring doesn't swallow every subsequent
+        // ST_CHG edge silently. Newest-wins means the latched "from"
+        // would otherwise just keep getting overwritten while never
+        // landing.
+        PendingStChgRetryScans := PendingStChgRetryScans + 1;
+        IF PendingStChgRetryScans >= PENDING_RETRY_MAX_SCANS THEN
+            PendingStChgFromState := -1;
+            PendingStChgRetryScans := 0;
+            GVL.PendingStChgDropCount := GVL.PendingStChgDropCount + 1;
+        END_IF;
+    ELSE
         StateString := TO_STRING(AxisGroupManagerFb._eState);
         EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
         MsgPakInfoClear(EventPacketPointer^);
@@ -77,6 +106,7 @@ IF (PendingStChgFromState >= 0) THEN
         GVL.reMP_info_ridx.pushHead();
         GVL.StateChangeEventCount := GVL.StateChangeEventCount + 1;
         PendingStChgFromState := -1;
+        PendingStChgRetryScans := 0;
     END_IF;
 END_IF;
 
