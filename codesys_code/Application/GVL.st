@@ -99,6 +99,24 @@ VAR_GLOBAL
 	OverlenDropCount : UDINT := 0;
 	ReMpDropCount    : UDINT := 0;
 
+	(* Per-type drop breakdown (added 2026-04-28). With seq stamping, the UI
+	   can already detect *that* a packet was dropped; these counters tell
+	   it *what kind* without having to keep a seq->kind history. The five
+	   categories cover every reMP_info_ridx producer site:
+	     _Reply        : request acks/naks (SYS, M, motion-packet)
+	     _StChg        : FSM state-change push event
+	     _CoordSet     : coord-system gate edge push event
+	     _Heartbeat    : periodic PLC->UI heartbeat
+	     _TriggerEvent : fly-event trigger error code push
+	   Sum of these five may slightly exceed ReMpDropCount under unusual
+	   races (drop-bump runs in producer task, global counter is shared);
+	   that's diagnostic-only so the slop is acceptable. *)
+	ReMpDropCount_Reply        : UDINT := 0;
+	ReMpDropCount_StChg        : UDINT := 0;
+	ReMpDropCount_CoordSet     : UDINT := 0;
+	ReMpDropCount_Heartbeat    : UDINT := 0;
+	ReMpDropCount_TriggerEvent : UDINT := 0;
+
 	(* Global monotonic sequence stamped on every packet emitted via
 	   MsgPakInfoWrapup (replies + unsolicited events alike). UI uses this
 	   to detect ring-drop gaps that per-request id-tracking can't see --

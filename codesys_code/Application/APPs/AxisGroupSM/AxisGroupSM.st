@@ -403,6 +403,7 @@ PROGRAM AxisGroupSM
                 GVL.reMP_info_ridx.pushHead();
             ELSE
                 GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+                GVL.ReMpDropCount_Reply := GVL.ReMpDropCount_Reply + 1;
             END_IF;
 
             GVL.minfo_buf_ridx.consumeTail();
@@ -428,6 +429,7 @@ PROGRAM AxisGroupSM
             ELSE
                 SlotAvailable := FALSE;
                 GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+                GVL.ReMpDropCount_Reply := GVL.ReMpDropCount_Reply + 1;
                 ResponsePacketPointer := ADR(GVL.reMP_info_scratch);
             END_IF;
 
@@ -637,6 +639,7 @@ PROGRAM AxisGroupSM
                     GVL.reMP_info_ridx.pushHead();
                 ELSE
                     GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+                    GVL.ReMpDropCount_Reply := GVL.ReMpDropCount_Reply + 1;
                 END_IF;
             END_IF;
             SysDrainIter := SysDrainIter + 1;
@@ -666,6 +669,7 @@ PROGRAM AxisGroupSM
                 GVL.reMP_info_ridx.pushHead();
             ELSE
                 GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+                GVL.ReMpDropCount_Reply := GVL.ReMpDropCount_Reply + 1;
             END_IF;
 
             GVL.minfo_buf_ridx.consumeTail();
@@ -697,6 +701,7 @@ PROGRAM AxisGroupSM
                     GVL.reMP_info_ridx.pushHead();
                 ELSE
                     GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+                    GVL.ReMpDropCount_Reply := GVL.ReMpDropCount_Reply + 1;
                 END_IF;
 
                 GVL.minfo_buf_ridx.consumeTail();

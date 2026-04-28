@@ -72,6 +72,7 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
             GVL.reMP_info_ridx.pushHead();
         ELSE
             GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+            GVL.ReMpDropCount_TriggerEvent := GVL.ReMpDropCount_TriggerEvent + 1;
         END_IF;
 
 
@@ -141,6 +142,7 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
                     GVL.reMP_info_ridx.pushHead();
                 ELSE
                     GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+                    GVL.ReMpDropCount_Reply := GVL.ReMpDropCount_Reply + 1;
                 END_IF;
 
                 FlyEventBuffer[Index].ActionType := FlyEventActType.NOP;

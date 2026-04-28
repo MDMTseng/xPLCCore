@@ -51,6 +51,7 @@ IF TO_INT(AxisGroupManagerFb._eState) <> PrevAxisGroupState THEN
             GVL.StateChangeEventCount := GVL.StateChangeEventCount + 1;
         ELSE
             GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+            GVL.ReMpDropCount_StChg := GVL.ReMpDropCount_StChg + 1;
         END_IF;
     END_IF;
     // PH#2: BLOCK_FOR_* latches BlockCommandId / BlockStartMs / BlockTimeoutMs
@@ -97,6 +98,7 @@ IF (GVL.CoordSystemConfigured <> PrevCoordSet) THEN
         GVL.reMP_info_ridx.pushHead();
     ELSE
         GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+        GVL.ReMpDropCount_CoordSet := GVL.ReMpDropCount_CoordSet + 1;
     END_IF;
 END_IF;
 PrevCoordSet := GVL.CoordSystemConfigured;
@@ -111,7 +113,7 @@ IF (LastHeartbeatMs = 0) OR (RuntimeMs - LastHeartbeatMs >= HEARTBEAT_INTERVAL_M
     IF (GVL.reMP_info_ridx.space() > 0) THEN
         EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
         MsgPakInfoClear(EventPacketPointer^);
-        EventPacketPointer^.ele_count := 4;
+        EventPacketPointer^.ele_count := 6;
         EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
         EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('event'));
         EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('name'));
@@ -120,10 +122,17 @@ IF (LastHeartbeatMs = 0) OR (RuntimeMs - LastHeartbeatMs >= HEARTBEAT_INTERVAL_M
         EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
         EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('remp_drop_count'));
         EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := TO_LINT(GVL.ReMpDropCount));
+        // Per-type drop breakdown so DiagPanel can tell "lost replies" (real
+        // problem) from "lost heartbeat tick" (cosmetic) without polling.
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('drops_reply'));
+        EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := TO_LINT(GVL.ReMpDropCount_Reply));
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('drops_events'));
+        EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := TO_LINT(GVL.ReMpDropCount_StChg + GVL.ReMpDropCount_CoordSet + GVL.ReMpDropCount_Heartbeat + GVL.ReMpDropCount_TriggerEvent));
         MsgPakInfoWrapup(EventPacketPointer^);
         GVL.reMP_info_ridx.pushHead();
     ELSE
         GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+        GVL.ReMpDropCount_Heartbeat := GVL.ReMpDropCount_Heartbeat + 1;
     END_IF;
     LastHeartbeatMs := RuntimeMs;
 END_IF;

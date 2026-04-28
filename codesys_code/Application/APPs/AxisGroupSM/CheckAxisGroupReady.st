@@ -33,6 +33,7 @@ IF NOT AxisGroupReady THEN
             GVL.reMP_info_ridx.pushHead();
         ELSE
             GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+            GVL.ReMpDropCount_Reply := GVL.ReMpDropCount_Reply + 1;
         END_IF;
 
         GVL.minfo_buf_ridx.consumeTail();

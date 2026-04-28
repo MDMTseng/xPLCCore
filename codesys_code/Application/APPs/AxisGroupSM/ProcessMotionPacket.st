@@ -15,6 +15,7 @@
         ELSE
             SlotAvailable := FALSE;
             GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+            GVL.ReMpDropCount_Reply := GVL.ReMpDropCount_Reply + 1;
             ResponsePacketPointer := ADR(GVL.reMP_info_scratch);
         END_IF;
         MsgPakInfoClear(ResponsePacketPointer^);
