@@ -186,6 +186,37 @@ def test_pending_st_chg_from_state_idle(fsm_ready):
     )
 
 
+def test_tx_stall_reset_counter_present_and_quiet(fsm_ready):
+    """TX-side half-open detection: GVL.TxStallResetCount must be readable
+    and stay 0 under normal operation. A regression that re-introduces
+    the infinite head-drop loop (without escalating to socket reset)
+    would leave the counter at 0 only because the threshold was never
+    hit, but more importantly a regression that *removes* the counter
+    would surface as ERR: here. Pre-fix sustained TX stall would churn
+    SendStallDropCount forever; post-fix it escalates to a socket reset
+    after TX_STALL_DROP_THRESHOLD consecutive drops."""
+    vals = _read_symbols([
+        "GVL.TxStallResetCount",
+        "TCP_MSGPAK_Server.consecutive_stall_drops",
+        "TCP_MSGPAK_Server.TX_STALL_DROP_THRESHOLD",
+    ])
+    v = vals.get("GVL.TxStallResetCount", "")
+    assert not v.startswith("ERR:"), (
+        f"TxStallResetCount not readable -- TX-stall escalation regressed: {v}"
+    )
+    # Healthy link: no TX stall in flight.
+    drops = vals.get("TCP_MSGPAK_Server.consecutive_stall_drops", "")
+    assert drops == "0", (
+        f"consecutive_stall_drops={drops}, expected 0 -- the TX path "
+        f"is currently mid-stall during the test, link is unhealthy"
+    )
+    thr = int(vals.get("TCP_MSGPAK_Server.TX_STALL_DROP_THRESHOLD", "0"))
+    assert thr > 0, (
+        f"TX_STALL_DROP_THRESHOLD={thr}; threshold must be positive or "
+        f"escalation never fires"
+    )
+
+
 def test_a3_supervisor_does_not_trip_on_idle_ready(fsm_ready):
     """A3 self-keepalive: with motion buffer empty, the UiHeartbeatStale
     watchdog must not fire even if PING goes quiet for longer than

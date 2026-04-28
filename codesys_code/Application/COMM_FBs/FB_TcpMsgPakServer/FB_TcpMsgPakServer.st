@@ -8,6 +8,12 @@ VAR_INPUT
 
     // --- Control Input ---
     PKT_ALLOW_NEXT          : BOOL;             // Set to TRUE to acknowledge processing of the current packet and allow the FB to provide the next one.
+    // External force-reset request: caller (TCP_MSGPAK_Server) raises this
+    // for one cycle when it observes sustained TX stall (xActive=TRUE but
+    // Send keeps failing past TX_STALL_DROP_THRESHOLD head-drops). The
+    // RX-side idle watchdog only fires on RX silence, so a half-open TX
+    // path with ongoing client RX would otherwise never trigger a reset.
+    xForceReset             : BOOL;
 END_VAR
 
 VAR_OUTPUT
@@ -83,6 +89,15 @@ xServerActive := itfServer <> 0;
 // --- 3. Detect connection loss or error (triggers reset) ---
 IF (xLastConnectionActive AND NOT CLIENT.xActive) OR CLIENT.xError THEN
     xResetConnection := TRUE;
+END_IF
+
+// External force-reset (TX-side half-open detection lives in the caller;
+// it raises xForceReset once it has accumulated enough head-drops to
+// declare the socket dead). Counted separately from idle/read/parser
+// resets via GVL.TxStallResetCount.
+IF xForceReset AND NOT xResetConnection THEN
+    xResetConnection := TRUE;
+    GVL.TxStallResetCount := GVL.TxStallResetCount + 1;
 END_IF
 
 // Idle watchdog -- detects silent disconnections (cable unplug, client crash

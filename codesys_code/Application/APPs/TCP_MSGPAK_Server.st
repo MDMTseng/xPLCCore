@@ -28,6 +28,17 @@ VAR
 	// stall (xActive=TRUE but Send returns FALSE). See ringbuf-bugs.md #7.
 	SEND_MAX_RETRIES: UDINT := 20;
 
+	// TX-side half-open escalation: count consecutive head-drops with no
+	// successful Send between them. After the threshold, signal
+	// FB_TcpMsgPakServer to force a socket reset so a fresh client can
+	// reconnect. Reset to 0 on any successful Send. 5 head-drops at
+	// ~100ms apart -> ~500ms of sustained TX stall before reclaiming
+	// the socket; well under any human-perceivable hang and far above
+	// transient TCP backpressure.
+	consecutive_stall_drops: UDINT := 0;
+	TX_STALL_DROP_THRESHOLD: UDINT := 5;
+	tx_stall_force_reset: BOOL := FALSE;
+
 	DBG_reMP_info_ridx_size:INT;
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
@@ -48,8 +59,11 @@ fbMyServer(
     ENABLE:= bEnableServer,
     IP_ADDRESS:= ipServerAddress,
     PORT:= uiServerPort,
-    PKT_ALLOW_NEXT:=GVL.minfo_buf_ridx.space()>1
+    PKT_ALLOW_NEXT:=GVL.minfo_buf_ridx.space()>1,
+    xForceReset:= tx_stall_force_reset
 );
+// One-shot pulse: clear after delivery so we don't loop-reset.
+tx_stall_force_reset := FALSE;
 
 
 // This IF statement will be TRUE for one cycle when a new packet arrives.
@@ -86,6 +100,9 @@ IF GVL.reMP_info_ridx.size()>0 THEN
 	IF fbMyServer.Send(BUFFER_PTR := tmp_MsgPakInfo_ptr^.buf, BUFFER_LEN := tmp_MsgPakInfo_ptr^.buf_size) THEN
 		GVL.reMP_info_ridx.consumeTail();
 		send_retry_count := 0;
+		// Successful Send proves the TX path is alive; clear the
+		// half-open escalation counter.
+		consecutive_stall_drops := 0;
 	ELSIF NOT fbMyServer.CLIENT.xActive THEN
 		// Connection is down -- retrying forever is pointless. Drop the
 		// backlog so we don't replay stale replies to a future client.
@@ -93,6 +110,7 @@ IF GVL.reMP_info_ridx.size()>0 THEN
 			GVL.reMP_info_ridx.consumeTail();
 		END_WHILE;
 		send_retry_count := 0;
+		consecutive_stall_drops := 0;
 	ELSE
 		// xActive=TRUE but Send keeps failing -> TX stall / half-open.
 		// Drop the head packet after SEND_MAX_RETRIES cycles so the ring
@@ -102,6 +120,17 @@ IF GVL.reMP_info_ridx.size()>0 THEN
 			GVL.reMP_info_ridx.consumeTail();
 			GVL.SendStallDropCount := GVL.SendStallDropCount + 1;
 			send_retry_count := 0;
+			// TX-side half-open escalation. Each head-drop = ~100ms of
+			// stall. Once we accumulate TX_STALL_DROP_THRESHOLD in a
+			// row, the socket is genuinely dead from our side; raise
+			// xForceReset so the FB tears down the connection and a
+			// new client can reconnect. Without this we'd churn
+			// forever -- single-client slot stays held by a zombie.
+			consecutive_stall_drops := consecutive_stall_drops + 1;
+			IF consecutive_stall_drops >= TX_STALL_DROP_THRESHOLD THEN
+				tx_stall_force_reset := TRUE;
+				consecutive_stall_drops := 0;
+			END_IF;
 		END_IF;
 	END_IF;
 END_IF

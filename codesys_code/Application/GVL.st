@@ -226,6 +226,14 @@ VAR_GLOBAL
 	IdleResetCount         : UDINT := 0;
 	ReadErrorResetCount    : UDINT := 0;
 	ParserErrorResetCount  : UDINT := 0;
+	(* TX-side half-open detection: SendStallDropCount counts head-drops
+	   when xActive=TRUE but Send keeps failing. Pre-fix the ring would
+	   keep churning forever -- one head-drop every ~100ms -- and never
+	   reclaim the socket slot. TxStallResetCount counts how many times
+	   sustained stall (TX_STALL_DROP_THRESHOLD consecutive head-drops
+	   with no successful Send between) escalated to a forced socket
+	   reset. *)
+	TxStallResetCount      : UDINT := 0;
 
 	(* B1 diagnostic counters for SetCoord1 stall investigation.
 	   AxisGroupSMScans bumps once per scan at the very top of AxisGroupSM
