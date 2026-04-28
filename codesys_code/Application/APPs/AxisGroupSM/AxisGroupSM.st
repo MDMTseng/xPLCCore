@@ -211,6 +211,11 @@ PROGRAM AxisGroupSM
     //LocVar FOR ProcessMotionPacket
     TransitionParameter : ARRAY [0..1] OF LREAL := [0, 0];
     FlyEventTempData : FlyEventData;
+    // PH#3: TimeToLiveMs is DINT; raw msgpack value is INT64. Cast via
+    // TO_DINT silently wraps values >MAX_DINT to negative, masking the
+    // request as "no expiry" (-1) and producing a stuck FlyEvent. Stage
+    // through LINT and clamp before the cast.
+    FlyEventTtlRaw : LINT;
     MotionPoseTempReal : REAL;
     PrevMotionStateId : SMC_Movement_Id; // For MotionStateString change detection
     PrevMotionStateProgress : REAL := -1.0; // Force initial update

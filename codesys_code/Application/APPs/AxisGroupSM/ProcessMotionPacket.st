@@ -258,7 +258,12 @@
 
 					FlyEventTempData.ResetDelayMs := TO_INT(MessageUnpackerFb.TryReadINT64('reset_ms', 0));
 
-					FlyEventTempData.TimeToLiveMs := TO_DINT(MessageUnpackerFb.TryReadINT64('ttl_ms', -1));
+					FlyEventTtlRaw := MessageUnpackerFb.TryReadINT64('ttl_ms', -1);
+					IF (FlyEventTtlRaw < 0) OR (FlyEventTtlRaw > 2147483647) THEN
+						FlyEventTempData.TimeToLiveMs := -1;
+					ELSE
+						FlyEventTempData.TimeToLiveMs := TO_DINT(FlyEventTtlRaw);
+					END_IF;
 
 					// Read offset as full DINT (was TO_INT, which silently wrapped
 					// any value >32767 to negative and rolled TargetMovementId
@@ -425,7 +430,12 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
 
 
                     FlyEventTempData.EventId := TO_DINT(MessageUnpackerFb.TryReadINT64('event_id', 0));
-                    FlyEventTempData.TimeToLiveMs := TO_DINT(MessageUnpackerFb.TryReadINT64('ttl_ms', -1));
+                    FlyEventTtlRaw := MessageUnpackerFb.TryReadINT64('ttl_ms', -1);
+                    IF (FlyEventTtlRaw < 0) OR (FlyEventTtlRaw > 2147483647) THEN
+                        FlyEventTempData.TimeToLiveMs := -1;
+                    ELSE
+                        FlyEventTempData.TimeToLiveMs := TO_DINT(FlyEventTtlRaw);
+                    END_IF;
 
 
                     FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
