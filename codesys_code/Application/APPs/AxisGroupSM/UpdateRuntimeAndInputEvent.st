@@ -100,3 +100,30 @@ IF (GVL.CoordSystemConfigured <> PrevCoordSet) THEN
     END_IF;
 END_IF;
 PrevCoordSet := GVL.CoordSystemConfigured;
+
+// HEARTBEAT push event. Periodic (HEARTBEAT_INTERVAL_MS, default 500) so
+// the UI can detect a dead PLC socket without sending SYS/PING -- and so
+// it has a regular cadence to anchor seq-gap detection (if no other event
+// fires for seconds, an "expected next seq" still progresses every 500ms).
+// Drop-newest on overflow: ring full means the UI has bigger problems
+// than a missing heartbeat tick; ReMpDropCount grows and the seq jumps.
+IF (LastHeartbeatMs = 0) OR (RuntimeMs - LastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) THEN
+    IF (GVL.reMP_info_ridx.space() > 0) THEN
+        EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+        MsgPakInfoClear(EventPacketPointer^);
+        EventPacketPointer^.ele_count := 4;
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('event'));
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('name'));
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('HEARTBEAT'));
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('runtime_ms'));
+        EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('remp_drop_count'));
+        EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := TO_LINT(GVL.ReMpDropCount));
+        MsgPakInfoWrapup(EventPacketPointer^);
+        GVL.reMP_info_ridx.pushHead();
+    ELSE
+        GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+    END_IF;
+    LastHeartbeatMs := RuntimeMs;
+END_IF;

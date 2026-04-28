@@ -169,6 +169,14 @@ PROGRAM AxisGroupSM
         // until the push lands. Stays >0 only between detection and emit.
         PendingMoveDoneId: ULINT := 0;
 
+        // PLC->UI HEARTBEAT push event. Emitted every HEARTBEAT_INTERVAL_MS
+        // from UpdateRuntimeAndInputEvent so the UI can detect a dead PLC
+        // socket without sending its own SYS/PING. Carries runtime_ms,
+        // remp_drop_count, and (via Wrapup) the global seq -- so the UI
+        // can also bound "how many events did I miss between heartbeats?".
+        LastHeartbeatMs: LINT := 0;
+        HEARTBEAT_INTERVAL_MS: LINT := 500;
+
 
 
 
