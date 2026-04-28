@@ -36,24 +36,24 @@ JOBS = HERE.parent / "jobs" / "templates"
 #   UnInited=10, Powering=20, Powered=30, GroupEnabling=40, GroupEnabled=50,
 #   Homing=60, Ready=70, Error=990.
 #
-# Edges we strictly assert -- reliably drivable from a TCP client.
+# EV_ERROR has a universal handler in Transition.st (lines 79-90). Drives
+# Error from any state. EV_RESET likewise universal -> UnInited.
 REQUIRED_EDGES = {
     (10, 20),   # UnInited     --POWER_ON--> Powering
     (20, 30),   # Powering     --OK auto--> Powered
     (30, 40),   # Powered      --GROUP_ENABLE--> GroupEnabling
     (40, 50),   # GroupEnabling --OK auto--> GroupEnabled
     (50, 70),   # GroupEnabled --HOME_GO_FORCE_SKIP--> Ready (virtual)
+    (70, 990),  # Ready        --ERROR--> Error
+    (50, 990),  # GroupEnabled --ERROR--> Error
+    (990, 10),  # Error        --RESET--> UnInited
     (70, 60),   # Ready        --HOME_GO--> Homing
 }
-# Best-effort edges. EV_ERROR via TCP doesn't reliably propagate (auto-fire
-# of EV_POWER_ON on VisuEventControl=0 overwrites InputEvent before
-# Transition evaluates). Homing->Ready depends on the virtual-motors gate
-# TTL still being live. Both surface as "informational" prints when missed.
+# Best-effort. (60,70) requires a successful Homing run; on a stale
+# virtual-motors gate the FB doesn't complete and Homing wedges (instead
+# yielding 60->990 when EV_ERROR is sent later, or 60->10 on EV_RESET).
 BEST_EFFORT_EDGES = {
     (60, 70),   # Homing --OK auto--> Ready
-    (70, 990),  # Ready --ERROR--> Error
-    (50, 990),  # GroupEnabled --ERROR--> Error
-    (990, 10),  # Error --RESET--> UnInited
 }
 
 
@@ -154,34 +154,35 @@ def test_fsm_edge_coverage(raw_plc_socket):
     _force_virtual()
     reader = WireReader(s)
 
-    # Pass 1: drive RESET->POWER_ON->GROUP_ENABLE->FORCE_SKIP. Edges
-    # 0->10, 10->20, 20->30, 30->40, 40->70 fire along the way.
-    for ev, settle in [(8, 0.6), (2, 1.0), (4, 1.0), (7, 0.8)]:
-        reader.send_ev(ev, 50000 + ev, settle=settle)
+    # Pass 1: RESET -> POWER_ON -> GROUP_ENABLE -> FORCE_SKIP -> ERROR -> RESET.
+    # Covers 10->20, 20->30, 30->40, 40->50, 50->70, 70->990, 990->10.
+    # Critical: send ERROR from Ready BEFORE any HOME_GO, so we exercise the
+    # 70->990 edge cleanly (HOME_GO would land us in Homing(60), which on a
+    # stale virtual-motors gate wedges and turns the next EV_ERROR into
+    # 60->990 instead of 70->990).
+    # E_RobotEvent: RESET=8, POWER_ON=2, GROUP_ENABLE=4, FORCE_SKIP=7, ERROR=9.
+    for i, (ev, settle) in enumerate([(8, 0.6), (2, 1.0), (4, 1.0), (7, 0.8),
+                                       (9, 1.0), (8, 1.0)]):
+        reader.send_ev(ev, 50000 + i, settle=settle)
     reader.drain(1.0)
 
-    # Best-effort: HOME_GO from Ready (covers 70->50, 50->70 if virtual gate live).
-    reader.send_ev(6, 50100, settle=2.0)
-    reader.drain(1.0)
-
-    # Ready -> Error (covers 70->99). FORCE_SKIP first to ensure we're in Ready.
-    reader.send_ev(7, 50150, settle=0.8)
-    reader.send_ev(5, 50200, settle=1.0)
-    reader.drain(0.8)
-
-    # Error -> UnInited (covers 99->0).
-    reader.send_ev(8, 50300, settle=1.0)
-    reader.drain(0.8)
-
-    # Pass 2: drive POWER_ON -> GROUP_ENABLE -> ERROR (covers 40->99).
-    # GROUP_ENABLE auto-completes to GroupEnabled, ERROR fires from there.
+    # Pass 2: POWER_ON -> GROUP_ENABLE -> ERROR. Covers 50->990.
     reader.send_ev(2, 50401, settle=1.0)
     reader.send_ev(4, 50402, settle=0.6)
-    reader.send_ev(5, 50403, settle=1.0)
+    reader.send_ev(9, 50403, settle=1.0)  # EV_ERROR
+    reader.drain(1.0)
+
+    # Pass 3: re-walk to Ready, then HOME_GO. Covers 70->60 (and best-effort
+    # 60->70 if the virtual gate is still live).
+    reader.send_ev(8, 50500, settle=0.6)
+    reader.send_ev(2, 50501, settle=1.0)
+    reader.send_ev(4, 50502, settle=1.0)
+    reader.send_ev(7, 50503, settle=0.8)
+    reader.send_ev(6, 50504, settle=2.0)
     reader.drain(1.0)
 
     # Cleanup
-    reader.send_ev(8, 50500, settle=0.5)
+    reader.send_ev(8, 50600, settle=0.5)
     reader.drain(0.8)
 
     missing_required = REQUIRED_EDGES - reader.observed_edges
@@ -221,12 +222,12 @@ def test_fsm_self_reentry_counter(raw_plc_socket):
     # Drive to Ready then Error
     if not _bring_to_ready(reader, 52100):
         pytest.skip("could not reach Ready")
-    reader.send_ev(5, 52200, settle=0.5)  # Ready -> Error
+    reader.send_ev(9, 52200, settle=0.5)  # Ready -> Error (EV_ERROR=9)
     if not reader.wait_state(990, timeout=4.0, qid_base=52210):
         pytest.skip("could not reach Error")
 
     pre2 = int(_read_symbols(["GVL.SelfReentryCount"])["GVL.SelfReentryCount"])
-    reader.send_ev(5, 52300, settle=0.5)  # EV_ERROR while already Error
+    reader.send_ev(9, 52300, settle=0.5)  # EV_ERROR while already Error
     post2 = int(_read_symbols(["GVL.SelfReentryCount"])["GVL.SelfReentryCount"])
     assert post2 == pre2 + 1, (
         f"SelfReentryCount delta on Error self-reentry: {post2 - pre2}, expected 1"
