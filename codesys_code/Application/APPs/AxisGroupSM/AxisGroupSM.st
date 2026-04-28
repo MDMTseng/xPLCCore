@@ -360,13 +360,20 @@ PROGRAM AxisGroupSM
             GVL.LastErrorID := TO_DWORD(GroupReadPositionFb.ErrorID);
             AxisGroupManagerFb.Transition(E_RobotEvent.EV_ERROR);
         ELSIF (AxisGroupManagerFb._eState = E_RobotState.Ready
+               AND MotionBufferSize > 0
                AND GVL.LastUiPingMs > 0
                AND (RuntimeMs - GVL.LastUiPingMs) > GVL.UI_HEARTBEAT_TIMEOUT_MS) THEN
-            // W1 A3 (PLC supervisor): UI went silent while we were accepting
-            // its commands. Drop to Error so MotionBufferSize freezes and any
-            // in-flight motion winds down via the Error-state GroupDisable +
-            // Reset cycle. Operator recovers via EV_RESET -> UnInited -> ...
-            // when the UI reconnects.
+            // W1 A3 (PLC supervisor): UI went silent WHILE motion is in flight.
+            // Pre-fix the trigger was just (Ready AND age > timeout), which
+            // fired on idle Ready when the UI was simply backgrounded
+            // (Electron throttles its tick loop) -- causing spurious Error
+            // transitions on a perfectly healthy system. The unsafe scenario
+            // is "client died with motion still queued"; the safe scenario
+            // is "client is quiet because the operator went to lunch".
+            // Gate on MotionBufferSize > 0 to distinguish them. Combined with
+            // the drain-loop LastUiPingMs refresh above, a steady G1 stream
+            // self-keepalives -- the watchdog only fires when the client
+            // really has gone silent during in-flight motion.
             GVL.LastErrorSource := 'Supervisor:UiHeartbeatStale';
             GVL.LastErrorID := TO_DWORD(RuntimeMs - GVL.LastUiPingMs);
             GVL.UiHeartbeatStaleCount := GVL.UiHeartbeatStaleCount + 1;
@@ -406,6 +413,15 @@ PROGRAM AxisGroupSM
         PacketType := MessageUnpackerFb.TryReadString('type', '');
         CommandType := MessageUnpackerFb.TryReadString('cmd', '');
         ProtocolVersionGot := MessageUnpackerFb.TryReadINT64('protocol_version', 0);
+
+        // Any inbound packet -- not just SYS/PING -- proves the client is
+        // alive. Pre-fix only PING refreshed LastUiPingMs, so a UI sending
+        // a steady G1 stream (no PING) still tripped the A3 supervisor
+        // mid-motion. Refresh on every drain-loop entry so the watchdog
+        // tracks "client is talking" rather than "client is pinging".
+        // The PING handler's own refresh below is now redundant but kept
+        // alongside the PingMaxGapMs / UiPingCount stats it owns.
+        GVL.LastUiPingMs := RuntimeMs;
 
         // W1 A5: if the client declared a version and it doesn't match,
         // NAK before any dispatch. 0 (absent / legacy) is allowed through.
