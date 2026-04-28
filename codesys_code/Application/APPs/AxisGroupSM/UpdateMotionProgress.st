@@ -44,14 +44,26 @@ END_IF;
 // The UI can gate "ready for next step" on this event instead of
 // polling movement_id via GET_MACHINE_STATE at high frequency.
 // Envelope matches ST_CHG: kind='event', name='MOVE_DONE'.
+//
+// PH#5: edge-detection latches PendingMoveDoneId. A separate retry
+// block below tries to push every scan until the ring has space, so
+// a transient ring-full doesn't lose the event (UI would otherwise
+// wait up to 1s for the GET_MACHINE_STATE poll to notice).
 IF (PrevMotionBufferSizeForEvent > 0
     AND MotionBufferSize = 0
     AND GroupReadStatusFb.LastAcceptedMovementId <> 0
     AND GroupReadStatusFb.LastAcceptedMovementId <> PrevCompletedMovementId) THEN
-    // Drop-newest on overflow (was drop-oldest pre-2026-04-28). Producer
-    // (EC_Task) must NOT call consumeTail because Comm task is the sole
-    // consumer; two consumers race on _tail. Skip the push and bump the
-    // drop counter instead -- the UI reconciles via GET_MACHINE_STATE.
+    // Newest edge wins: if a previous MOVE_DONE was pending and a new
+    // movement just completed before we got to push it, just publish
+    // the newer one. UI watches for movement_id gaps and surfaces the
+    // skip; losing the older intermediate event is acceptable.
+    PendingMoveDoneId := GroupReadStatusFb.LastAcceptedMovementId;
+END_IF;
+PrevMotionBufferSizeForEvent := MotionBufferSize;
+
+// Retry pump: try until the ring has space. Producer-only on
+// reMP_info_ridx -- never consumeTail here.
+IF PendingMoveDoneId <> 0 THEN
     IF (GVL.reMP_info_ridx.space() > 0) THEN
         EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
         MsgPakInfoClear(EventPacketPointer^);
@@ -61,17 +73,15 @@ IF (PrevMotionBufferSizeForEvent > 0
         EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('name'));
         EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('MOVE_DONE'));
         EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('movement_id'));
-        EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := TO_LINT(GroupReadStatusFb.LastAcceptedMovementId));
+        EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := TO_LINT(PendingMoveDoneId));
         EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('runtime_ms'));
         EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
         MsgPakInfoWrapup(EventPacketPointer^);
         GVL.reMP_info_ridx.pushHead();
-        PrevCompletedMovementId := GroupReadStatusFb.LastAcceptedMovementId;
-    ELSE
-        GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+        PrevCompletedMovementId := PendingMoveDoneId;
+        PendingMoveDoneId := 0;
     END_IF;
 END_IF;
-PrevMotionBufferSizeForEvent := MotionBufferSize;
 
 ShouldReturn := FALSE;
 CommandAck := FALSE;

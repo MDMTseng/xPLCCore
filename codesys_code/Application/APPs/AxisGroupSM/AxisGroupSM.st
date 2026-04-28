@@ -161,6 +161,13 @@ PROGRAM AxisGroupSM
         PrevCoordSet: BOOL := FALSE;
         PrevMotionBufferSizeForEvent: ULINT := 0;
         PrevCompletedMovementId: ULINT := 0;
+        // PH#5: edge detect for MOVE_DONE is one-shot
+        // (PrevMotionBufferSizeForEvent transitions 1->0 next scan), so a
+        // ring-full drop loses the event entirely and the UI has to wait
+        // up to 1s for the GET_MACHINE_STATE poll. Defer the emission via
+        // PendingMoveDoneId: edge sets it, every subsequent scan retries
+        // until the push lands. Stays >0 only between detection and emit.
+        PendingMoveDoneId: ULINT := 0;
 
 
 
