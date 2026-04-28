@@ -6,6 +6,17 @@ VAR
 	mpPacker: FB_MpPacker;
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
+// Stamp a global monotonic seq on every emitted packet. This is the one
+// chokepoint every reply and event flows through, so injecting here means
+// callers don't have to remember to bump ele_count or pack the field. UI
+// uses seq to detect ring-drop gaps that per-request id-tracking can't see
+// (unsolicited events have no `id`). Done before the ele_count>15 check so
+// that check correctly accounts for the auto-added field.
+GVL.ReMpSeqCounter := GVL.ReMpSeqCounter + 1;
+msgpak.whead := mpPacker.PackString(pStart := msgpak.whead, psValue := ADR('seq'));
+msgpak.whead := mpPacker.PackLINT(pStart := msgpak.whead, liValue := TO_LINT(GVL.ReMpSeqCounter));
+msgpak.ele_count := msgpak.ele_count + 1;
+
 IF msgpak.useLargeElementCountField=FALSE AND msgpak.ele_count>15 THEN//the size field does not fit
 	MsgPakInfoWrapup:=FALSE;
 	//TODO: it's possible to move buffer around

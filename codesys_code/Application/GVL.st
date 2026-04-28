@@ -95,6 +95,14 @@ VAR_GLOBAL
 	OverlenDropCount : UDINT := 0;
 	ReMpDropCount    : UDINT := 0;
 
+	(* Global monotonic sequence stamped on every packet emitted via
+	   MsgPakInfoWrapup (replies + unsolicited events alike). UI uses this
+	   to detect ring-drop gaps that per-request id-tracking can't see --
+	   e.g. a dropped ST_CHG/MOVE_DONE event has no `id` to time-out on, but
+	   leaves a hole in the seq stream. Wraps at 2^64-1; even at sustained
+	   1kHz emission that's ~585M years, so wrap-detection is unnecessary. *)
+	ReMpSeqCounter : ULINT := 0;
+
 	(* Send-stall drop counter (ringbuf-bugs.md #7). Bumped when the
 	   reply-ring head packet has been retried SEND_MAX_RETRIES cycles
 	   while the socket still reports xActive=TRUE -- i.e. a half-open
