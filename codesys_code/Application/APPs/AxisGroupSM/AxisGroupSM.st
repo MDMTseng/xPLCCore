@@ -186,6 +186,23 @@ PROGRAM AxisGroupSM
         LastHeartbeatMs: LINT := 0;
         HEARTBEAT_INTERVAL_MS: LINT := 500;
 
+        // PH#6: G1 command-id dedupe ring. UI-side TCP retry on jitter or
+        // an operator double-clicking a button can re-send the same G1
+        // packet with the same CommandId. Without dedupe we'd queue the
+        // motion twice -- two physical moves for one logical request,
+        // worst case axis collision. Track the last DUPE_RING_SIZE
+        // accepted G1 (CommandId, MovementId) pairs; on G1 entry, scan
+        // the ring -- on hit, replay the cached movement_id with
+        // dedup:TRUE flag and skip the MoveLinearAbsoluteFb.Execute=1.
+        // Block/poll commands (BLOCK_FOR_*) intentionally reuse one
+        // CommandId across many scans, so dedupe is G1-only for now.
+        DUPE_RING_SIZE: INT := 16;
+        RecentCmdIds: ARRAY[0..15] OF DINT;
+        RecentCmdMoveIds: ARRAY[0..15] OF ULINT;
+        RecentCmdRingHead: INT := 0;
+        DupeMatchIdx: INT := -1;
+        DupeLoopIdx: INT := 0;
+
 
 
 

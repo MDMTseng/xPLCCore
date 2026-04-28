@@ -451,11 +451,39 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
 
 
         ELSIF (CommandType = 'G1') THEN
+            // PH#6: dedupe scan. UI-side retry on TCP jitter or a double-
+            // click can re-send the same G1 with the same CommandId. If
+            // we already accepted that CommandId recently, replay the
+            // cached movement_id with dedup:TRUE and skip the actual
+            // MoveLinearAbsoluteFb.Execute=1 -- otherwise we'd queue two
+            // physical moves for one logical request. CommandId=0 is the
+            // no-id sentinel and never matches.
+            DupeMatchIdx := -1;
+            IF (CommandId <> 0) THEN
+                FOR DupeLoopIdx := 0 TO DUPE_RING_SIZE - 1 DO
+                    IF (RecentCmdIds[DupeLoopIdx] = CommandId) THEN
+                        DupeMatchIdx := DupeLoopIdx;
+                        EXIT;
+                    END_IF;
+                END_FOR;
+            END_IF;
+
+            IF (DupeMatchIdx >= 0) THEN
+                ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 2;
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('movement_id'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := TO_LINT(RecentCmdMoveIds[DupeMatchIdx]));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('dedup'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := TRUE);
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                GVL.DupeCommandCount := GVL.DupeCommandCount + 1;
+                GVL.minfo_buf_ridx.consumeTail();
+
             // Post-homing coord-system gate. Refuse G1 motion until the
             // operator has called SetCoord0 or SetCoord1 since the last
             // UnInited entry. Prevents machine-coord crashes when the UI
             // (or a test script) skips the SetCoord call after homing.
-            IF (NOT GVL.CoordSystemConfigured) THEN
+            ELSIF (NOT GVL.CoordSystemConfigured) THEN
                 ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('coord_not_configured'));
@@ -521,12 +549,23 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('movement_id'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := TO_LINT(MoveLinearAbsoluteFb.MovementId));
 
+                // PH#6: record this accepted G1 in the dedupe ring so a
+                // retransmit with the same CommandId hits the cache and
+                // replays the movement_id instead of executing again.
+                // Skip the no-id sentinel (CommandId=0) -- caching it
+                // would collide every legacy/no-id G1 with each other.
+                IF (CommandId <> 0) THEN
+                    RecentCmdIds[RecentCmdRingHead] := CommandId;
+                    RecentCmdMoveIds[RecentCmdRingHead] := MoveLinearAbsoluteFb.MovementId;
+                    RecentCmdRingHead := (RecentCmdRingHead + 1) MOD DUPE_RING_SIZE;
+                END_IF;
+
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
             ELSE
                 RetryMotionCommandCooldown := RETRY_COOLDOWN_G1_MS;
             END_IF;
-            END_IF; // GVL.CoordSystemConfigured gate
+            END_IF; // dedupe / coord-gate / execute
 
         ELSIF (CommandType = 'getDigitalInputFlipCount') THEN
             ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 2; // raw + fc

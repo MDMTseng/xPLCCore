@@ -195,6 +195,14 @@ VAR_GLOBAL
 	   the oldest, matching the reply-drop policy. *)
 	StateChangeEventCount : UDINT := 0;
 
+	(* PH#6: G1 dedupe counter. Bumps every time a G1 with a CommandId
+	   matching a recently-accepted G1 was caught and replayed instead of
+	   re-executed. Non-zero on a stable run usually means UI-side TCP
+	   retry firing on jitter (benign, the dedupe did its job) or a
+	   collapsed button bounce. Compare against G1 ack count to spot
+	   anomalies. *)
+	DupeCommandCount : UDINT := 0;
+
 	(* W1 A5 protocol version.
 	   AxisGroupSM's packet dispatcher reads `protocol_version` off every
 	   incoming packet. If present AND different from PROTOCOL_VERSION, the
