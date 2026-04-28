@@ -291,9 +291,33 @@ stop_requested = False
 # at 100% CPU and flooding daemon.rpc.log with 100k+ identical lines until
 # CODESYS crashed. Sleep + bound the retries so a wedged socket exits the
 # daemon cleanly instead of taking the IDE down with it.
+#
+# Self-heal (added 2026-04-28): WSAEINVAL on accept() reliably appears in this
+# environment after dense back-to-back client connections (e.g. pytest runs
+# that fire many rpc.py exec calls). Empirically, closing and rebinding the
+# listening socket recovers the daemon without requiring a manual restart in
+# the Scripting Console. Other accept errors still fall through to the
+# bounded-retry exit path -- only WSAEINVAL is treated as recoverable.
 ACCEPT_ERR_SLEEP   = 1.0   # seconds between retries when accept() raises
 ACCEPT_ERR_MAX     = 5     # consecutive errors before giving up
 accept_err_streak  = 0
+WSAEINVAL          = 10022
+
+
+def _rebind_listen_socket():
+    """Close + recreate the daemon's listening socket. Returns the new
+    socket on success, or raises if rebind fails (caller falls through to
+    the streak-exit path)."""
+    global srv
+    try: srv.close()
+    except Exception: pass
+    new_srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    new_srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    new_srv.bind((HOST, PORT))
+    new_srv.listen(4)
+    new_srv.settimeout(0.5)
+    srv = new_srv
+    return new_srv
 try:
     while not stop_requested:
         try:
@@ -308,12 +332,31 @@ try:
             break
         except Exception as ex:
             accept_err_streak += 1
+            is_wsaeinval = (
+                len(getattr(ex, "args", ())) >= 1
+                and isinstance(ex.args[0], int)
+                and ex.args[0] == WSAEINVAL
+            )
             # Log only the first occurrence of a streak (avoid log flood) plus
             # the final one before bailing out.
             if accept_err_streak == 1 or accept_err_streak >= ACCEPT_ERR_MAX:
-                append_rpc_log("%s accept-exception (streak=%d): %s" % (
+                append_rpc_log("%s accept-exception (streak=%d wsaeinval=%s): %s" % (
                     time.strftime("%H:%M:%S"), accept_err_streak,
-                    repr(ex)[:200]))
+                    is_wsaeinval, repr(ex)[:200]))
+            # Self-heal on WSAEINVAL: rebind the listening socket once per
+            # streak. If rebind succeeds, reset the streak and resume; if it
+            # raises, fall through to the bounded-retry exit.
+            if is_wsaeinval:
+                try:
+                    srv = _rebind_listen_socket()
+                    append_rpc_log("%s accept-rebound after WSAEINVAL streak=%d"
+                                   % (time.strftime("%H:%M:%S"), accept_err_streak))
+                    accept_err_streak = 0
+                    continue
+                except Exception as rebind_ex:
+                    append_rpc_log("%s rebind-failed: %s" % (
+                        time.strftime("%H:%M:%S"), repr(rebind_ex)[:200]))
+                    # fall through to streak-exit
             if accept_err_streak >= ACCEPT_ERR_MAX:
                 append_rpc_log("%s loop-exit reason=accept-error-streak"
                                % time.strftime("%H:%M:%S"))
