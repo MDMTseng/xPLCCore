@@ -23,36 +23,14 @@ END_IF;
 PreviousInputEvent := InputEvent;
 IF TO_INT(AxisGroupManagerFb._eState) <> PrevAxisGroupState THEN
     StateString := TO_STRING(AxisGroupManagerFb._eState);
-    // Push an ST_CHG event into the reply-ring so the UI doesn't
-    // have to poll GA_EV to learn the FSM moved. Skip PrevAxisGroupState=-1
-    // which is the cold-boot sentinel (no "from" state to report).
+    // PH#8: latch "from" for the deferred ST_CHG emit instead of pushing
+    // inline. The retry pump below tries every scan until the ring has
+    // space, so a transient ring-full no longer drops the event. Skip
+    // PrevAxisGroupState=-1 (cold-boot sentinel, no "from" to report).
+    // Newest-edge-wins: rapid A->B->C while pending overwrites "from"
+    // each edge -- UI sees ST_CHG{from=B,to=C}+seq gap and reconciles.
     IF (PrevAxisGroupState >= 0) THEN
-        // Drop-newest on overflow: producer (EC_Task) must not consumeTail
-        // because Comm task is the sole consumer. See UpdateMotionProgress
-        // for the full rationale.
-        IF (GVL.reMP_info_ridx.space() > 0) THEN
-            EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
-            MsgPakInfoClear(EventPacketPointer^);
-            EventPacketPointer^.ele_count := 6;
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('event'));
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('name'));
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('ST_CHG'));
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('st'));
-            EventPacketPointer^.whead := MessagePackerFb.PackDINT(pStart := EventPacketPointer^.whead, diValue := AxisGroupManagerFb._eState);
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('st_str'));
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR(StateString));
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('from'));
-            EventPacketPointer^.whead := MessagePackerFb.PackDINT(pStart := EventPacketPointer^.whead, diValue := TO_DINT(PrevAxisGroupState));
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('runtime_ms'));
-            EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
-            MsgPakInfoWrapup(EventPacketPointer^);
-            GVL.reMP_info_ridx.pushHead();
-            GVL.StateChangeEventCount := GVL.StateChangeEventCount + 1;
-        ELSE
-            GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
-            GVL.ReMpDropCount_StChg := GVL.ReMpDropCount_StChg + 1;
-        END_IF;
+        PendingStChgFromState := TO_DINT(PrevAxisGroupState);
     END_IF;
     // PH#2: BLOCK_FOR_* latches BlockCommandId / BlockStartMs / BlockTimeoutMs
     // on first scan of a new CommandId. If the FSM leaves Ready (Error or
@@ -70,6 +48,36 @@ IF TO_INT(AxisGroupManagerFb._eState) <> PrevAxisGroupState THEN
     END_IF;
 
     PrevAxisGroupState := TO_INT(AxisGroupManagerFb._eState);
+END_IF;
+
+// ST_CHG retry pump (PH#8). PendingStChgFromState >= 0 means an edge is
+// waiting to publish; "to" is the current _eState at retry time, which
+// under newest-wins always pairs cleanly with the latched "from".
+// Producer-only on reMP_info_ridx -- never consumeTail here. No drop
+// counter bump: ring-full just means "try again next scan", not loss.
+IF (PendingStChgFromState >= 0) THEN
+    IF (GVL.reMP_info_ridx.space() > 0) THEN
+        StateString := TO_STRING(AxisGroupManagerFb._eState);
+        EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+        MsgPakInfoClear(EventPacketPointer^);
+        EventPacketPointer^.ele_count := 6;
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('event'));
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('name'));
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('ST_CHG'));
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('st'));
+        EventPacketPointer^.whead := MessagePackerFb.PackDINT(pStart := EventPacketPointer^.whead, diValue := AxisGroupManagerFb._eState);
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('st_str'));
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR(StateString));
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('from'));
+        EventPacketPointer^.whead := MessagePackerFb.PackDINT(pStart := EventPacketPointer^.whead, diValue := PendingStChgFromState);
+        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('runtime_ms'));
+        EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
+        MsgPakInfoWrapup(EventPacketPointer^);
+        GVL.reMP_info_ridx.pushHead();
+        GVL.StateChangeEventCount := GVL.StateChangeEventCount + 1;
+        PendingStChgFromState := -1;
+    END_IF;
 END_IF;
 
 // COORD_SET push event: edge-detect on GVL.CoordSystemConfigured (both

@@ -13,6 +13,11 @@
 #   PH#6: GVL.CoordSystemConfigured clears on Error entry (not just
 #         UnInited), so an in-place SMC-reset recovery doesn't leave a
 #         stale gate open.
+#   PH#8: ST_CHG emission is deferred via PendingStChgFromState so a
+#         transient ring-full doesn't lose the event (same shape as
+#         PH#5). We pin the var exists, reads -1 (sentinel) in steady
+#         state, and that StateChangeEventCount still climbs across a
+#         real FSM transition.
 import json
 import subprocess
 import sys
@@ -156,6 +161,45 @@ def test_coord_cleared_on_error_entry(fsm_ready):
         f"(state={state}); PH#6 fix regressed"
     )
     # Recover so the next test in the session starts from Ready+coord.
+    tms.fire_event(tms.EV_RESET, "EV_RESET", 0.4)
+    tms.fire_event(tms.EV_POWER_ON, "EV_POWER_ON", 1.0)
+    tms.fire_event(tms.EV_GROUP_ENABLE, "EV_GROUP_ENABLE", 1.0)
+    tms.fire_event(tms.EV_HOME_GO_FORCE_SKIP, "EV_HOME_GO_FORCE_SKIP", 0.6)
+    tms.wait_for_state(tms.READY, timeout=8.0, label="Ready (recover)")
+    tms.harness_send({"type": "M", "cmd": "SetCoord0"}, timeout=3.0)
+
+
+def test_pending_st_chg_from_state_idle(fsm_ready):
+    """PH#8: PendingStChgFromState must exist and read -1 (sentinel for
+    "no edge waiting") in steady state. A non-(-1) reading would mean a
+    state change is stuck unable to publish, or the ring is full and
+    the retry pump is starving -- both are bugs."""
+    vals = _read_symbols(["AxisGroupSM.PendingStChgFromState"])
+    v = vals.get("AxisGroupSM.PendingStChgFromState", "")
+    assert not v.startswith("ERR:"), (
+        f"PendingStChgFromState not readable -- PH#8 var was renamed/removed: {v}"
+    )
+    # Sentinel is -1; any other value means an emit is pending.
+    assert v == "-1", (
+        f"PendingStChgFromState={v}, expected -1 in idle state -- a "
+        f"deferred ST_CHG never landed"
+    )
+
+
+def test_st_chg_event_count_advances_on_transition(fsm_ready):
+    """PH#8: even with the inline drop site removed, real state changes
+    must still bump GVL.StateChangeEventCount. EV_ERROR forces a Ready
+    -> Error edge; we then recover so subsequent tests start clean."""
+    pre = _read_symbols(["GVL.StateChangeEventCount"])
+    pre_n = int(pre["GVL.StateChangeEventCount"])
+    tms.fire_event(9, "EV_ERROR", 0.6)
+    post = _read_symbols(["GVL.StateChangeEventCount"])
+    post_n = int(post["GVL.StateChangeEventCount"])
+    assert post_n > pre_n, (
+        f"StateChangeEventCount did not advance ({pre_n} -> {post_n}) "
+        f"across EV_ERROR transition -- retry pump never published"
+    )
+    # Recover for next test.
     tms.fire_event(tms.EV_RESET, "EV_RESET", 0.4)
     tms.fire_event(tms.EV_POWER_ON, "EV_POWER_ON", 1.0)
     tms.fire_event(tms.EV_GROUP_ENABLE, "EV_GROUP_ENABLE", 1.0)

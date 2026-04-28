@@ -169,6 +169,15 @@ PROGRAM AxisGroupSM
         // until the push lands. Stays >0 only between detection and emit.
         PendingMoveDoneId: ULINT := 0;
 
+        // PH#8: same defer-and-retry shape as PendingMoveDoneId, but for
+        // ST_CHG. Edge stamps the "from" state into PendingStChgFromState
+        // (-1 sentinel = nothing pending). Retry pump emits every scan
+        // until the ring has space, pairing the latched "from" with the
+        // current _eState as "to". Newest-edge-wins: rapid A->B->C while
+        // ring is full collapses to one ST_CHG{from=B,to=C} -- UI uses
+        // the global seq + runtime_ms gap to surface the skipped middle.
+        PendingStChgFromState: DINT := -1;
+
         // PLC->UI HEARTBEAT push event. Emitted every HEARTBEAT_INTERVAL_MS
         // from UpdateRuntimeAndInputEvent so the UI can detect a dead PLC
         // socket without sending its own SYS/PING. Carries runtime_ms,
