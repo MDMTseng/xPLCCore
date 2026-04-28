@@ -336,3 +336,260 @@ def test_fuzz_invalid_markers_recover_via_reset(raw_plc_socket):
         _send_raw(s, _gen_invalid_markers(rng))
         time.sleep(0.005)
     _ping_check(s, "marker-post", 85001)
+
+
+# ---------------------------------------------- counter invariants ----
+# Read GVL counters before & after a fuzz burst via the CODESYS daemon
+# and assert only expected counters moved. Catches silent-state-corruption
+# regressions: e.g. a future change that lets a malformed packet sneak
+# through the type-NAK gate and reach the FSM would bump
+# StateChangeEventCount or DupeCommandCount unexpectedly.
+
+DAEMON_RPC = HERE.parent / "rpc.py"
+
+_COUNTER_SYMS = [
+    "GVL.MissingTypeFieldNakCount",
+    "GVL.GroupNotReadyNakCount",
+    "GVL.ReMpDropCount",
+    "GVL.ReMpDropCount_Reply",
+    "GVL.ParserErrorResetCount",
+    "GVL.ReadErrorResetCount",
+    "GVL.IdleResetCount",
+    "GVL.TxStallResetCount",
+    "GVL.SendStallDropCount",
+    "GVL.StateChangeEventCount",
+    "GVL.SelfReentryCount",
+    "GVL.PendingMoveDoneDropCount",
+    "GVL.PendingStChgDropCount",
+    "GVL.DupeCommandCount",
+]
+
+
+def _read_counters() -> dict:
+    """Snapshot GVL counters via the rpc daemon. Returns symbol->int."""
+    lines = "\n".join([
+        "proj = projects.primary",
+        "app = proj.active_application",
+        "oapp = online.create_online_application(app)",
+        "oapp.login(OnlineChangeOption.Try, False)",
+        "try:",
+    ] + [
+        f"    print('{s}=' + str(oapp.read_value('{s}')))" for s in _COUNTER_SYMS
+    ] + [
+        "finally:",
+        "    try: oapp.logout()",
+        "    except Exception: pass",
+        "",
+    ])
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
+        f.write(lines)
+        path = f.name
+    try:
+        res = subprocess.run(
+            [sys.executable, str(DAEMON_RPC), "exec", "--file", path],
+            capture_output=True, text=True, timeout=30,
+        )
+    finally:
+        try: os.unlink(path)
+        except OSError: pass
+    out = {}
+    for ln in (res.stdout or "").splitlines():
+        if "=" not in ln or "GVL." not in ln: continue
+        k, _, v = ln.partition("=")
+        # Strip CODESYS type wrapper "UDINT#173" -> 173
+        v = v.split("#", 1)[-1].strip()
+        try: out[k.strip()] = int(v)
+        except ValueError: pass
+    return out
+
+
+def test_counter_invariants_under_noise_burst(raw_plc_socket):
+    """Burst random noise and confirm only TCP-recovery counters moved.
+    State, motion, and dedupe counters must stay flat -- a regression
+    that let a malformed packet leak past the type-NAK gate would bump
+    StateChangeEventCount or DupeCommandCount here."""
+    pre = _read_counters()
+    if not pre:
+        pytest.skip("daemon counter read failed -- daemon not running?")
+
+    s = raw_plc_socket
+    rng = random.Random(SEED ^ 0xD4D4D4D4)
+    s = _ping_check(s, "inv-pre", 86000)
+
+    for _ in range(80):
+        _send_raw(s, _gen_noise(rng))
+        time.sleep(0.005)
+    for _ in range(40):
+        _send_raw(s, _gen_invalid_markers(rng))
+        time.sleep(0.005)
+    for _ in range(40):
+        _send_pack(s, _gen_field_confusion(rng))
+        time.sleep(0.005)
+
+    s = _ping_check(s, "inv-post", 86001)
+    time.sleep(0.5)  # let counters settle
+    post = _read_counters()
+
+    # FSM/motion/dedupe counters MUST NOT move on malformed input.
+    forbidden_movement = [
+        "GVL.StateChangeEventCount",
+        "GVL.SelfReentryCount",
+        "GVL.PendingMoveDoneDropCount",
+        "GVL.DupeCommandCount",
+    ]
+    for sym in forbidden_movement:
+        if sym in pre and sym in post:
+            assert post[sym] == pre[sym], (
+                f"{sym} moved {pre[sym]} -> {post[sym]} during malformed-input "
+                f"fuzz; a malformed packet may be reaching FSM/motion paths"
+            )
+
+    # NAK counter for missing/wrong type SHOULD have moved (we sent
+    # confusion+noise+markers, several of which parse as well-formed
+    # maps without correct type).
+    if "GVL.MissingTypeFieldNakCount" in pre:
+        assert post["GVL.MissingTypeFieldNakCount"] >= pre["GVL.MissingTypeFieldNakCount"], \
+            "MissingTypeFieldNakCount went backwards (counter wrap or reset?)"
+
+
+# -------------------------------------------------- FSM random walk ----
+# Dispatch a random sequence of *valid* GA_EV events. The FSM must remain
+# in the documented enum range (st in {0, 10, 20, 30, 40, 50, 60, 70, 99,
+# 9999}) and st_str must match. A regression that left _eState in an
+# unmapped value would surface here. We reset to UnInited at the end so
+# downstream tests aren't disturbed.
+
+# E_RobotState values
+_LEGAL_STATES = {
+    0,    # UnInited
+    10,   # Powering
+    20,   # Powered
+    30,   # GroupEnabling
+    40,   # GroupEnabled
+    50,   # Homing
+    60,   # (reserved/legacy)
+    70,   # Ready
+    99,   # Error
+    9999, # cold-boot sentinel before first enum write
+}
+
+# Subset of E_RobotEvent we feel safe firing in a random walk
+_FUZZ_EVENTS = [
+    1,  # EV_POWER_OFF
+    2,  # EV_POWER_ON
+    3,  # EV_OK
+    4,  # EV_GROUP_ENABLE
+    5,  # EV_ERROR
+    6,  # EV_HOME_GO
+    7,  # EV_HOME_GO_FORCE_SKIP
+    8,  # EV_RESET
+]
+
+
+def test_fsm_random_walk_state_invariants(raw_plc_socket):
+    """Send 40 random valid GA_EV events; after each, query state and
+    assert st is a legal enum value and st_str is a non-empty string."""
+    s = raw_plc_socket
+    rng = random.Random(SEED ^ 0xE5E5E5E5)
+    s = _ping_check(s, "fsm-pre", 87000)
+
+    illegal_observed = []
+    for i in range(40):
+        ev = rng.choice(_FUZZ_EVENTS)
+        ev_id = 87100 + i
+        _send_pack(s, {"type": "SYS", "cmd": "GA_EV", "ev": ev, "id": ev_id})
+        time.sleep(0.05)
+        # Drain any reply, just to keep the wire clean
+        s.settimeout(0.25)
+        try:
+            while True:
+                if not s.recv(4096): break
+        except (socket.timeout, OSError):
+            pass
+
+        # Query state
+        gms_id = 88000 + i
+        _send_pack(s, {"type": "SYS", "cmd": "GET_MACHINE_STATE", "id": gms_id})
+        deadline = time.time() + 1.5
+        unp = msgpack.Unpacker(raw=False, strict_map_key=False)
+        st_obj = None
+        s.settimeout(0.3)
+        while time.time() < deadline and st_obj is None:
+            try:
+                chunk = s.recv(4096)
+            except (socket.timeout, OSError):
+                continue
+            if not chunk: break
+            try:
+                unp.feed(chunk)
+                for obj in unp:
+                    if isinstance(obj, dict) and obj.get("id") == gms_id:
+                        st_obj = obj
+                        break
+            except Exception:
+                continue
+
+        if st_obj is None:
+            # Likely mid-test reset; reconnect and continue probing.
+            s = _reconnect(s)
+            continue
+
+        st = st_obj.get("st")
+        st_str = st_obj.get("st_str")
+        if st not in _LEGAL_STATES:
+            illegal_observed.append((ev, st, st_str))
+        # st_str must be a non-empty string when st is set
+        assert isinstance(st, int), f"st is not int: {st!r}"
+        assert isinstance(st_str, str) and st_str, \
+            f"st_str empty/non-string after ev={ev}: {st_str!r}"
+
+    assert not illegal_observed, \
+        f"FSM reached states outside enum range: {illegal_observed[:5]}"
+
+    # Reset so we don't leave FSM in a random state
+    _send_pack(s, {"type": "SYS", "cmd": "GA_EV", "ev": 8, "id": 87999})
+
+
+# ----------------------------------------------- PING flood drop rate ----
+# Send 300 PINGs back-to-back. Drop-newest under reply-ring saturation is
+# permitted, but should be rare. Assert >= 90% return rate -- a regression
+# that broke the drain pump or shrank the ring would tank this number.
+
+def test_ping_flood_drop_rate(raw_plc_socket):
+    s = raw_plc_socket
+    s = _ping_check(s, "flood-pre", 89000)
+
+    N = 300
+    base_id = 89100
+    for i in range(N):
+        _send_pack(s, {"type": "SYS", "cmd": "PING", "id": base_id + i})
+        # No sleep -- maximum pressure.
+
+    # Drain for up to 4s, count pongs with ids in our range.
+    received = set()
+    unp = msgpack.Unpacker(raw=False, strict_map_key=False)
+    deadline = time.time() + 4.0
+    s.settimeout(0.3)
+    while time.time() < deadline:
+        try:
+            chunk = s.recv(4096)
+        except (socket.timeout, OSError):
+            continue
+        if not chunk:
+            break
+        try:
+            unp.feed(chunk)
+            for obj in unp:
+                if isinstance(obj, dict) and obj.get("pong"):
+                    rid = obj.get("id")
+                    if isinstance(rid, int) and base_id <= rid < base_id + N:
+                        received.add(rid)
+        except Exception:
+            continue
+
+    rate = len(received) / N
+    assert rate >= 0.90, (
+        f"PING flood return rate {rate:.1%} < 90% ({len(received)}/{N}); "
+        f"reply ring or Comm-task drain may be regressing"
+    )
