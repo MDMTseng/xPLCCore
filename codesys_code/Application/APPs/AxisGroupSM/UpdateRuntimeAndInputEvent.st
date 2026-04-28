@@ -53,6 +53,21 @@ IF TO_INT(AxisGroupManagerFb._eState) <> PrevAxisGroupState THEN
             GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
         END_IF;
     END_IF;
+    // PH#2: BLOCK_FOR_* latches BlockCommandId / BlockStartMs / BlockTimeoutMs
+    // on first scan of a new CommandId. If the FSM leaves Ready (Error or
+    // UnInited via EV_RESET) the in-flight block is implicitly abandoned --
+    // ProcessMotionPacket can't run, the request gets NAK'd by the
+    // group_not_ready inline path. But the latch persists. If the next
+    // session reuses the same CommandId (UI restart resets its counter to 0,
+    // or a deterministic id-from-cmd-name scheme), the latch makes the new
+    // request inherit the stale BlockStartMs and timeout instantly. Clear
+    // the latch on any departure from Ready so the next BLOCK re-latches.
+    IF AxisGroupManagerFb._eState <> E_RobotState.Ready THEN
+        BlockCommandId := 0;
+        BlockStartMs := 0;
+        BlockTimeoutMs := 0;
+    END_IF;
+
     PrevAxisGroupState := TO_INT(AxisGroupManagerFb._eState);
 END_IF;
 
