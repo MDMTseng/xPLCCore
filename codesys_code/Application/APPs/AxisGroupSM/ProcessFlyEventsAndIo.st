@@ -7,6 +7,39 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
     TriggerErrorCode := 0;
 
     CASE FlyEventBuffer[Index].TriggerType OF
+        FlyEventTriggerType.DistanceTrigger:
+            // Trigger by Cartesian distance from a fixed WCS point. Uses
+            // squared distance to avoid SQRT on every scan. ReadPosition is
+            // refreshed by UpdateAxisGroupState earlier in the same scan
+            // (AxisGroupSM.st:346) so it's the actual TCP pose for this tick.
+            DistDx := ReadPosition.c.x - FlyEventBuffer[Index].TargetPos_X;
+            DistDy := ReadPosition.c.y - FlyEventBuffer[Index].TargetPos_Y;
+            DistDz := ReadPosition.c.z - FlyEventBuffer[Index].TargetPos_Z;
+            DistSq := DistDx*DistDx + DistDy*DistDy + DistDz*DistDz;
+            DistThresholdSq := FlyEventBuffer[Index].TargetDistance * FlyEventBuffer[Index].TargetDistance;
+            // TriggerInBoundary=TRUE: fire on entering the ball (dist <= radius).
+            // TriggerInBoundary=FALSE: fire on leaving the ball (dist >= radius).
+            IF (FlyEventBuffer[Index].TriggerInBoundary AND DistSq <= DistThresholdSq)
+               OR (NOT FlyEventBuffer[Index].TriggerInBoundary AND DistSq >= DistThresholdSq) THEN
+                TriggerActive := TRUE;
+                IF (FlyEventBuffer[Index].IoStageCount > 0) THEN
+                    FlyEventBuffer[Index].IoStageIndex := 0;
+                    FlyEventBuffer[Index].IoStageDelayCountdown := FlyEventBuffer[Index].IoStageDelay[0];
+                    FlyEventBuffer[Index].TriggerType := FlyEventTriggerType.SequenceDelayWait;
+                    IF (FlyEventBuffer[Index].IoStageDelayCountdown > 0) THEN
+                        TriggerActive := FALSE;
+                    END_IF;
+                END_IF;
+            ELSE
+                IF (FlyEventBuffer[Index].TimeToLiveMs > 0) THEN
+                    FlyEventBuffer[Index].TimeToLiveMs := FlyEventBuffer[Index].TimeToLiveMs - BusPeriod;
+                    IF (FlyEventBuffer[Index].TimeToLiveMs <= 0) THEN
+                        TriggerActive := TRUE;
+                        TriggerErrorCode := TRIGGER_TIMEOUT_ERR;
+                    END_IF;
+                END_IF;
+            END_IF;
+
         FlyEventTriggerType.MovmentProgressTrigger:
             IF (
                 CurrentMovementId > FlyEventBuffer[Index].TargetMovementId OR

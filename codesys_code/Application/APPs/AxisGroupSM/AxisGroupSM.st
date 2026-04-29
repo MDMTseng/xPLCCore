@@ -240,6 +240,13 @@ PROGRAM AxisGroupSM
 
     TriggerActive : BOOL;
     TriggerErrorCode : INT;
+    // Distance-trigger scratch for FlyEventTriggerType.DistanceTrigger.
+    // Squared-distance compare avoids SQRT in the per-scan loop.
+    DistDx : LREAL;
+    DistDy : LREAL;
+    DistDz : LREAL;
+    DistSq : LREAL;
+    DistThresholdSq : LREAL;
     TempByte : BYTE;
     DigitalOutputPointer : POINTER TO BYTE;
     
@@ -259,6 +266,9 @@ PROGRAM AxisGroupSM
     // request as "no expiry" (-1) and producing a stuck FlyEvent. Stage
     // through LINT and clamp before the cast.
     FlyEventTtlRaw : LINT;
+    // Optional 'trig' field on M4 packet -- selects between
+    // MovmentProgressTrigger (default 20) and DistanceTrigger (120).
+    FlyEventTriggerSelect : INT;
     MotionPoseTempReal : REAL;
     PrevMotionStateId : SMC_Movement_Id; // For MotionStateString change detection
     PrevMotionStateProgress : REAL := -1.0; // Force initial update

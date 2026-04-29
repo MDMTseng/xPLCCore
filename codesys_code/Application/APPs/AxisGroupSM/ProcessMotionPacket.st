@@ -251,7 +251,16 @@
 
 					FlyEventTempData.ActionType := FlyEventActType.PIN_OPERATION;
 
-					FlyEventTempData.TriggerType := FlyEventTriggerType.MovmentProgressTrigger;
+					// Optional 'trig' field selects trigger family. Default
+					// 20 = MovmentProgressTrigger preserves legacy callers
+					// that omit the field. 120 = DistanceTrigger uses a
+					// Cartesian point + radius gate instead of motion_id.
+					FlyEventTriggerSelect := TO_INT(MessageUnpackerFb.TryReadINT64('trig', 20));
+					IF FlyEventTriggerSelect = 120 THEN
+						FlyEventTempData.TriggerType := FlyEventTriggerType.DistanceTrigger;
+					ELSE
+						FlyEventTempData.TriggerType := FlyEventTriggerType.MovmentProgressTrigger;
+					END_IF;
 
 					FlyEventTempData.SourceCommandId := CommandId;
 
@@ -280,6 +289,16 @@
 					END_IF;
 
 					FlyEventTempData.TargetMovementProgress := TO_LREAL(MessageUnpackerFb.TryReadREAL('motion_progress', 1));
+
+					// DistanceTrigger payload (ignored by MovmentProgressTrigger).
+					// Defaults to (0,0,0)/r=0/inside; with r=0 and TriggerInBoundary=TRUE
+					// the trigger fires only at the exact origin -- safe default that
+					// just won't fire on its own. tin: 0=outside, 1=inside.
+					FlyEventTempData.TargetPos_X := TO_LREAL(MessageUnpackerFb.TryReadREAL('tx', 0));
+					FlyEventTempData.TargetPos_Y := TO_LREAL(MessageUnpackerFb.TryReadREAL('ty', 0));
+					FlyEventTempData.TargetPos_Z := TO_LREAL(MessageUnpackerFb.TryReadREAL('tz', 0));
+					FlyEventTempData.TargetDistance := TO_LREAL(MessageUnpackerFb.TryReadREAL('td', 0));
+					FlyEventTempData.TriggerInBoundary := MessageUnpackerFb.TryReadINT64('tin', 1) <> 0;
 
 					FlyEventTempData.EventId := TO_DINT(MessageUnpackerFb.TryReadINT64('event_id', 0));
 
@@ -377,7 +396,12 @@
 
 					END_IF;
 
-					IF (FlyEventTempData.IoStageCount > 0 AND MotionTargetMovementId <> 0) THEN
+					// Registration gate: progress trigger needs a real target movement id;
+					// distance trigger doesn't (it gates on Cartesian pose), so accept
+					// regardless of MotionTargetMovementId for that branch.
+					IF (FlyEventTempData.IoStageCount > 0
+					    AND (MotionTargetMovementId <> 0
+					         OR FlyEventTempData.TriggerType = FlyEventTriggerType.DistanceTrigger)) THEN
 
 						FOR Index := 0 TO TO_INT( FlyEventBufferSize - 1) DO
 
