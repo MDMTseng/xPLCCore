@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-DAEMON_PATH = HERE / "daemon.py"
+DAEMON_PATH = HERE.parent / "daemon.py"
 DAEMON_HOST = "127.0.0.1"
 DAEMON_PORT = 7420
 

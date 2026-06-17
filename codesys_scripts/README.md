@@ -8,6 +8,7 @@ commands you run by hand; everything else is reached through them.
 | File | Use for |
 | ---- | ------- |
 | `rpc.py` | All scripting-daemon interactions: `ping`, `exec --file ...`, `push`, `status`, `stop`, `daemon-start`. Most workflows go through here. |
+| `daemon.py` | RPC server. Runs **inside** the CODESYS Scripting Console (Tools > Scripting > Execute Script File... > pick this), not from the terminal. `rpc.py daemon-start` spawns CODESYS with `--runscript=daemon.py` so you usually don't touch it directly. |
 | `build.sh` | Headless CODESYS build of the project (writes `build.log`). |
 | `pytest.ini` | (Not a command -- here so `pytest` from the repo root picks up the right config.) |
 
@@ -18,7 +19,6 @@ virtual-motors gate, lifecycle).
 ## What's in the subdirectories
 
 - `internals/` -- helpers `rpc.py` and the tests call into:
-  `daemon.py` (runs in CODESYS Scripting Console),
   `daemon_kickstart.py` (`rpc.py daemon-start` delegates here),
   `online_change_with_regression.py` (`rpc.py push` wrapper),
   `remote_ctrl.py` / `remote_harness.py` (UI <-> harness IPC),
