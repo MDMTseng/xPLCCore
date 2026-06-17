@@ -283,4 +283,14 @@ VAR_GLOBAL
 	   0 = no fault. *)
 	LastAxesErrorIDs : ARRAY[0..3] OF UINT;
 
+	(* Build provenance stamped by codesys_scripts/jobs/stamp_build_info.py
+	   right before push (import_all). Lets an external tool answer "is the
+	   running PLC the same commit as the repo?" without IDE assistance.
+	   SHA: short git rev (up to 12 chars), 'dirty' suffix if working tree
+	   was modified at stamp time. TS: unix milliseconds at stamp. Defaults
+	   are 'unknown'/0 so an unstamped build is obvious instead of silently
+	   misreporting. *)
+	BUILD_GIT_SHA : STRING(40) := 'unknown';
+	BUILD_TS_MS   : LINT       := 0;
+
 END_VAR

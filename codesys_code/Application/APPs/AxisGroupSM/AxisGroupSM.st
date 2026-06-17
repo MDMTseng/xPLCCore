@@ -628,6 +628,19 @@ PROGRAM AxisGroupSM
                 ResponsePacketPointer^.ele_count := 1;
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('reset'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := TRUE);
+            ELSIF (CommandType = 'VERSION') THEN
+                // Build provenance: lets an external tool verify the running
+                // PLC matches a repo commit without IDE assistance. Stamped by
+                // codesys_scripts/jobs/stamp_build_info.py before import_all.
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 3;
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('git_sha'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(GVL.BUILD_GIT_SHA));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('build_ts_ms'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := GVL.BUILD_TS_MS);
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('runtime_ms'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := RuntimeMs);
             ELSIF (CommandType = 'GET_DIAG') THEN
                 // Generic comm/robustness counters dump. UI dashboard polls this
                 // (e.g. once per second) to chart drop/NAK/reset rates and the
@@ -635,7 +648,15 @@ PROGRAM AxisGroupSM
                 // Counters resettable via SYS/RESET_DBG_INFO (see existing handler).
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
-                ResponsePacketPointer^.ele_count := 18;
+                // GET_DIAG fields extended 2026-06-17 to be a TCP-side
+                // superset of the daemon-side counter dump the fuzz tests
+                // used to call via oapp.read_value. Lets fuzz/soak tests run
+                // without the CODESYS RPC daemon being alive -- daemon dies
+                // mid-test no longer breaks the test. New fields:
+                //   self_reentry, pending_stchg_drop, pending_movedone_drop,
+                //   remp_drop_reply, remp_drop_trig, dupe_cmd,
+                //   io_cmd_count, io_trig_count, flyevent_avail
+                ResponsePacketPointer^.ele_count := 27;
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('remp_overflow_drop'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.ReMpOverflowDropCount));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('runtime_ms'));
@@ -672,6 +693,24 @@ PROGRAM AxisGroupSM
                 ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := GVL.LastUiPingMs);
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('st_chg_event_count'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.StateChangeEventCount));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('self_reentry'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.SelfReentryCount));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('pending_stchg_drop'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.PendingStChgDropCount));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('pending_movedone_drop'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.PendingMoveDoneDropCount));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('remp_drop_reply'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.ReMpDropCount_Reply));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('remp_drop_trig'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.ReMpDropCount_TriggerEvent));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('dupe_cmd'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.DupeCommandCount));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('io_cmd_count'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(IoCommandCount));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('io_trig_count'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(IoTriggerCount));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('flyevent_avail'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(FlyEventAvailableCount));
             ELSE
                 // Unknown SYS command -- emit NAK so the TS caller doesn't hang on timeout.
                 ShouldReturn := TRUE;
