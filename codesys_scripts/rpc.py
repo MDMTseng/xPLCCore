@@ -37,6 +37,7 @@ import sys, json, socket, argparse, os, subprocess
 HOST = "127.0.0.1"
 PORT = 7420
 HERE = os.path.dirname(os.path.abspath(__file__))
+INTERNALS = os.path.join(HERE, "internals")
 
 
 def call(req, timeout):
@@ -88,7 +89,7 @@ def do_status(timeout):
     # whole chain instead of probing the harness alone.
     try:
         res = subprocess.run(
-            [sys.executable, os.path.join(HERE, "remote_ctrl.py"),
+            [sys.executable, os.path.join(INTERNALS, "remote_ctrl.py"),
              "send_tcp_msgpack", _json.dumps({"type": "SYS", "cmd": "PING"}),
              "--timeout", str(min(timeout, 5))],
             capture_output=True, text=True, timeout=min(timeout, 8),
@@ -108,7 +109,7 @@ def do_status(timeout):
     # Layer 3: PLC FSM state via GET_MACHINE_STATE
     try:
         res = subprocess.run(
-            [sys.executable, os.path.join(HERE, "remote_ctrl.py"),
+            [sys.executable, os.path.join(INTERNALS, "remote_ctrl.py"),
              "send_tcp_msgpack",
              _json.dumps({"type": "SYS", "cmd": "GET_MACHINE_STATE"}),
              "--timeout", str(min(timeout, 5))],
@@ -153,7 +154,7 @@ def main():
         # Hands-off recovery: if the daemon is dead, kickstart it (spawn
         # CODESYS with --runscript=daemon.py if the IDE isn't already up;
         # otherwise print the paste-into-Scripting-Console workaround).
-        wrapper = os.path.join(HERE, "daemon_kickstart.py")
+        wrapper = os.path.join(INTERNALS, "daemon_kickstart.py")
         argv = [sys.executable, wrapper, "--wait", str(max(30, args.timeout))]
         sys.exit(subprocess.call(argv))
 
@@ -161,7 +162,7 @@ def main():
         # Delegate to the dedicated wrapper so the regression-gated push has
         # one implementation. Anything else (rpc.py ping/exec/stop) keeps
         # talking to the daemon directly.
-        wrapper = os.path.join(HERE, "online_change_with_regression.py")
+        wrapper = os.path.join(INTERNALS, "online_change_with_regression.py")
         argv = [sys.executable, wrapper]
         if args.no_tests:
             argv.append("--skip-tests")

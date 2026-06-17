@@ -13,7 +13,7 @@ import msgpack
 import pytest
 
 HERE = Path(__file__).resolve().parent
-REMOTE_CTRL = HERE.parent / "remote_ctrl.py"
+REMOTE_CTRL = HERE.parent / "internals" / "remote_ctrl.py"
 PLC_HOST, PLC_PORT = "192.168.1.70", 8125
 
 _send_lock = threading.Lock()

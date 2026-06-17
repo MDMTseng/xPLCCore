@@ -9,7 +9,7 @@ CODESYS_EXE="/c/Program Files/CODESYS 3.5.21.20/CODESYS/Common/CODESYS.exe"
 PROFILE="CODESYS V3.5 SP21 Patch 20"
 PROJECT="C:\\Users\\X1\\Desktop\\XPack2_codesys\\PackerX.project"
 LOG="$HERE/build.log"
-SCRIPT="$HERE/build.py"
+SCRIPT="$HERE/internals/build.py"
 
 rm -f "$LOG"
 

@@ -19,8 +19,9 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-RPC = HERE / "rpc.py"
-JOBS = HERE / "jobs" / "templates"
+SCRIPTS = HERE.parent              # codesys_scripts/
+RPC = SCRIPTS / "rpc.py"
+JOBS = SCRIPTS / "jobs" / "templates"
 
 
 def run_daemon_job(name: str) -> int:
@@ -35,8 +36,8 @@ def run_daemon_job(name: str) -> int:
 def run_pytest() -> int:
     print("\n=== pytest regression ===")
     res = subprocess.run(
-        [sys.executable, "-m", "pytest", str(HERE / "tests"), "-v", "-x"],
-        cwd=str(HERE.parent),
+        [sys.executable, "-m", "pytest", str(SCRIPTS / "tests"), "-v", "-x"],
+        cwd=str(SCRIPTS.parent),
     )
     return res.returncode
 

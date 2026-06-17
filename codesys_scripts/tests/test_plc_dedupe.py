@@ -21,7 +21,7 @@ import pytest
 from tests.test_plc_holes_e2e import _read_symbols
 
 HERE = Path(__file__).resolve().parent
-REMOTE_CTRL = HERE.parent / "remote_ctrl.py"
+REMOTE_CTRL = HERE.parent / "internals" / "remote_ctrl.py"
 PLC_HOST, PLC_PORT = "192.168.1.70", 8125
 
 
