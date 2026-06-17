@@ -1,0 +1,3 @@
+fuzz_4hr_*.log
+fuzz_smoke_*.log
+fuzz_*_stdout.log
