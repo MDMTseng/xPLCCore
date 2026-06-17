@@ -47,6 +47,18 @@ def main() -> int:
                     help="push code only; don't run regression after")
     args = ap.parse_args()
 
+    # Stamp build provenance into GVL.st BEFORE import_all. The next
+    # SYS/VERSION call from a test or external observer will then return
+    # the exact git rev that's compiled into the running PLC.
+    print("\n=== stamp build_info ===")
+    rc = subprocess.run(
+        [sys.executable, str(JOBS / "stamp_build_info.py")],
+        timeout=30,
+    ).returncode
+    if rc != 0:
+        print(f"stamp_build_info failed (rc={rc}); aborting.")
+        return rc
+
     rc = run_daemon_job("import_all")
     if rc != 0:
         print(f"import_all failed (rc={rc}); aborting.")
@@ -55,6 +67,16 @@ def main() -> int:
     if rc != 0:
         print(f"online_change failed (rc={rc}); aborting.")
         return rc
+
+    # Revert the stamp so the on-disk GVL.st stays canonical ('unknown'/0).
+    # The compiled PLC already has the stamped values baked in via the
+    # import_all -> online_change above; the disk file is just the
+    # template the next push will re-stamp.
+    print("\n=== revert build_info stamp ===")
+    subprocess.run(
+        [sys.executable, str(JOBS / "stamp_build_info.py"), "--revert"],
+        timeout=30,
+    )
 
     if args.skip_tests:
         print("\nSkipping regression (--skip-tests).")
