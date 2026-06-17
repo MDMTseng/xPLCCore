@@ -137,7 +137,7 @@ def do_status(timeout):
 
 def main():
     ap = argparse.ArgumentParser(description="CODESYS scripting RPC client")
-    ap.add_argument("cmd", choices=["ping", "exec", "stop", "push", "status"])
+    ap.add_argument("cmd", choices=["ping", "exec", "stop", "push", "status", "daemon-start"])
     ap.add_argument("--file", help="path to .py file (else read from stdin)")
     ap.add_argument("--label", default="", help="short tag for daemon log")
     ap.add_argument("--timeout", type=float, default=180,
@@ -148,6 +148,14 @@ def main():
 
     if args.cmd == "status":
         sys.exit(do_status(args.timeout))
+
+    if args.cmd == "daemon-start":
+        # Hands-off recovery: if the daemon is dead, kickstart it (spawn
+        # CODESYS with --runscript=daemon.py if the IDE isn't already up;
+        # otherwise print the paste-into-Scripting-Console workaround).
+        wrapper = os.path.join(HERE, "daemon_kickstart.py")
+        argv = [sys.executable, wrapper, "--wait", str(max(30, args.timeout))]
+        sys.exit(subprocess.call(argv))
 
     if args.cmd == "push":
         # Delegate to the dedicated wrapper so the regression-gated push has
