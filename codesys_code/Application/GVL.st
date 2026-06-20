@@ -308,6 +308,37 @@ VAR_GLOBAL
 	Coord1BindCount      : UDINT := 0;
 	Coord1BindBusyNakCount : UDINT := 0;
 
+	(* --- Coord1 cam-table mode (Phase 2).
+	   Linear mode (default) uses Coord1Scale; Table mode stores a master->
+	   slave-offset table sampled at COORD1_CAM_MAX_POINTS=64 points and
+	   linearly interpolates between them. master[] must be strictly
+	   ascending (binary-search lookup assumes monotonic). Out-of-range
+	   pulse clamps to the first or last sample (no extrapolation).
+
+	   COORD1_BIND chooses mode by payload shape:
+	     - cam_table absent / count=0 -> Linear (uses Scale)
+	     - cam_table.master[] present -> Table (Scale ignored)
+	   Both supplied -> NAK 'coord_bind_conflict' (host bug, refuse).
+
+	   Memory cost: 64 * (4 + 4*3) = 1KB. Trivial vs 128 reMP slots.
+	   Bump COORD1_CAM_MAX_POINTS if cam profile granularity demands it
+	   (also bump the input slot buf size if msgpack array overflows). *)
+	(* Mode tag: 0=Linear, 1=Table. Plain INT (vs enum DUT) so the
+	   field is editable without creating a new project object via
+	   IDE/script; trivial CASE labels read just as well. Update
+	   COORD1_MODE_* below in lockstep. *)
+	COORD1_MODE_LINEAR         : INT := 0;
+	COORD1_MODE_TABLE          : INT := 1;
+	Coord1CamMode              : INT := 0;
+	Coord1CamCount             : INT := 0;
+	Coord1CamMaster            : ARRAY [0..63] OF DINT;
+	Coord1CamX                 : ARRAY [0..63] OF REAL;
+	Coord1CamY                 : ARRAY [0..63] OF REAL;
+	Coord1CamZ                 : ARRAY [0..63] OF REAL;
+	Coord1ConflictNakCount     : UDINT := 0;
+	Coord1BadTableNakCount     : UDINT := 0;
+	COORD1_CAM_MAX_POINTS      : INT := 64;
+
 	(* Build provenance stamped by codesys_scripts/jobs/stamp_build_info.py
 	   right before push (import_all). Lets an external tool answer "is the
 	   running PLC the same commit as the repo?" without IDE assistance.

@@ -83,6 +83,10 @@ PROGRAM AxisGroupSM
 
         MessageUnpackerFb: FB_MpUnpacker;
         fbPinOpSeqUnpacker: FB_MpUnpacker; // Helper unpacker for pin_op_seq array
+        // Phase 2: scratch unpacker reused for the cam_table.{master,x,y,z}
+        // sub-array reads inside the COORD1_BIND handler. One handler call
+        // re-Inits this for each axis so we don't need 4 instances.
+        fbCoord1CamUnpacker: FB_MpUnpacker;
 
         FlyEventBuffer: ARRAY [0..FlyEventBufferSize-1] OF FlyEventData; // event queue for motion-triggered IO
         FlyEventAvailableCount: INT;
@@ -316,6 +320,30 @@ PROGRAM AxisGroupSM
 
     DBG_BLOCK : BOOL:=TRUE;
 
+    // Coord1 cam-table lookup scratch (Phase 2). Reused each scan; values
+    // meaningful only inside the lookup block immediately following the
+    // CASE switch. Lo/Hi are the inclusive index range during binary
+    // search; SegLo/SegHi are the two table indices straddling Pulse
+    // after the search; Frac is the interpolation ratio in [0,1].
+    CamLo, CamHi, CamMid : INT;
+    CamSegLo, CamSegHi   : INT;
+    CamFrac              : LREAL;
+
+    // COORD1_BIND handler scratch (Phase 2). BindCamCount is the master[]
+    // length advertised by the unpacker; BindCamIdx loops over samples;
+    // BindPrevMaster validates strict ascending; BindAxisCount holds the
+    // length of each subsequent x/y/z array for length-mismatch check;
+    // BindHasTable / BindReject short-circuit the read path on first
+    // validation failure to avoid further bogus writes.
+    BindCamCount     : UINT;
+    BindAxisCount    : UINT;
+    BindCamIdx       : INT;
+    BindPrevMaster   : DINT;
+    BindCurMaster    : DINT;
+    BindHasTable     : BOOL;
+    BindReject       : BOOL;
+    BindRejectReason : STRING(40);
+
     END_VAR
 (* =========== IMPLEMENTATION =========== *)
 
@@ -338,29 +366,83 @@ PROGRAM AxisGroupSM
     GVL.LastAxesErrorIDs[2] := IoConfig_Globals.EAxis2.uiDriveInterfaceError;
     GVL.LastAxesErrorIDs[3] := reelpullmotor.uiDriveInterfaceError;
 
-    // Per-scan Coord1 origin recompute (conveyor tracking, Phase 1).
+    // Per-scan Coord1 origin recompute (conveyor tracking, Phase 1/2).
     // When bound, OriginNow drifts with the conveyor pulse so that a G1
     // target expressed in coord1 corresponds to the same physical point
-    // on the belt regardless of belt advance. Scale[i]=0 locks that axis
-    // to RefXyz (only the belt direction needs a non-zero scale).
+    // on the belt regardless of belt advance.
+    //   Linear mode: OriginNow[i] = RefXyz[i] + (Pulse-RefPulse)/Scale[i].
+    //                Scale[i]=0 locks that axis to RefXyz (only the belt
+    //                direction needs a non-zero scale).
+    //   Table  mode: binary-search master[] for the bracketing segment,
+    //                linearly interpolate x/y/z. Out-of-range pulse
+    //                clamps to first or last sample (no extrapolation;
+    //                cam profile is responsible for its own headroom).
     IF GVL.Coord1Bound THEN
-        IF GVL.Coord1Scale[0] <> 0.0 THEN
-            GVL.Coord1OriginNow[0] := GVL.Coord1RefXyz[0]
-                + LREAL#1.0 * (GVL.ConveyorPulseRaw - GVL.Coord1RefPulse) / GVL.Coord1Scale[0];
-        ELSE
-            GVL.Coord1OriginNow[0] := GVL.Coord1RefXyz[0];
-        END_IF
-        IF GVL.Coord1Scale[1] <> 0.0 THEN
-            GVL.Coord1OriginNow[1] := GVL.Coord1RefXyz[1]
-                + LREAL#1.0 * (GVL.ConveyorPulseRaw - GVL.Coord1RefPulse) / GVL.Coord1Scale[1];
-        ELSE
-            GVL.Coord1OriginNow[1] := GVL.Coord1RefXyz[1];
-        END_IF
-        IF GVL.Coord1Scale[2] <> 0.0 THEN
-            GVL.Coord1OriginNow[2] := GVL.Coord1RefXyz[2]
-                + LREAL#1.0 * (GVL.ConveyorPulseRaw - GVL.Coord1RefPulse) / GVL.Coord1Scale[2];
-        ELSE
-            GVL.Coord1OriginNow[2] := GVL.Coord1RefXyz[2];
+        IF GVL.Coord1CamMode = GVL.COORD1_MODE_LINEAR THEN
+                IF GVL.Coord1Scale[0] <> 0.0 THEN
+                    GVL.Coord1OriginNow[0] := GVL.Coord1RefXyz[0]
+                        + LREAL#1.0 * (GVL.ConveyorPulseRaw - GVL.Coord1RefPulse) / GVL.Coord1Scale[0];
+                ELSE
+                    GVL.Coord1OriginNow[0] := GVL.Coord1RefXyz[0];
+                END_IF
+                IF GVL.Coord1Scale[1] <> 0.0 THEN
+                    GVL.Coord1OriginNow[1] := GVL.Coord1RefXyz[1]
+                        + LREAL#1.0 * (GVL.ConveyorPulseRaw - GVL.Coord1RefPulse) / GVL.Coord1Scale[1];
+                ELSE
+                    GVL.Coord1OriginNow[1] := GVL.Coord1RefXyz[1];
+                END_IF
+                IF GVL.Coord1Scale[2] <> 0.0 THEN
+                    GVL.Coord1OriginNow[2] := GVL.Coord1RefXyz[2]
+                        + LREAL#1.0 * (GVL.ConveyorPulseRaw - GVL.Coord1RefPulse) / GVL.Coord1Scale[2];
+                ELSE
+                    GVL.Coord1OriginNow[2] := GVL.Coord1RefXyz[2];
+                END_IF
+
+        ELSIF GVL.Coord1CamMode = GVL.COORD1_MODE_TABLE THEN
+                IF GVL.Coord1CamCount <= 0 THEN
+                    // Defensive: a Table-mode bind without samples shouldn't
+                    // happen (COORD1_BIND handler enforces count>=2), but if
+                    // it does, fall back to RefXyz.
+                    GVL.Coord1OriginNow[0] := GVL.Coord1RefXyz[0];
+                    GVL.Coord1OriginNow[1] := GVL.Coord1RefXyz[1];
+                    GVL.Coord1OriginNow[2] := GVL.Coord1RefXyz[2];
+                ELSIF GVL.ConveyorPulseRaw <= GVL.Coord1CamMaster[0] THEN
+                    // Clamp to first sample.
+                    GVL.Coord1OriginNow[0] := GVL.Coord1RefXyz[0] + GVL.Coord1CamX[0];
+                    GVL.Coord1OriginNow[1] := GVL.Coord1RefXyz[1] + GVL.Coord1CamY[0];
+                    GVL.Coord1OriginNow[2] := GVL.Coord1RefXyz[2] + GVL.Coord1CamZ[0];
+                ELSIF GVL.ConveyorPulseRaw >= GVL.Coord1CamMaster[GVL.Coord1CamCount - 1] THEN
+                    // Clamp to last sample.
+                    GVL.Coord1OriginNow[0] := GVL.Coord1RefXyz[0] + GVL.Coord1CamX[GVL.Coord1CamCount - 1];
+                    GVL.Coord1OriginNow[1] := GVL.Coord1RefXyz[1] + GVL.Coord1CamY[GVL.Coord1CamCount - 1];
+                    GVL.Coord1OriginNow[2] := GVL.Coord1RefXyz[2] + GVL.Coord1CamZ[GVL.Coord1CamCount - 1];
+                ELSE
+                    // Binary search: find largest CamLo with master[Lo] <= Pulse.
+                    // Invariant: master[Lo] <= Pulse < master[Hi]. Loop ends with
+                    // Hi = Lo + 1, the bracketing segment.
+                    CamLo := 0;
+                    CamHi := GVL.Coord1CamCount - 1;
+                    WHILE (CamHi - CamLo) > 1 DO
+                        CamMid := (CamLo + CamHi) / 2;
+                        IF GVL.Coord1CamMaster[CamMid] <= GVL.ConveyorPulseRaw THEN
+                            CamLo := CamMid;
+                        ELSE
+                            CamHi := CamMid;
+                        END_IF
+                    END_WHILE
+                    CamSegLo := CamLo;
+                    CamSegHi := CamLo + 1;
+                    // Frac in [0,1]; denom non-zero because master[] is strictly
+                    // ascending (validated at bind time).
+                    CamFrac := LREAL#1.0 * (GVL.ConveyorPulseRaw - GVL.Coord1CamMaster[CamSegLo])
+                             / (GVL.Coord1CamMaster[CamSegHi] - GVL.Coord1CamMaster[CamSegLo]);
+                    GVL.Coord1OriginNow[0] := GVL.Coord1RefXyz[0]
+                        + GVL.Coord1CamX[CamSegLo] + CamFrac * (GVL.Coord1CamX[CamSegHi] - GVL.Coord1CamX[CamSegLo]);
+                    GVL.Coord1OriginNow[1] := GVL.Coord1RefXyz[1]
+                        + GVL.Coord1CamY[CamSegLo] + CamFrac * (GVL.Coord1CamY[CamSegHi] - GVL.Coord1CamY[CamSegLo]);
+                    GVL.Coord1OriginNow[2] := GVL.Coord1RefXyz[2]
+                        + GVL.Coord1CamZ[CamSegLo] + CamFrac * (GVL.Coord1CamZ[CamSegHi] - GVL.Coord1CamZ[CamSegLo]);
+                END_IF
         END_IF
     END_IF
 
@@ -737,15 +819,186 @@ PROGRAM AxisGroupSM
                 ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(IoTriggerCount));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('flyevent_avail'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(FlyEventAvailableCount));
+            ELSIF (CommandType = 'COORD1_BIND') THEN
+                // Bind / re-bind the coord1 tracking frame to the conveyor
+                // encoder. Linear mode (no cam_table): origin drifts at a
+                // constant rate per pulse via Scale[]. Table mode (cam_table
+                // present): origin follows a sampled master->offset curve,
+                // linearly interpolated between samples. Reject if the
+                // motion buffer is non-empty so the active move's coord
+                // frame doesn't change mid-flight.
+                ShouldReturn := TRUE;
+                BindReject := FALSE;
+                BindRejectReason := '';
+
+                IF MotionBufferSize > 0 THEN
+                    BindReject := TRUE;
+                    BindRejectReason := 'coord_bind_busy';
+                    GVL.Coord1BindBusyNakCount := GVL.Coord1BindBusyNakCount + 1;
+                END_IF
+
+                IF NOT BindReject THEN
+                    // Read top-level scalars (path-based, defaulting to 0).
+                    GVL.Coord1RefPulse   := TO_DINT(MessageUnpackerFb.TryReadINT64('ref_pulse', 0));
+                    GVL.Coord1RefXyz[0]  := TO_LREAL(MessageUnpackerFb.TryReadREAL('ref_xyz[0]', 0.0));
+                    GVL.Coord1RefXyz[1]  := TO_LREAL(MessageUnpackerFb.TryReadREAL('ref_xyz[1]', 0.0));
+                    GVL.Coord1RefXyz[2]  := TO_LREAL(MessageUnpackerFb.TryReadREAL('ref_xyz[2]', 0.0));
+                    GVL.Coord1Scale[0]   := TO_LREAL(MessageUnpackerFb.TryReadREAL('scale[0]', 0.0));
+                    GVL.Coord1Scale[1]   := TO_LREAL(MessageUnpackerFb.TryReadREAL('scale[1]', 0.0));
+                    GVL.Coord1Scale[2]   := TO_LREAL(MessageUnpackerFb.TryReadREAL('scale[2]', 0.0));
+
+                    // Optional cam_table.master[] probe -> Table mode.
+                    BindHasTable := MessageUnpackerFb.TryReadObject('cam_table.master', ADR(fbCoord1CamUnpacker));
+                END_IF
+
+                IF NOT BindReject AND BindHasTable THEN
+                    fbCoord1CamUnpacker.UnpackNext();
+                    BindCamCount := fbCoord1CamUnpacker.uiLastCount;
+                    IF BindCamCount < 2 OR BindCamCount > TO_UINT(GVL.COORD1_CAM_MAX_POINTS) THEN
+                        BindReject := TRUE;
+                        BindRejectReason := 'coord_bind_bad_table';
+                        GVL.Coord1BadTableNakCount := GVL.Coord1BadTableNakCount + 1;
+                    END_IF
+                    IF NOT BindReject THEN
+                        // Read master[]; validate strictly ascending.
+                        BindPrevMaster := -16#7FFFFFFF;
+                        FOR BindCamIdx := 0 TO TO_INT(BindCamCount) - 1 DO
+                            fbCoord1CamUnpacker.UnpackNext();
+                            BindCurMaster := fbCoord1CamUnpacker.diLastDINT;
+                            IF BindCamIdx > 0 AND BindCurMaster <= BindPrevMaster THEN
+                                BindReject := TRUE;
+                                BindRejectReason := 'coord_bind_bad_table';
+                                GVL.Coord1BadTableNakCount := GVL.Coord1BadTableNakCount + 1;
+                                EXIT;
+                            END_IF
+                            GVL.Coord1CamMaster[BindCamIdx] := BindCurMaster;
+                            BindPrevMaster := BindCurMaster;
+                        END_FOR
+                    END_IF
+                    // Read x[]
+                    IF NOT BindReject THEN
+                        IF NOT MessageUnpackerFb.TryReadObject('cam_table.x', ADR(fbCoord1CamUnpacker)) THEN
+                            BindReject := TRUE;
+                            BindRejectReason := 'coord_bind_bad_table';
+                            GVL.Coord1BadTableNakCount := GVL.Coord1BadTableNakCount + 1;
+                        ELSE
+                            fbCoord1CamUnpacker.UnpackNext();
+                            BindAxisCount := fbCoord1CamUnpacker.uiLastCount;
+                            IF BindAxisCount <> BindCamCount THEN
+                                BindReject := TRUE;
+                                BindRejectReason := 'coord_bind_table_length_mismatch';
+                                GVL.Coord1BadTableNakCount := GVL.Coord1BadTableNakCount + 1;
+                            ELSE
+                                FOR BindCamIdx := 0 TO TO_INT(BindCamCount) - 1 DO
+                                    fbCoord1CamUnpacker.UnpackNext();
+                                    GVL.Coord1CamX[BindCamIdx] := fbCoord1CamUnpacker.rLastREAL;
+                                END_FOR
+                            END_IF
+                        END_IF
+                    END_IF
+                    // Read y[]
+                    IF NOT BindReject THEN
+                        IF NOT MessageUnpackerFb.TryReadObject('cam_table.y', ADR(fbCoord1CamUnpacker)) THEN
+                            BindReject := TRUE;
+                            BindRejectReason := 'coord_bind_bad_table';
+                            GVL.Coord1BadTableNakCount := GVL.Coord1BadTableNakCount + 1;
+                        ELSE
+                            fbCoord1CamUnpacker.UnpackNext();
+                            BindAxisCount := fbCoord1CamUnpacker.uiLastCount;
+                            IF BindAxisCount <> BindCamCount THEN
+                                BindReject := TRUE;
+                                BindRejectReason := 'coord_bind_table_length_mismatch';
+                                GVL.Coord1BadTableNakCount := GVL.Coord1BadTableNakCount + 1;
+                            ELSE
+                                FOR BindCamIdx := 0 TO TO_INT(BindCamCount) - 1 DO
+                                    fbCoord1CamUnpacker.UnpackNext();
+                                    GVL.Coord1CamY[BindCamIdx] := fbCoord1CamUnpacker.rLastREAL;
+                                END_FOR
+                            END_IF
+                        END_IF
+                    END_IF
+                    // Read z[]
+                    IF NOT BindReject THEN
+                        IF NOT MessageUnpackerFb.TryReadObject('cam_table.z', ADR(fbCoord1CamUnpacker)) THEN
+                            BindReject := TRUE;
+                            BindRejectReason := 'coord_bind_bad_table';
+                            GVL.Coord1BadTableNakCount := GVL.Coord1BadTableNakCount + 1;
+                        ELSE
+                            fbCoord1CamUnpacker.UnpackNext();
+                            BindAxisCount := fbCoord1CamUnpacker.uiLastCount;
+                            IF BindAxisCount <> BindCamCount THEN
+                                BindReject := TRUE;
+                                BindRejectReason := 'coord_bind_table_length_mismatch';
+                                GVL.Coord1BadTableNakCount := GVL.Coord1BadTableNakCount + 1;
+                            ELSE
+                                FOR BindCamIdx := 0 TO TO_INT(BindCamCount) - 1 DO
+                                    fbCoord1CamUnpacker.UnpackNext();
+                                    GVL.Coord1CamZ[BindCamIdx] := fbCoord1CamUnpacker.rLastREAL;
+                                END_FOR
+                            END_IF
+                        END_IF
+                    END_IF
+                END_IF
+
+                IF BindReject THEN
+                    CommandAck := FALSE;
+                    ResponsePacketPointer^.ele_count := 1;
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(BindRejectReason));
+                ELSE
+                    // Commit: flip mode + bound atomically (single scan; the
+                    // cyclic compute at top of scan won't observe a half-set
+                    // state because we're inside the SYS drain, which runs
+                    // after the per-scan recompute).
+                    IF BindHasTable THEN
+                        GVL.Coord1CamMode  := GVL.COORD1_MODE_TABLE;
+                        GVL.Coord1CamCount := TO_INT(BindCamCount);
+                    ELSE
+                        GVL.Coord1CamMode  := GVL.COORD1_MODE_LINEAR;
+                        GVL.Coord1CamCount := 0;
+                    END_IF
+                    GVL.Coord1Bound       := TRUE;
+                    GVL.Coord1BindCount   := GVL.Coord1BindCount + 1;
+                    CommandAck := TRUE;
+                    ResponsePacketPointer^.ele_count := 2;
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('mode'));
+                    IF BindHasTable THEN
+                        ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('table'));
+                    ELSE
+                        ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('linear'));
+                    END_IF
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('n'));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.Coord1CamCount));
+                END_IF
             ELSIF (CommandType = 'GET_COORD1_DEBUG') THEN
                 // Coord1 bind/tracking inspector (Phase 1). Echoes the raw
                 // conveyor pulse, bind state, ref/scale, and the per-scan
                 // drifting OriginNow used by frame=coord1 G1. Read-only.
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
-                ResponsePacketPointer^.ele_count := 14;
+                ResponsePacketPointer^.ele_count := 19;
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('bound'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := GVL.Coord1Bound);
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('mode'));
+                IF GVL.Coord1CamMode = GVL.COORD1_MODE_TABLE THEN
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('table'));
+                ELSE
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('linear'));
+                END_IF
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('cam_n'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.Coord1CamCount));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('cam_first'));
+                IF GVL.Coord1CamCount > 0 THEN
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := GVL.Coord1CamMaster[0]);
+                ELSE
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := 0);
+                END_IF
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('cam_last'));
+                IF GVL.Coord1CamCount > 0 THEN
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := GVL.Coord1CamMaster[GVL.Coord1CamCount - 1]);
+                ELSE
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := 0);
+                END_IF
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('pulse_raw'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := GVL.ConveyorPulseRaw);
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ref_pulse'));
@@ -772,6 +1025,8 @@ PROGRAM AxisGroupSM
                 ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.Coord1BindCount));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('bind_busy_nak'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.Coord1BindBusyNakCount));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('bad_table_nak'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.Coord1BadTableNakCount));
             ELSE
                 // Unknown SYS command -- emit NAK so the TS caller doesn't hang on timeout.
                 ShouldReturn := TRUE;
