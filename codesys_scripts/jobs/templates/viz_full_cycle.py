@@ -329,7 +329,7 @@ def render(samples, events, out_path):
         ax_xz.annotate(ev["name"], (arm_x[idx], arm_z[idx]),
                        fontsize=7, color=PHASE_COLORS.get(ev["name"], "k"))
     ax_xz.set_xlabel("WCS X (mm)"); ax_xz.set_ylabel("WCS Z (mm)")
-    ax_xz.set_title("XZ side view (Z-200 = pick depth)")
+    ax_xz.set_title("XZ side view")
     ax_xz.legend(loc="best"); ax_xz.grid(True, alpha=0.3)
 
     # XYZ vs time
