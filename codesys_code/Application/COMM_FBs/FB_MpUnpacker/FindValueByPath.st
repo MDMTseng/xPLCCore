@@ -79,8 +79,11 @@ END_VAR
 			nEndBracketPos := FIND(sRemainingPath, ']');
 			IF nEndBracketPos = 0 THEN RETURN; END_IF;
 			
-			// Extract the index string, e.g., "55" from "[55]"
-			sSegment := MID(sRemainingPath, 2, DINT_TO_INT(nEndBracketPos - 2));
+			// Extract the index string, e.g., "55" from "[55]".
+			// CODESYS MID(IN, LEN, POS): LEN chars starting at POS (1-based).
+			// Pre-fix this passed (2, N-2) -- LEN=2 swallowed the leading '['
+			// for indices >= 1, silently returning element 0 for every path.
+			sSegment := MID(sRemainingPath, DINT_TO_INT(nEndBracketPos - 2), 2);
 			nTargetIndex := STRING_TO_DINT(sSegment);
 			
 			// Handle array header based on marker
