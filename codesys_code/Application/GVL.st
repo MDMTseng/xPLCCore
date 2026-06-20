@@ -283,6 +283,31 @@ VAR_GLOBAL
 	   0 = no fault. *)
 	LastAxesErrorIDs : ARRAY[0..3] OF UINT;
 
+	(* --- Conveyor tracking / coord1 bind state (Phase 1 scaffold).
+	   ConveyorPulseRaw is the per-scan-fresh DINT pulse count from the
+	   conveyor encoder. Phase 1 leaves it as a plain forceable variable
+	   (no EC slave yet); once the encoder slave is added to the hardware
+	   tree, map the PDO directly onto this symbol so the assignment
+	   here becomes a no-op alias.
+
+	   COORD1_BIND SYS handler writes Coord1RefPulse / Coord1RefXyz /
+	   Coord1Scale and sets Coord1Bound. While Coord1Bound, the cyclic
+	   path in AxisGroupSM recomputes Coord1OriginNow each scan as:
+	     OriginNow[i] = RefXyz[i] + (Pulse - RefPulse) / Scale[i]
+	   With Scale[i]=0 the axis is treated as locked (origin stays at
+	   RefXyz[i]); only the belt-direction axis needs a non-zero scale.
+
+	   G1 with frame="coord1" adds OriginNow to the raw target before
+	   handing to MoveLinearAbsolute. coord0 path is unaffected. *)
+	ConveyorPulseRaw     : DINT := 0;
+	Coord1Bound          : BOOL := FALSE;
+	Coord1RefPulse       : DINT := 0;
+	Coord1RefXyz         : ARRAY [0..2] OF LREAL := [0.0, 0.0, 0.0];
+	Coord1Scale          : ARRAY [0..2] OF LREAL := [0.0, 0.0, 0.0];
+	Coord1OriginNow      : ARRAY [0..2] OF LREAL := [0.0, 0.0, 0.0];
+	Coord1BindCount      : UDINT := 0;
+	Coord1BindBusyNakCount : UDINT := 0;
+
 	(* Build provenance stamped by codesys_scripts/jobs/stamp_build_info.py
 	   right before push (import_all). Lets an external tool answer "is the
 	   running PLC the same commit as the repo?" without IDE assistance.

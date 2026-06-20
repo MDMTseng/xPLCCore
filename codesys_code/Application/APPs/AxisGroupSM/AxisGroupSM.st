@@ -338,6 +338,32 @@ PROGRAM AxisGroupSM
     GVL.LastAxesErrorIDs[2] := IoConfig_Globals.EAxis2.uiDriveInterfaceError;
     GVL.LastAxesErrorIDs[3] := reelpullmotor.uiDriveInterfaceError;
 
+    // Per-scan Coord1 origin recompute (conveyor tracking, Phase 1).
+    // When bound, OriginNow drifts with the conveyor pulse so that a G1
+    // target expressed in coord1 corresponds to the same physical point
+    // on the belt regardless of belt advance. Scale[i]=0 locks that axis
+    // to RefXyz (only the belt direction needs a non-zero scale).
+    IF GVL.Coord1Bound THEN
+        IF GVL.Coord1Scale[0] <> 0.0 THEN
+            GVL.Coord1OriginNow[0] := GVL.Coord1RefXyz[0]
+                + LREAL#1.0 * (GVL.ConveyorPulseRaw - GVL.Coord1RefPulse) / GVL.Coord1Scale[0];
+        ELSE
+            GVL.Coord1OriginNow[0] := GVL.Coord1RefXyz[0];
+        END_IF
+        IF GVL.Coord1Scale[1] <> 0.0 THEN
+            GVL.Coord1OriginNow[1] := GVL.Coord1RefXyz[1]
+                + LREAL#1.0 * (GVL.ConveyorPulseRaw - GVL.Coord1RefPulse) / GVL.Coord1Scale[1];
+        ELSE
+            GVL.Coord1OriginNow[1] := GVL.Coord1RefXyz[1];
+        END_IF
+        IF GVL.Coord1Scale[2] <> 0.0 THEN
+            GVL.Coord1OriginNow[2] := GVL.Coord1RefXyz[2]
+                + LREAL#1.0 * (GVL.ConveyorPulseRaw - GVL.Coord1RefPulse) / GVL.Coord1Scale[2];
+        ELSE
+            GVL.Coord1OriginNow[2] := GVL.Coord1RefXyz[2];
+        END_IF
+    END_IF
+
     InitRuntime();
 
     // Virtual-motors TTL gate. Derive GVL.bVirtualMotorsMode from
@@ -711,6 +737,41 @@ PROGRAM AxisGroupSM
                 ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(IoTriggerCount));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('flyevent_avail'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(FlyEventAvailableCount));
+            ELSIF (CommandType = 'GET_COORD1_DEBUG') THEN
+                // Coord1 bind/tracking inspector (Phase 1). Echoes the raw
+                // conveyor pulse, bind state, ref/scale, and the per-scan
+                // drifting OriginNow used by frame=coord1 G1. Read-only.
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 14;
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('bound'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := GVL.Coord1Bound);
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('pulse_raw'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := GVL.ConveyorPulseRaw);
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ref_pulse'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := GVL.Coord1RefPulse);
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ref_x'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(GVL.Coord1RefXyz[0]));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ref_y'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(GVL.Coord1RefXyz[1]));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ref_z'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(GVL.Coord1RefXyz[2]));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('scale_x'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(GVL.Coord1Scale[0]));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('scale_y'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(GVL.Coord1Scale[1]));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('scale_z'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(GVL.Coord1Scale[2]));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('origin_x'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(GVL.Coord1OriginNow[0]));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('origin_y'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(GVL.Coord1OriginNow[1]));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('origin_z'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(GVL.Coord1OriginNow[2]));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('bind_count'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.Coord1BindCount));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('bind_busy_nak'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.Coord1BindBusyNakCount));
             ELSE
                 // Unknown SYS command -- emit NAK so the TS caller doesn't hang on timeout.
                 ShouldReturn := TRUE;
