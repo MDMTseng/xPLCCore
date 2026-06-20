@@ -290,3 +290,19 @@ ReadMcsTransformFb(
     ErrorID => ,
     CoordTransform =>
 );
+
+// Phase 4 step 2 diagnostic: read kernel-side PCS_1 origin in WCS.
+// MC_TrackConveyorBelt mutates this every scan; comparing it to the
+// host-side prediction (GVL.Coord1OriginNow, formula-driven from
+// RefXyz/RefPulse/Scale) confirms the FB is actually tracking the
+// belt rather than holding a stale snapshot.
+ReadPcs1TransformFb(
+    AxisGroup := AxisGroupManagerFb._agAxisGroup,
+    Enable := TRUE,
+    CoordSystem := SMC_COORD_SYSTEM.PCS_1,
+    Valid => ,
+    Busy => ,
+    Error => ,
+    ErrorID => ,
+    CoordTransform => Pcs1KernelTransform
+);

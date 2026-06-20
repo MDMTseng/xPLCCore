@@ -95,6 +95,14 @@ PROGRAM AxisGroupSM
         trackConveyorBeltFb : MC_TrackConveyorBelt;
         Coord1BeltOriginRef : MC_COORD_REF;
 
+        (* Phase 4 step 2 diagnostic: read what the kernel currently
+           thinks PCS_1's origin is in WCS. This is the source of truth
+           for what G1 frame=1 actually targets, and lets us verify
+           MC_TrackConveyorBelt is doing its job by diffing it against
+           GVL.Coord1OriginNow (the host-side prediction). *)
+        ReadPcs1TransformFb : MC_ReadCoordinateTransform;
+        Pcs1KernelTransform : MC_COORD_REF;
+
         MotionPose: SM3_Robotics.SMC_POS_REF := ( c := (x := 0.0, y := 0.0, z := 0.0, a := 0.0));
 
         PacketType: STRING;
@@ -1008,7 +1016,7 @@ PROGRAM AxisGroupSM
                 // sanity-check visibility only). Read-only.
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
-                ResponsePacketPointer^.ele_count := 19;
+                ResponsePacketPointer^.ele_count := 25;
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('bound'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := GVL.Coord1Bound);
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('mode'));
@@ -1059,6 +1067,29 @@ PROGRAM AxisGroupSM
                 ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.Coord1BindBusyNakCount));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('bad_table_nak'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.Coord1BadTableNakCount));
+                // Phase 4 step 2 kernel-side diagnostic. Two forms:
+                //   kernel_origin_*  = static ConveyorBeltOrigin (what
+                //                      MC_ReadCoordinateTransform reports;
+                //                      = ref_xyz - ref_pulse * pulse_to_mm).
+                //   live_kernel_origin_* = kernel static + current encoder
+                //                      position * belt_direction. Belt is
+                //                      pinned to +X by the bind-time gate,
+                //                      so only X gets the encoder add.
+                //                      This is the LIVE WCS point that
+                //                      G1 frame=1 Position=(0,0,0) targets.
+                // Cross-check: prediction (origin_*) should equal live_kernel.
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('kernel_origin_x'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(Pcs1KernelTransform.X));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('kernel_origin_y'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(Pcs1KernelTransform.Y));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('kernel_origin_z'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(Pcs1KernelTransform.Z));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('live_kernel_origin_x'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(Pcs1KernelTransform.X + ConveyorEncoderAxis.fActPosition));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('live_kernel_origin_y'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(Pcs1KernelTransform.Y));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('live_kernel_origin_z'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(Pcs1KernelTransform.Z));
             ELSE
                 // Unknown SYS command -- emit NAK so the TS caller doesn't hang on timeout.
                 ShouldReturn := TRUE;
