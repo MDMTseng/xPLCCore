@@ -300,6 +300,24 @@ VAR_GLOBAL
 	   G1 with frame="coord1" adds OriginNow to the raw target before
 	   handing to MoveLinearAbsolute. coord0 path is unaffected. *)
 	ConveyorPulseRaw     : DINT := 0;
+
+	(* Synthetic pulse generator. Used before the real EC encoder slave
+	   exists, so Phase 4 (MC_TrackConveyorBelt) can be exercised without
+	   hardware. When ConveyorPulseSyntheticEnable=TRUE, the per-scan
+	   compute in AxisGroupSM advances ConveyorPulseRaw by Step and wraps
+	   at 16 bits:
+	     ConveyorPulseRaw := (ConveyorPulseRaw + Step) AND 16#FFFF
+	   Default OFF so existing Phase 1/2 force-pulse probes still see a
+	   stable value when they unforce. Step is the per-EC-scan delta;
+	   with 1ms EC tick a Step of 1 = 1000 pulses/s. Toggle via daemon:
+	     oapp.set_prepared_value('GVL.ConveyorPulseSyntheticEnable','TRUE')
+	     oapp.force_prepared_values()
+	   Caveat: the 16-bit wrap will jump ConveyorPulseRaw 65535 -> 0
+	   under steady running. Tests that bind COORD1 across a wrap will
+	   see the belt origin jump. Disable + force a clean value if needed. *)
+	ConveyorPulseSyntheticEnable : BOOL := FALSE;
+	ConveyorPulseSyntheticStep   : DINT := 1;
+
 	Coord1Bound          : BOOL := FALSE;
 	Coord1RefPulse       : DINT := 0;
 	Coord1RefXyz         : ARRAY [0..2] OF LREAL := [0.0, 0.0, 0.0];

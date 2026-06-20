@@ -372,6 +372,13 @@ PROGRAM AxisGroupSM
     GVL.LastAxesErrorIDs[2] := IoConfig_Globals.EAxis2.uiDriveInterfaceError;
     GVL.LastAxesErrorIDs[3] := reelpullmotor.uiDriveInterfaceError;
 
+    // Synthetic conveyor pulse generator (Phase 4 testing). Runs BEFORE
+    // Coord1OriginNow recompute so this scan's offset uses the freshly
+    // advanced pulse. Disabled by default; toggle via daemon force.
+    IF GVL.ConveyorPulseSyntheticEnable THEN
+        GVL.ConveyorPulseRaw := (GVL.ConveyorPulseRaw + GVL.ConveyorPulseSyntheticStep) AND 16#FFFF;
+    END_IF;
+
     // Per-scan Coord1 origin recompute (conveyor tracking, Phase 1/2).
     // When bound, OriginNow drifts with the conveyor pulse so that a G1
     // target expressed in coord1 corresponds to the same physical point
