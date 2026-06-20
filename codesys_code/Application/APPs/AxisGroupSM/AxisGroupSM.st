@@ -73,6 +73,16 @@ PROGRAM AxisGroupSM
         MoveLinearAbsoluteFb: SM3_Robotics.MC_MoveLinearAbsolute;
         GroupWaitFb: SM3_Robotics.SMC_GroupWait;
 
+        (* Phase 4: conveyor encoder bridge. ConveyorEncoderAxis is an
+           SMC_VirtualDrive added to the SoftMotion General Axis Pool by
+           codesys_scripts/jobs/_oneoff/add_conveyor_axis.py. We power it
+           up once and write GVL.ConveyorPulseRaw (scaled by mm/pulse)
+           into fSetPosition every scan, so MC_TrackConveyorBelt can use
+           it as a real SM3 axis reference even before the hardware
+           encoder exists. *)
+        conveyorPower : MC_Power;
+        Coord1PulseToMm : LREAL := 0.01;   // calibration: 1 pulse = 0.01 mm
+
         MotionPose: SM3_Robotics.SMC_POS_REF := ( c := (x := 0.0, y := 0.0, z := 0.0, a := 0.0));
 
         PacketType: STRING;
@@ -378,6 +388,20 @@ PROGRAM AxisGroupSM
     IF GVL.ConveyorPulseSyntheticEnable THEN
         GVL.ConveyorPulseRaw := (GVL.ConveyorPulseRaw + GVL.ConveyorPulseSyntheticStep) AND 16#FFFF;
     END_IF;
+
+    // Phase 4 bridge: power the conveyor virtual axis + drive its
+    // position from ConveyorPulseRaw. Write BOTH fSetPosition and
+    // fActPosition: the virtual drive's internal controller has a
+    // velocity limit that makes fActPosition lag fSetPosition under
+    // fast changes (observed ~400mm lag at synthetic step=200). For
+    // a pure encoder-bridge use case the controller dynamics are
+    // unwanted -- writing fActPosition directly makes the axis behave
+    // as a pure position sensor. MC_TrackConveyorBelt reads
+    // fActPosition, so this is the field that matters.
+    conveyorPower(Axis := ConveyorEncoderAxis, Enable := TRUE,
+                  bRegulatorOn := TRUE, bDriveStart := TRUE);
+    ConveyorEncoderAxis.fSetPosition := TO_LREAL(GVL.ConveyorPulseRaw) * Coord1PulseToMm;
+    ConveyorEncoderAxis.fActPosition := TO_LREAL(GVL.ConveyorPulseRaw) * Coord1PulseToMm;
 
     // Per-scan Coord1 origin recompute (conveyor tracking, Phase 1/2).
     // When bound, OriginNow drifts with the conveyor pulse so that a G1
