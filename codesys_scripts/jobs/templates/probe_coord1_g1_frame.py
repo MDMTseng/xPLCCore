@@ -62,14 +62,14 @@ oapp.unforce_all_values()
 """)
 
 
-def read_counter():
+def read_counter_named(name):
     out = daemon_exec("""
 proj = projects.primary
 app = next(iter(proj.find("Application", True)))
 oapp = online.create_online_application(app)
 oapp.login(OnlineChangeOption.Try, False)
-print("CTR=%s" % oapp.read_value("GVL.Coord1NotBoundNakCount"))
-""")
+print("CTR=%%s" %% oapp.read_value("GVL.%s"))
+""" % name)
     for line in out.splitlines():
         if line.startswith("CTR="):
             raw = line[4:].strip()
@@ -77,6 +77,10 @@ print("CTR=%s" % oapp.read_value("GVL.Coord1NotBoundNakCount"))
                 return int(raw.split("#", 1)[1].rstrip(")"))
             return int(raw)
     raise RuntimeError("counter line not found in: " + out)
+
+
+def read_counter():
+    return read_counter_named("Coord1NotBoundNakCount")
 
 
 def send_recv(sock, payload, timeout=2.0):
@@ -103,6 +107,7 @@ EV_POWER_ON              = 2
 EV_GROUP_ENABLE          = 4
 EV_HOME_GO_FORCE_SKIP    = 7
 EV_RESET                 = 8
+EV_ERROR                 = 9
 
 
 def state(sock):
@@ -156,17 +161,35 @@ def main():
     sock = socket.socket()
     sock.connect(PLC)
     sock.settimeout(2.0)
+    try:
+        return _main_inner(sock)
+    finally:
+        # Belt-and-suspenders: always release any force pins we set, even
+        # on KeyboardInterrupt or assertion-driven exit. Leaving
+        # GVL.Coord1Bound force-pinned FALSE would silently NAK every
+        # production frame=1 G1 until someone unforces in the IDE.
+        try:
+            unforce_all()
+        except Exception as e:
+            print("unforce_all on exit FAILED:", e)
+        sock.close()
+
+
+def _main_inner(sock):
+    print("--- force PLC through Error->Reset to clear any group_error_stop ---")
+    # Idempotent reset: even if FSM thinks it's Ready, the underlying
+    # SMC group can carry GroupErrorStop=TRUE from a prior G1 (virtual
+    # axes self-halt after first move per memory smc_virtual_axis_self_halt).
+    # Walk Error->UnInited unconditionally; subsequent climb handles the rest.
+    send_recv(sock, {"type": "SYS", "cmd": "GA_EV", "ev": EV_ERROR})
+    time.sleep(0.4)
+    ping(sock)
+    send_recv(sock, {"type": "SYS", "cmd": "GA_EV", "ev": EV_RESET})
+    time.sleep(0.4)
+    ping(sock)
+    print("    state after reset =", state(sock))
 
     print("--- drive PLC to Ready ---")
-    if not drive_to_ready(sock):
-        print("PLC could not reach Ready -- aborting")
-        sock.close()
-        return 2
-    # The Ready->coord-configured leap requires SetCoord0/1 (type:M).
-    # Send SetCoord0 now so the G1 frame branch is reachable.
-    r = send_recv(sock, {"type": "M", "cmd": "SetCoord0"})
-    print("    SetCoord0 reply:", r)
-
     passed = 0
     failed = 0
     def need(cond, msg):
@@ -177,6 +200,20 @@ def main():
         else:
             failed += 1
             print("  FAIL:", msg)
+
+    if not drive_to_ready(sock):
+        print("PLC could not reach Ready -- aborting")
+        return 2
+    # The Ready->coord-configured leap requires SetCoord0/1 (type:M).
+    # Send SetCoord0 now so the G1 frame branch is reachable.
+    r = send_recv(sock, {"type": "M", "cmd": "SetCoord0"})
+    print("    SetCoord0 reply:", r)
+
+    # Order matters: NAK-path tests (T1, T4) FIRST -- they don't invoke
+    # MoveLinearAbsolute so the virtual axes don't self-halt. The
+    # accept-path tests (T2, T3) come last; the first accepted G1 trips
+    # the virtual halt and any subsequent motion packet NAKs with
+    # group_error_stop -- T3 tolerates that via the counter assertion.
 
     ping(sock)
     print("--- T1: G1 frame=1 with Coord1Bound=FALSE -> coord1_not_bound NAK ---")
@@ -196,7 +233,21 @@ def main():
     need(n1 == n0 + 1, "Coord1NotBoundNakCount incremented by 1")
 
     ping(sock)
-    print("--- T2: COORD1_BIND linear + G1 frame=1 -> no coord1_not_bound NAK ---")
+    print("--- T4: G1 frame=99 (unknown) -> bad_frame NAK ---")
+    bn0 = read_counter_named("Coord1BadFrameNakCount")
+    r = send_recv(sock, {"type": "M", "cmd": "G1",
+                         "frame": 99,
+                         "X": 9999.0, "Y": 9999.0, "Z": 9999.0, "F": 100.0})
+    time.sleep(0.2)
+    bn1 = read_counter_named("Coord1BadFrameNakCount")
+    print("    reply =", r)
+    print("    Coord1BadFrameNakCount %d -> %d" % (bn0, bn1))
+    need(r is not None and r.get("ack") is False
+         and r.get("err") == "bad_frame", "NAK err='bad_frame'")
+    need(bn1 == bn0 + 1, "Coord1BadFrameNakCount incremented by 1")
+
+    ping(sock)
+    print("--- T2: COORD1_BIND linear + G1 frame=1 -> accept ---")
     unforce_all()  # release the T1 force on Coord1Bound so the bind handler can flip it TRUE
     time.sleep(0.2)
     r = send_recv(sock, {"type": "SYS", "cmd": "COORD1_BIND",
@@ -217,7 +268,7 @@ def main():
          "Coord1NotBoundNakCount UNCHANGED while bound")
 
     ping(sock)
-    print("--- T3: regression G1 frame=0 -> no coord1_not_bound NAK ---")
+    print("--- T3: regression G1 frame=0 (may NAK group_error_stop on virtual halt) ---")
     n0 = read_counter()
     r = send_recv(sock, {"type": "M", "cmd": "G1",
                          "frame": 0,
@@ -230,7 +281,6 @@ def main():
          "Coord1NotBoundNakCount UNCHANGED on frame=0 (legacy)")
 
     print("\n%d passed, %d failed" % (passed, failed))
-    sock.close()
     return 0 if failed == 0 else 1
 
 
