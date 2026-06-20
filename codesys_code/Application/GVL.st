@@ -337,6 +337,7 @@ VAR_GLOBAL
 	Coord1CamZ                 : ARRAY [0..63] OF REAL;
 	Coord1ConflictNakCount     : UDINT := 0;
 	Coord1BadTableNakCount     : UDINT := 0;
+	Coord1NotBoundNakCount     : UDINT := 0;
 	COORD1_CAM_MAX_POINTS      : INT := 64;
 
 	(* Build provenance stamped by codesys_scripts/jobs/stamp_build_info.py

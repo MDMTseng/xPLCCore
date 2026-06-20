@@ -274,6 +274,12 @@ PROGRAM AxisGroupSM
     // MovmentProgressTrigger (default 20) and DistanceTrigger (120).
     FlyEventTriggerSelect : INT;
     MotionPoseTempReal : REAL;
+    // Phase 3: G1 `frame` field. 0=coord0 (raw target, default/legacy),
+    // 1=coord1 (target offset by GVL.Coord1OriginNow at MC call site).
+    // MotionPose itself stays in user/coord0 frame so the "previous XYZ"
+    // default-value semantics on subsequent G1s remain unchanged.
+    G1FrameTag : INT;
+    G1TargetPose : SM3_Robotics.SMC_POS_REF;
     PrevMotionStateId : SMC_Movement_Id; // For MotionStateString change detection
     PrevMotionStateProgress : REAL := -1.0; // Force initial update
     G1AbortMode : BOOL; // TRUE = BufferMode.Aborting, interrupts current move

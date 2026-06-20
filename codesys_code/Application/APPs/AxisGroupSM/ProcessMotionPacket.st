@@ -539,13 +539,35 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
             TransitionParameter[0] := CornerTransition;
             G1AbortMode := MessageUnpackerFb.TryReadBool('abort', FALSE);
 
+            // Phase 3: optional `frame` selects target coordinate frame.
+            // 0 (default) = legacy/coord0 -- MotionPose drives MC directly.
+            // 1 = coord1 (conveyor tracking) -- requires an active bind;
+            // MotionPose is treated as a point in the tracking frame and
+            // Coord1OriginNow[X/Y/Z] is added at the MC call site only.
+            // MotionPose stays in the user frame so the "previous XYZ"
+            // default semantics of subsequent G1s are not poisoned by the
+            // offset. Bad frame value is silently treated as coord0.
+            G1FrameTag := TO_INT(MessageUnpackerFb.TryReadINT64('frame', 0));
+            G1TargetPose := MotionPose;
+            IF (G1FrameTag = 1 AND GVL.Coord1Bound) THEN
+                G1TargetPose.c.X := MotionPose.c.X + GVL.Coord1OriginNow[0];
+                G1TargetPose.c.Y := MotionPose.c.Y + GVL.Coord1OriginNow[1];
+                G1TargetPose.c.Z := MotionPose.c.Z + GVL.Coord1OriginNow[2];
+            END_IF;
 
-
-
+            IF (G1FrameTag = 1 AND NOT GVL.Coord1Bound) THEN
+                ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('coord1_not_bound'));
+                GVL.Coord1NotBoundNakCount := GVL.Coord1NotBoundNakCount + 1;
+                ShouldReturn := TRUE;
+                CommandAck := FALSE;
+                GVL.minfo_buf_ridx.consumeTail();
+            ELSE
             MoveLinearAbsoluteFb(
                 AxisGroup := AxisGroupManagerFb._agAxisGroup,
                 Execute := 1,
-                Position := MotionPose,
+                Position := G1TargetPose,
                 Velocity := LatestFeedRate,
                 Acceleration := LatestAcceleration,
                 Deceleration := LatestDeceleration,
@@ -589,6 +611,7 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
             ELSE
                 RetryMotionCommandCooldown := RETRY_COOLDOWN_G1_MS;
             END_IF;
+            END_IF; // coord1-bind gate / MoveLinear
             END_IF; // dedupe / coord-gate / execute
 
         ELSIF (CommandType = 'getDigitalInputFlipCount') THEN
