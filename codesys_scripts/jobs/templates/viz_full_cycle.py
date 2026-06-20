@@ -104,7 +104,7 @@ oapp.unforce_all_values()
 time.sleep(0.2)
 oapp.set_prepared_value("GVL.bVirtualMotorsMode_Request","TRUE")
 oapp.set_prepared_value("GVL.ConveyorPulseSyntheticEnable","TRUE")
-oapp.set_prepared_value("GVL.ConveyorPulseSyntheticStep","5")
+oapp.set_prepared_value("GVL.ConveyorPulseSyntheticStep","2")
 oapp.force_prepared_values()
 for _ in range(20):
     v = str(oapp.read_value("GVL.bVirtualMotorsMode"))
@@ -173,23 +173,31 @@ def rebind(sock, samples):
     cur_pulse = int(s["pulse"]) if s else 0
     send_recv(sock, {"type":"SYS","cmd":"COORD1_UNBIND"})
     time.sleep(0.1)
+    # PCS_1 origin should land right at the arm rest (0,0,-150)+small
+    # so frame=1 G1 (0,0,±5) targets stay inside the delta workspace.
+    # X gets a tiny offset so the belt arrow isn't degenerate; the
+    # rebind per-phase re-anchors PCS_1 to current belt position anyway.
     r = send_recv(sock, {"type":"SYS","cmd":"COORD1_BIND",
                          "ref_pulse": cur_pulse,
-                         "ref_xyz":   [300.0, 50.0, 0.0],
+                         "ref_xyz":   [10.0, 0.0, -150.0],
                          "scale":     [100.0, 0.0, 0.0]})
     print("    rebind @ pulse=%d -> %s" % (cur_pulse, r))
     time.sleep(0.2)  # tcb edge + Done
 
 
+# Small-motion cycle. ref_xyz Z=-150 puts PCS_1 Z=0 at arm working
+# height, so frame=1 Z=+5 means "hover 5mm above belt" and Z=-5 means
+# "press 5mm below". For frame=0 the absolute WCS Z stays in
+# [-155, -145] (working height +/- 5mm).
 PHASES = [
-    {"name": "APPROACH",  "frame": 1, "xyz": (0.0, 0.0, -150.0)},
-    {"name": "PICK",      "frame": 1, "xyz": (0.0, 0.0, -200.0)},
-    {"name": "LIFT_TRK",  "frame": 1, "xyz": (0.0, 0.0, -150.0)},
-    {"name": "UNBIND",    "frame": None},  # SYS step, no motion
-    {"name": "TRANSIT",   "frame": 0, "xyz": (-100.0, -150.0, -150.0)},
-    {"name": "PLACE",     "frame": 0, "xyz": (-100.0, -150.0, -200.0)},
-    {"name": "LIFT_DROP", "frame": 0, "xyz": (-100.0, -150.0, -150.0)},
-    {"name": "HOME",      "frame": 0, "xyz": (0.0, 0.0, -150.0)},
+    {"name": "APPROACH",  "frame": 1, "xyz": ( 0.0,   0.0,    5.0)},   # hover above belt
+    {"name": "PICK",      "frame": 1, "xyz": ( 0.0,   0.0,   -5.0)},   # touch / press
+    {"name": "LIFT_TRK",  "frame": 1, "xyz": ( 0.0,   0.0,    5.0)},   # lift, still tracking
+    {"name": "UNBIND",    "frame": None},
+    {"name": "TRANSIT",   "frame": 0, "xyz": (-5.0,  -5.0, -145.0)},   # fly to drop zone hover
+    {"name": "PLACE",     "frame": 0, "xyz": (-5.0,  -5.0, -155.0)},   # place
+    {"name": "LIFT_DROP", "frame": 0, "xyz": (-5.0,  -5.0, -145.0)},   # lift
+    {"name": "HOME",      "frame": 0, "xyz": ( 0.0,   0.0, -145.0)},   # return
 ]
 
 
@@ -217,14 +225,14 @@ def _inner(sock):
     samples = []
     events  = []
 
-    print("--- enable synthetic belt step=5 (slow, 50 mm/s) ---")
+    print("--- enable synthetic belt step=2 (~20 mm/s, slow drift) ---")
     daemon_exec("""
 proj = projects.primary
 app = next(iter(proj.find("Application", True)))
 oapp = online.create_online_application(app)
 oapp.login(OnlineChangeOption.Try, False)
 oapp.set_prepared_value("GVL.ConveyorPulseSyntheticEnable","TRUE")
-oapp.set_prepared_value("GVL.ConveyorPulseSyntheticStep","5")
+oapp.set_prepared_value("GVL.ConveyorPulseSyntheticStep","2")
 oapp.force_prepared_values()
 """)
     time.sleep(0.2)
