@@ -575,16 +575,18 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
             TransitionParameter[0] := CornerTransition;
             G1AbortMode := MessageUnpackerFb.TryReadBool('abort', FALSE);
 
-            // frame=1: target = MotionPose (in tracking frame) + Coord1OriginNow.
-            // MotionPose stays in the tracking frame so subsequent omit-field
-            // G1s with frame=1 inherit the previous tracking-frame XYZ as
-            // intended. Coord1OriginNow is sampled here (one-shot snapshot,
-            // not slewed during the move).
+            // Phase 4 step 2: frame=1 simply switches CoordSystem to
+            // PCS_1. MC_TrackConveyorBelt keeps PCS_1 origin synced to
+            // the belt every scan, so MotionPose is interpreted as the
+            // tracking-frame target and the kernel handles the
+            // synchronized handover during the move (the prior
+            // hand-rolled "Coord1OriginNow add at MC call time" was a
+            // frozen-target approximation -- replaced by SM3 native FB).
             G1TargetPose := MotionPose;
             IF (G1FrameTag = 1) THEN
-                G1TargetPose.c.X := MotionPose.c.X + GVL.Coord1OriginNow[0];
-                G1TargetPose.c.Y := MotionPose.c.Y + GVL.Coord1OriginNow[1];
-                G1TargetPose.c.Z := MotionPose.c.Z + GVL.Coord1OriginNow[2];
+                G1CoordSystem := SMC_COORD_SYSTEM.PCS_1;
+            ELSE
+                G1CoordSystem := SMC_COORD_SYSTEM.WCS;
             END_IF;
 
             MoveLinearAbsoluteFb(
@@ -595,7 +597,7 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
                 Acceleration := LatestAcceleration,
                 Deceleration := LatestDeceleration,
                 Jerk := LatestJerk,
-                CoordSystem := SMC_COORD_SYSTEM.WCS,
+                CoordSystem := G1CoordSystem,
                 BufferMode := SEL(G1AbortMode,
                     SEL(CornerTransition >= 1, SM3_Common.MC_BUFFER_MODE.Buffered, SM3_Common.MC_BUFFER_MODE.BlendingNext),
                     SM3_Common.MC_BUFFER_MODE.Aborting),

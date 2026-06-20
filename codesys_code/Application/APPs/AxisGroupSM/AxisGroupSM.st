@@ -83,6 +83,18 @@ PROGRAM AxisGroupSM
         conveyorPower : MC_Power;
         Coord1PulseToMm : LREAL := 0.01;   // calibration: 1 pulse = 0.01 mm
 
+        (* Phase 4 step 2: MC_TrackConveyorBelt links PCS_1 to the
+           conveyor virtual axis. When Coord1Bound rises, the kernel
+           starts continuously updating PCS_1 origin in WCS as
+              PCS_1_origin = Coord1BeltOriginRef + ConveyorEncoderAxis.fActPosition * belt_direction
+           and any MC_MoveLinearAbsolute with CoordSystem := PCS_1 tracks
+           the belt automatically (the synchronized handover the host
+           wanted). belt direction = PCS_1 +X by SM3 convention; rotary
+           tables live in MC_TrackConveyorBelt's sibling MC_TrackRotaryTable
+           (a future Phase). *)
+        trackConveyorBeltFb : MC_TrackConveyorBelt;
+        Coord1BeltOriginRef : MC_COORD_REF;
+
         MotionPose: SM3_Robotics.SMC_POS_REF := ( c := (x := 0.0, y := 0.0, z := 0.0, a := 0.0));
 
         PacketType: STRING;
@@ -284,12 +296,14 @@ PROGRAM AxisGroupSM
     // MovmentProgressTrigger (default 20) and DistanceTrigger (120).
     FlyEventTriggerSelect : INT;
     MotionPoseTempReal : REAL;
-    // Phase 3: G1 `frame` field. 0=coord0 (raw target, default/legacy),
-    // 1=coord1 (target offset by GVL.Coord1OriginNow at MC call site).
-    // MotionPose itself stays in user/coord0 frame so the "previous XYZ"
-    // default-value semantics on subsequent G1s remain unchanged.
+    // Phase 3: G1 `frame` field. 0=coord0 (default/legacy, MoveLinearAbsolute
+    // CoordSystem := WCS), 1=coord1 (Phase 4 step 2: CoordSystem := PCS_1;
+    // MC_TrackConveyorBelt keeps PCS_1 synced to the belt). Tag is also
+    // gated by GVL.Coord1Bound at G1 dispatch time (frame=1 without bind
+    // NAKs with 'coord1_not_bound').
     G1FrameTag : INT;
     G1TargetPose : SM3_Robotics.SMC_POS_REF;
+    G1CoordSystem : SMC_COORD_SYSTEM;
     PrevMotionStateId : SMC_Movement_Id; // For MotionStateString change detection
     PrevMotionStateProgress : REAL := -1.0; // Force initial update
     G1AbortMode : BOOL; // TRUE = BufferMode.Aborting, interrupts current move
@@ -359,6 +373,10 @@ PROGRAM AxisGroupSM
     BindHasTable     : BOOL;
     BindReject       : BOOL;
     BindRejectReason : STRING(40);
+    // Phase 4 step 2: belt_kind dispatches the bind handler between
+    // MC_TrackConveyorBelt (linear, default) and MC_TrackRotaryTable
+    // (future). Empty / absent treated as 'linear' for backwards compat.
+    BindKind         : STRING(16);
 
     END_VAR
 (* =========== IMPLEMENTATION =========== *)
@@ -403,17 +421,32 @@ PROGRAM AxisGroupSM
     ConveyorEncoderAxis.fSetPosition := TO_LREAL(GVL.ConveyorPulseRaw) * Coord1PulseToMm;
     ConveyorEncoderAxis.fActPosition := TO_LREAL(GVL.ConveyorPulseRaw) * Coord1PulseToMm;
 
-    // Per-scan Coord1 origin recompute (conveyor tracking, Phase 1/2).
-    // When bound, OriginNow drifts with the conveyor pulse so that a G1
-    // target expressed in coord1 corresponds to the same physical point
-    // on the belt regardless of belt advance.
+    // Phase 4 step 2: edge-trigger MC_TrackConveyorBelt off GVL.Coord1Bound.
+    // COORD1_BIND handler atomically writes Coord1BeltOriginRef then sets
+    // Coord1Bound := TRUE; the rising edge here links PCS_1 to the belt.
+    // COORD1_UNBIND sets Coord1Bound := FALSE -> falling edge releases.
+    // Rebind during an active bind is rejected at the handler level
+    // (must UNBIND -> BIND) so we don't need a two-scan toggle dance.
+    trackConveyorBeltFb(
+        AxisGroup := AxisGroupManagerFb._agAxisGroup,
+        ConveyorBelt := ConveyorEncoderAxis,
+        ConveyorBeltOrigin := Coord1BeltOriginRef,
+        CoordSystem := SMC_COORD_SYSTEM.PCS_1,
+        Execute := GVL.Coord1Bound
+    );
+
+    // Per-scan Coord1 origin recompute -- DIAGNOSTIC ONLY (Phase 4 step 2).
+    // The real PCS_1 origin used by G1 frame=1 motion comes from
+    // MC_TrackConveyorBelt, not from this computation. We keep the linear
+    // formula running so GET_COORD1_DEBUG can report the host-side
+    // prediction of "where PCS_1 origin SHOULD be in WCS right now" --
+    // mismatch vs. the actual robot pose is a useful sanity check for
+    // wrong belt direction / wrong scale during commissioning.
     //   Linear mode: OriginNow[i] = RefXyz[i] + (Pulse-RefPulse)/Scale[i].
-    //                Scale[i]=0 locks that axis to RefXyz (only the belt
-    //                direction needs a non-zero scale).
-    //   Table  mode: binary-search master[] for the bracketing segment,
-    //                linearly interpolate x/y/z. Out-of-range pulse
-    //                clamps to first or last sample (no extrapolation;
-    //                cam profile is responsible for its own headroom).
+    //                Scale[i]=0 locks that axis (only the belt direction
+    //                needs a non-zero scale).
+    //   Table  mode: code path retained for symmetry but Phase 4 step 2
+    //                rejects cam_table bind, so this branch never fires.
     IF GVL.Coord1Bound THEN
         IF GVL.Coord1CamMode = GVL.COORD1_MODE_LINEAR THEN
                 IF GVL.Coord1Scale[0] <> 0.0 THEN
@@ -857,21 +890,37 @@ PROGRAM AxisGroupSM
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('flyevent_avail'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(FlyEventAvailableCount));
             ELSIF (CommandType = 'COORD1_BIND') THEN
-                // Bind / re-bind the coord1 tracking frame to the conveyor
-                // encoder. Linear mode (no cam_table): origin drifts at a
-                // constant rate per pulse via Scale[]. Table mode (cam_table
-                // present): origin follows a sampled master->offset curve,
-                // linearly interpolated between samples. Reject if the
-                // motion buffer is non-empty so the active move's coord
-                // frame doesn't change mid-flight.
+                // Bind the coord1 tracking frame to the conveyor encoder.
+                // Phase 4 step 2: PCS_1 is now driven by MC_TrackConveyorBelt
+                // -- the kernel keeps the PCS origin in sync with the belt
+                // continuously while we hold Coord1Bound TRUE. Linear belt
+                // along WCS +X only for this step; rotary tables + non-X
+                // belts + cam tables are all rejected here and routed
+                // through future bind kinds. Reject if motion buffer is
+                // non-empty so the active move's coord frame can't change
+                // mid-flight, and reject re-bind while already bound
+                // (caller must UNBIND first so the kernel sees a clean
+                // falling edge on the TCB Execute).
                 ShouldReturn := TRUE;
                 BindReject := FALSE;
                 BindRejectReason := '';
+
+                BindKind := MessageUnpackerFb.TryReadString('belt_kind', 'linear');
 
                 IF MotionBufferSize > 0 THEN
                     BindReject := TRUE;
                     BindRejectReason := 'coord_bind_busy';
                     GVL.Coord1BindBusyNakCount := GVL.Coord1BindBusyNakCount + 1;
+                END_IF
+
+                IF NOT BindReject AND BindKind <> 'linear' AND BindKind <> '' THEN
+                    BindReject := TRUE;
+                    BindRejectReason := 'belt_kind_not_yet_supported';
+                END_IF
+
+                IF NOT BindReject AND GVL.Coord1Bound THEN
+                    BindReject := TRUE;
+                    BindRejectReason := 'rebind_requires_unbind';
                 END_IF
 
                 IF NOT BindReject THEN
@@ -884,97 +933,29 @@ PROGRAM AxisGroupSM
                     GVL.Coord1Scale[1]   := TO_LREAL(MessageUnpackerFb.TryReadREAL('scale[1]', 0.0));
                     GVL.Coord1Scale[2]   := TO_LREAL(MessageUnpackerFb.TryReadREAL('scale[2]', 0.0));
 
-                    // Optional cam_table.master[] probe -> Table mode.
+                    // Optional cam_table.master[] probe; Phase 4 step 2
+                    // PCS_1 path is linear-only so we treat any cam_table
+                    // as a rejected request rather than trying to parse it.
                     BindHasTable := MessageUnpackerFb.TryReadObject('cam_table.master', ADR(fbCoord1CamUnpacker));
                 END_IF
 
                 IF NOT BindReject AND BindHasTable THEN
-                    fbCoord1CamUnpacker.UnpackNext();
-                    BindCamCount := fbCoord1CamUnpacker.uiLastCount;
-                    IF BindCamCount < 2 OR BindCamCount > TO_UINT(GVL.COORD1_CAM_MAX_POINTS) THEN
-                        BindReject := TRUE;
-                        BindRejectReason := 'coord_bind_bad_table';
-                        GVL.Coord1BadTableNakCount := GVL.Coord1BadTableNakCount + 1;
-                    END_IF
-                    IF NOT BindReject THEN
-                        // Read master[]; validate strictly ascending.
-                        BindPrevMaster := -16#7FFFFFFF;
-                        FOR BindCamIdx := 0 TO TO_INT(BindCamCount) - 1 DO
-                            fbCoord1CamUnpacker.UnpackNext();
-                            BindCurMaster := fbCoord1CamUnpacker.diLastDINT;
-                            IF BindCamIdx > 0 AND BindCurMaster <= BindPrevMaster THEN
-                                BindReject := TRUE;
-                                BindRejectReason := 'coord_bind_bad_table';
-                                GVL.Coord1BadTableNakCount := GVL.Coord1BadTableNakCount + 1;
-                                EXIT;
-                            END_IF
-                            GVL.Coord1CamMaster[BindCamIdx] := BindCurMaster;
-                            BindPrevMaster := BindCurMaster;
-                        END_FOR
-                    END_IF
-                    // Read x[]
-                    IF NOT BindReject THEN
-                        IF NOT MessageUnpackerFb.TryReadObject('cam_table.x', ADR(fbCoord1CamUnpacker)) THEN
-                            BindReject := TRUE;
-                            BindRejectReason := 'coord_bind_bad_table';
-                            GVL.Coord1BadTableNakCount := GVL.Coord1BadTableNakCount + 1;
-                        ELSE
-                            fbCoord1CamUnpacker.UnpackNext();
-                            BindAxisCount := fbCoord1CamUnpacker.uiLastCount;
-                            IF BindAxisCount <> BindCamCount THEN
-                                BindReject := TRUE;
-                                BindRejectReason := 'coord_bind_table_length_mismatch';
-                                GVL.Coord1BadTableNakCount := GVL.Coord1BadTableNakCount + 1;
-                            ELSE
-                                FOR BindCamIdx := 0 TO TO_INT(BindCamCount) - 1 DO
-                                    fbCoord1CamUnpacker.UnpackNext();
-                                    GVL.Coord1CamX[BindCamIdx] := fbCoord1CamUnpacker.rLastREAL;
-                                END_FOR
-                            END_IF
-                        END_IF
-                    END_IF
-                    // Read y[]
-                    IF NOT BindReject THEN
-                        IF NOT MessageUnpackerFb.TryReadObject('cam_table.y', ADR(fbCoord1CamUnpacker)) THEN
-                            BindReject := TRUE;
-                            BindRejectReason := 'coord_bind_bad_table';
-                            GVL.Coord1BadTableNakCount := GVL.Coord1BadTableNakCount + 1;
-                        ELSE
-                            fbCoord1CamUnpacker.UnpackNext();
-                            BindAxisCount := fbCoord1CamUnpacker.uiLastCount;
-                            IF BindAxisCount <> BindCamCount THEN
-                                BindReject := TRUE;
-                                BindRejectReason := 'coord_bind_table_length_mismatch';
-                                GVL.Coord1BadTableNakCount := GVL.Coord1BadTableNakCount + 1;
-                            ELSE
-                                FOR BindCamIdx := 0 TO TO_INT(BindCamCount) - 1 DO
-                                    fbCoord1CamUnpacker.UnpackNext();
-                                    GVL.Coord1CamY[BindCamIdx] := fbCoord1CamUnpacker.rLastREAL;
-                                END_FOR
-                            END_IF
-                        END_IF
-                    END_IF
-                    // Read z[]
-                    IF NOT BindReject THEN
-                        IF NOT MessageUnpackerFb.TryReadObject('cam_table.z', ADR(fbCoord1CamUnpacker)) THEN
-                            BindReject := TRUE;
-                            BindRejectReason := 'coord_bind_bad_table';
-                            GVL.Coord1BadTableNakCount := GVL.Coord1BadTableNakCount + 1;
-                        ELSE
-                            fbCoord1CamUnpacker.UnpackNext();
-                            BindAxisCount := fbCoord1CamUnpacker.uiLastCount;
-                            IF BindAxisCount <> BindCamCount THEN
-                                BindReject := TRUE;
-                                BindRejectReason := 'coord_bind_table_length_mismatch';
-                                GVL.Coord1BadTableNakCount := GVL.Coord1BadTableNakCount + 1;
-                            ELSE
-                                FOR BindCamIdx := 0 TO TO_INT(BindCamCount) - 1 DO
-                                    fbCoord1CamUnpacker.UnpackNext();
-                                    GVL.Coord1CamZ[BindCamIdx] := fbCoord1CamUnpacker.rLastREAL;
-                                END_FOR
-                            END_IF
-                        END_IF
-                    END_IF
+                    BindReject := TRUE;
+                    BindRejectReason := 'cam_table_not_supported_in_pcs_mode';
+                    GVL.Coord1BadTableNakCount := GVL.Coord1BadTableNakCount + 1;
+                END_IF
+
+                // Phase 4 step 2 belt-direction gates: belt must move
+                // along WCS +X (Scale[0] != 0, Scale[1] = Scale[2] = 0).
+                // Non-axial / 2D belt support means a non-zero
+                // ConveyorBeltOrigin.A rotation -- added when needed.
+                IF NOT BindReject AND (GVL.Coord1Scale[1] <> 0.0 OR GVL.Coord1Scale[2] <> 0.0) THEN
+                    BindReject := TRUE;
+                    BindRejectReason := 'belt_direction_not_axis_x';
+                END_IF
+                IF NOT BindReject AND GVL.Coord1Scale[0] = 0.0 THEN
+                    BindReject := TRUE;
+                    BindRejectReason := 'belt_scale_x_required';
                 END_IF
 
                 IF BindReject THEN
@@ -983,34 +964,48 @@ PROGRAM AxisGroupSM
                     ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
                     ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(BindRejectReason));
                 ELSE
-                    // Commit: flip mode + bound atomically (single scan; the
-                    // cyclic compute at top of scan won't observe a half-set
-                    // state because we're inside the SYS drain, which runs
-                    // after the per-scan recompute).
-                    IF BindHasTable THEN
-                        GVL.Coord1CamMode  := GVL.COORD1_MODE_TABLE;
-                        GVL.Coord1CamCount := TO_INT(BindCamCount);
-                    ELSE
-                        GVL.Coord1CamMode  := GVL.COORD1_MODE_LINEAR;
-                        GVL.Coord1CamCount := 0;
-                    END_IF
+                    // Commit (Phase 4 step 2): set the calibration + belt
+                    // origin first, then flip Coord1Bound TRUE -- the per-
+                    // scan tcb() at the top of the next scan picks up the
+                    // rising edge with the new origin already in place.
+                    // (SYS drain runs after the per-scan recompute, so an
+                    // edge fired this scan would use stale data.)
+                    Coord1PulseToMm := 1.0 / GVL.Coord1Scale[0];
+                    Coord1BeltOriginRef.X := GVL.Coord1RefXyz[0] - TO_LREAL(GVL.Coord1RefPulse) * Coord1PulseToMm;
+                    Coord1BeltOriginRef.Y := GVL.Coord1RefXyz[1];
+                    Coord1BeltOriginRef.Z := GVL.Coord1RefXyz[2];
+                    Coord1BeltOriginRef.A := 0.0;
+                    Coord1BeltOriginRef.B := 0.0;
+                    Coord1BeltOriginRef.C := 0.0;
+
+                    GVL.Coord1CamMode     := GVL.COORD1_MODE_LINEAR;
+                    GVL.Coord1CamCount    := 0;
                     GVL.Coord1Bound       := TRUE;
                     GVL.Coord1BindCount   := GVL.Coord1BindCount + 1;
                     CommandAck := TRUE;
                     ResponsePacketPointer^.ele_count := 2;
                     ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('mode'));
-                    IF BindHasTable THEN
-                        ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('table'));
-                    ELSE
-                        ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('linear'));
-                    END_IF
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('linear'));
                     ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('n'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.Coord1CamCount));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := 0);
                 END_IF
+            ELSIF (CommandType = 'COORD1_UNBIND') THEN
+                // Phase 4 step 2: drop GVL.Coord1Bound so the per-scan tcb()
+                // sees a falling edge and releases PCS_1. Required before
+                // a subsequent COORD1_BIND since rebind under an active
+                // Execute is rejected.
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                GVL.Coord1Bound := FALSE;
+                ResponsePacketPointer^.ele_count := 0;
+
             ELSIF (CommandType = 'GET_COORD1_DEBUG') THEN
-                // Coord1 bind/tracking inspector (Phase 1). Echoes the raw
-                // conveyor pulse, bind state, ref/scale, and the per-scan
-                // drifting OriginNow used by frame=coord1 G1. Read-only.
+                // Coord1 bind/tracking inspector. Echoes the raw conveyor
+                // pulse, bind state, ref/scale, and the per-scan diagnostic
+                // Coord1OriginNow (PRE-Phase-4-step-2 prediction of where
+                // PCS_1's origin should be in WCS -- the real motion path
+                // is the MC_TrackConveyorBelt FB; this field is for
+                // sanity-check visibility only). Read-only.
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
                 ResponsePacketPointer^.ele_count := 19;
