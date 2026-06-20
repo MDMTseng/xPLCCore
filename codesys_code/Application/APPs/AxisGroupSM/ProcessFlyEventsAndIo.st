@@ -64,6 +64,33 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
                 END_IF;
             END_IF;
 
+        FlyEventTriggerType.PulseTrigger:
+            // Phase 5: fire once GVL.ConveyorPulseRaw crosses the absolute
+            // pulse target. Forward-only (>= test) -- a reset of the
+            // conveyor encoder while events are pending will re-arm any
+            // event with target <= current pulse, so producers must
+            // re-issue M4s after a pulse-counter reset. TTL decay matches
+            // DistanceTrigger / MovmentProgressTrigger semantics.
+            IF (GVL.ConveyorPulseRaw >= FlyEventBuffer[Index].TargetPulseValue) THEN
+                TriggerActive := TRUE;
+                IF (FlyEventBuffer[Index].IoStageCount > 0) THEN
+                    FlyEventBuffer[Index].IoStageIndex := 0;
+                    FlyEventBuffer[Index].IoStageDelayCountdown := FlyEventBuffer[Index].IoStageDelay[0];
+                    FlyEventBuffer[Index].TriggerType := FlyEventTriggerType.SequenceDelayWait;
+                    IF (FlyEventBuffer[Index].IoStageDelayCountdown > 0) THEN
+                        TriggerActive := FALSE;
+                    END_IF;
+                END_IF;
+            ELSE
+                IF (FlyEventBuffer[Index].TimeToLiveMs > 0) THEN
+                    FlyEventBuffer[Index].TimeToLiveMs := FlyEventBuffer[Index].TimeToLiveMs - BusPeriod;
+                    IF (FlyEventBuffer[Index].TimeToLiveMs <= 0) THEN
+                        TriggerActive := TRUE;
+                        TriggerErrorCode := TRIGGER_TIMEOUT_ERR;
+                    END_IF;
+                END_IF;
+            END_IF;
+
         FlyEventTriggerType.SequenceDelayWait:
             IF (FlyEventBuffer[Index].IoStageIndex < FlyEventBuffer[Index].IoStageCount) THEN
                 FlyEventBuffer[Index].IoStageDelayCountdown := FlyEventBuffer[Index].IoStageDelayCountdown - BusPeriod;

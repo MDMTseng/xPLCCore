@@ -6,6 +6,7 @@ TYPE FlyEventTriggerType :
 	MovmentProgressTrigger := 20,
 	SequenceDelayWait := 25,
 
-	DistanceTrigger := 120
+	DistanceTrigger := 120,
+	PulseTrigger := 130
 );
 END_TYPE

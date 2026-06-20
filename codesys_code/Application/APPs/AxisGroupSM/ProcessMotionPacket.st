@@ -255,9 +255,13 @@
 					// 20 = MovmentProgressTrigger preserves legacy callers
 					// that omit the field. 120 = DistanceTrigger uses a
 					// Cartesian point + radius gate instead of motion_id.
+					// 130 = PulseTrigger gates on GVL.ConveyorPulseRaw
+					// threshold (Phase 5: conveyor pick).
 					FlyEventTriggerSelect := TO_INT(MessageUnpackerFb.TryReadINT64('trig', 20));
 					IF FlyEventTriggerSelect = 120 THEN
 						FlyEventTempData.TriggerType := FlyEventTriggerType.DistanceTrigger;
+					ELSIF FlyEventTriggerSelect = 130 THEN
+						FlyEventTempData.TriggerType := FlyEventTriggerType.PulseTrigger;
 					ELSE
 						FlyEventTempData.TriggerType := FlyEventTriggerType.MovmentProgressTrigger;
 					END_IF;
@@ -299,6 +303,13 @@
 					FlyEventTempData.TargetPos_Z := TO_LREAL(MessageUnpackerFb.TryReadREAL('tz', 0));
 					FlyEventTempData.TargetDistance := TO_LREAL(MessageUnpackerFb.TryReadREAL('td', 0));
 					FlyEventTempData.TriggerInBoundary := MessageUnpackerFb.TryReadINT64('tin', 1) <> 0;
+
+					// PulseTrigger payload (ignored by other trigger types). Default
+					// 0 means "fire immediately on next scan if ConveyorPulseRaw>=0",
+					// which for an idle conveyor (Pulse=0) and a forgotten field is
+					// safe-ish only with a positive TTL. Callers should supply an
+					// explicit pulse target.
+					FlyEventTempData.TargetPulseValue := TO_DINT(MessageUnpackerFb.TryReadINT64('pulse_target', 0));
 
 					FlyEventTempData.EventId := TO_DINT(MessageUnpackerFb.TryReadINT64('event_id', 0));
 
@@ -397,11 +408,13 @@
 					END_IF;
 
 					// Registration gate: progress trigger needs a real target movement id;
-					// distance trigger doesn't (it gates on Cartesian pose), so accept
-					// regardless of MotionTargetMovementId for that branch.
+					// distance + pulse triggers don't (they gate on Cartesian pose /
+					// conveyor pulse), so accept regardless of MotionTargetMovementId
+					// for those branches.
 					IF (FlyEventTempData.IoStageCount > 0
 					    AND (MotionTargetMovementId <> 0
-					         OR FlyEventTempData.TriggerType = FlyEventTriggerType.DistanceTrigger)) THEN
+					         OR FlyEventTempData.TriggerType = FlyEventTriggerType.DistanceTrigger
+					         OR FlyEventTempData.TriggerType = FlyEventTriggerType.PulseTrigger)) THEN
 
 						FOR Index := 0 TO TO_INT( FlyEventBufferSize - 1) DO
 

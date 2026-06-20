@@ -17,6 +17,16 @@ STRUCT
 	TargetDistance: LREAL;
 	TriggerInBoundary: BOOL;
 
+	(* trigger by conveyor pulse threshold (PulseTrigger).
+	   Fires once GVL.ConveyorPulseRaw >= TargetPulseValue. Caller supplies
+	   an ABSOLUTE pulse target (typical pattern: snapshot
+	   GVL.ConveyorPulseRaw at M4-issue time and add the desired pulse
+	   offset host-side, mirroring how DistanceTrigger takes an absolute
+	   WCS point). Single-shot, forward-only -- the >= test makes any
+	   future pulse >= target also fire, so callers in retrograde or
+	   reset-counter scenarios should clear FlyEvents first. *)
+	TargetPulseValue: DINT;
+
 
 
 
