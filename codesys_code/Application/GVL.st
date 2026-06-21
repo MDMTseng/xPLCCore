@@ -304,17 +304,14 @@ VAR_GLOBAL
 	(* Synthetic pulse generator. Used before the real EC encoder slave
 	   exists, so Phase 4 (MC_TrackConveyorBelt) can be exercised without
 	   hardware. When ConveyorPulseSyntheticEnable=TRUE, the per-scan
-	   compute in AxisGroupSM advances ConveyorPulseRaw by Step and wraps
-	   at 16 bits:
-	     ConveyorPulseRaw := (ConveyorPulseRaw + Step) AND 16#FFFF
-	   Default OFF so existing Phase 1/2 force-pulse probes still see a
-	   stable value when they unforce. Step is the per-EC-scan delta;
-	   with 1ms EC tick a Step of 1 = 1000 pulses/s. Toggle via daemon:
+	   compute in AxisGroupSM monotonically advances ConveyorPulseRaw
+	   by Step (DINT accumulation, no wrap -- 2.1e9 pulses of headroom
+	   covers a single test run). Default OFF so existing Phase 1/2
+	   force-pulse probes still see a stable value when they unforce.
+	   Step is the per-EC-scan delta; with 1ms EC tick a Step of 1
+	   gives 1000 pulses/s. Toggle via daemon:
 	     oapp.set_prepared_value('GVL.ConveyorPulseSyntheticEnable','TRUE')
-	     oapp.force_prepared_values()
-	   Caveat: the 16-bit wrap will jump ConveyorPulseRaw 65535 -> 0
-	   under steady running. Tests that bind COORD1 across a wrap will
-	   see the belt origin jump. Disable + force a clean value if needed. *)
+	     oapp.force_prepared_values() *)
 	ConveyorPulseSyntheticEnable : BOOL := FALSE;
 	ConveyorPulseSyntheticStep   : DINT := 1;
 
@@ -358,6 +355,36 @@ VAR_GLOBAL
 	Coord1NotBoundNakCount     : UDINT := 0;
 	Coord1BadFrameNakCount     : UDINT := 0;
 	COORD1_CAM_MAX_POINTS      : INT := 64;
+
+	(* Phase 4 step 3: tracking window + error reporting.
+	   Coord1ExitPulse: when ConveyorPulseRaw exceeds this, the active
+	   tracking is forcibly torn down and an EV_ERROR is fired so the
+	   host can't silently miss a pick that ran out of belt budget.
+	   Set by COORD1_BIND from ref_pulse + exit_pulse_offset.
+	   Sentinel value -1 means "no window check" (used by the SYS BIND
+	   path which is dev/test only -- production goes via FlyEvent BIND
+	   which always carries an exit_pulse_offset).
+	   Coord1BindEventId: host's correlation id, echoed in COORD1_ERROR. *)
+	Coord1ExitPulse            : DINT := -1;
+	Coord1BindEventId          : DINT := 0;
+	(* Snapshot taken at the instant the window-exit fault triggers, so
+	   the host can classify the failure (silent-quit vs ran-out-of-budget
+	   vs stuck) without having to keep polling these fields itself. *)
+	Coord1ErrPending           : BOOL := FALSE;
+	Coord1ErrAtMovementId      : ULINT := 0;
+	Coord1ErrAtProgress        : REAL := 0.0;
+	Coord1ErrAtPulse           : DINT := 0;
+	Coord1ErrAtArmX            : LREAL := 0.0;
+	Coord1ErrAtArmY            : LREAL := 0.0;
+	Coord1ErrAtArmZ            : LREAL := 0.0;
+	Coord1ErrAtPcsX            : LREAL := 0.0;
+	Coord1ErrAtPcsY            : LREAL := 0.0;
+	Coord1ErrAtPcsZ            : LREAL := 0.0;
+	Coord1ErrRefPulse          : DINT := 0;
+	Coord1ErrExitPulse         : DINT := 0;
+	Coord1ErrCount             : UDINT := 0;
+	Coord1FlyBindCount         : UDINT := 0;
+	Coord1FlyBindActiveCount   : UDINT := 0;
 
 	(* Build provenance stamped by codesys_scripts/jobs/stamp_build_info.py
 	   right before push (import_all). Lets an external tool answer "is the

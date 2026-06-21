@@ -175,6 +175,74 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
 
                 IoTriggerCount := IoTriggerCount + 1;
 
+            FlyEventActType.COORD1_BIND:
+                // Phase 4 step 3: apply the bind atomically when the
+                // FlyEvent fires (typically via PulseTrigger at a precise
+                // belt pulse). Belt is +X axis only for this phase, so
+                // BindScaleY/Z are required to be 0 and BindScaleX != 0.
+                // If we're already bound, this is a host-side sequencing
+                // bug -> raise EV_ERROR with reason 'rebind_active' so
+                // the operator sees a loud failure instead of a silent
+                // wrong target.
+                IF GVL.Coord1Bound THEN
+                    // Latch the error context using the FlyEvent's own
+                    // bookkeeping data so the host can correlate.
+                    GVL.Coord1ErrPending     := TRUE;
+                    GVL.Coord1ErrAtMovementId := CurrentMovementId;
+                    GVL.Coord1ErrAtProgress  := CurrentMovementIdProgress;
+                    GVL.Coord1ErrAtPulse     := GVL.ConveyorPulseRaw;
+                    GVL.Coord1ErrAtArmX      := ReadPosition.c.x;
+                    GVL.Coord1ErrAtArmY      := ReadPosition.c.y;
+                    GVL.Coord1ErrAtArmZ      := ReadPosition.c.z;
+                    GVL.Coord1ErrAtPcsX      := Pcs1KernelTransform.X;
+                    GVL.Coord1ErrAtPcsY      := Pcs1KernelTransform.Y;
+                    GVL.Coord1ErrAtPcsZ      := Pcs1KernelTransform.Z;
+                    GVL.Coord1ErrRefPulse    := 0;  // bind never happened, no ref
+                    GVL.Coord1ErrExitPulse   := GVL.Coord1ExitPulse;
+                    GVL.Coord1BindEventId    := FlyEventBuffer[Index].EventId;
+                    InputEvent := E_RobotEvent.EV_ERROR;
+                ELSIF FlyEventBuffer[Index].BindScaleX = 0.0
+                      OR FlyEventBuffer[Index].BindScaleY <> 0.0
+                      OR FlyEventBuffer[Index].BindScaleZ <> 0.0 THEN
+                    // Reject malformed bind -- same SM error path but with
+                    // different latched event context for the host.
+                    GVL.Coord1ErrPending     := TRUE;
+                    GVL.Coord1ErrAtPulse     := GVL.ConveyorPulseRaw;
+                    GVL.Coord1BindEventId    := FlyEventBuffer[Index].EventId;
+                    InputEvent := E_RobotEvent.EV_ERROR;
+                ELSE
+                    // Trigger fire pulse used as ref_pulse so the bind is
+                    // anchored at exactly the encoder value the host
+                    // scheduled it for. PulseTrigger fires the same scan
+                    // ConveyorPulseRaw first crosses TargetPulseValue, so
+                    // current GVL.ConveyorPulseRaw is the right anchor.
+                    Coord1PulseToMm := 1.0 / FlyEventBuffer[Index].BindScaleX;
+                    Coord1BeltOriginRef.X := FlyEventBuffer[Index].BindRefXyzX
+                                             - TO_LREAL(GVL.ConveyorPulseRaw) * Coord1PulseToMm;
+                    Coord1BeltOriginRef.Y := FlyEventBuffer[Index].BindRefXyzY;
+                    Coord1BeltOriginRef.Z := FlyEventBuffer[Index].BindRefXyzZ;
+                    Coord1BeltOriginRef.A := 0.0;
+                    Coord1BeltOriginRef.B := 0.0;
+                    Coord1BeltOriginRef.C := 0.0;
+                    GVL.Coord1RefPulse   := GVL.ConveyorPulseRaw;
+                    GVL.Coord1RefXyz[0]  := FlyEventBuffer[Index].BindRefXyzX;
+                    GVL.Coord1RefXyz[1]  := FlyEventBuffer[Index].BindRefXyzY;
+                    GVL.Coord1RefXyz[2]  := FlyEventBuffer[Index].BindRefXyzZ;
+                    GVL.Coord1Scale[0]   := FlyEventBuffer[Index].BindScaleX;
+                    GVL.Coord1Scale[1]   := 0.0;
+                    GVL.Coord1Scale[2]   := 0.0;
+                    GVL.Coord1ExitPulse  := GVL.ConveyorPulseRaw
+                                           + FlyEventBuffer[Index].BindExitPulseOffset;
+                    GVL.Coord1BindEventId := FlyEventBuffer[Index].EventId;
+                    GVL.Coord1CamMode    := GVL.COORD1_MODE_LINEAR;
+                    GVL.Coord1CamCount   := 0;
+                    GVL.Coord1Bound      := TRUE;
+                    GVL.Coord1FlyBindActiveCount := GVL.Coord1FlyBindActiveCount + 1;
+                END_IF;
+                GVL.Coord1FlyBindCount := GVL.Coord1FlyBindCount + 1;
+                FlyEventBuffer[Index].ActionType := FlyEventActType.NOP;
+                FlyEventBuffer[Index].TriggerType := FlyEventTriggerType.NOP;
+
             FlyEventActType.ACK_SRC_ID://send ack with source command id
                 // Drop-newest on overflow (SPSC race rationale in
                 // UpdateMotionProgress). FlyEvent state is cleared either way

@@ -249,7 +249,14 @@
 
 				IF (FlyEventAvailableCount > 3) THEN
 
-					FlyEventTempData.ActionType := FlyEventActType.PIN_OPERATION;
+					// Phase 4 step 3: 'action' field switches between pin
+					// operation (default, legacy) and scheduled COORD1_BIND.
+					M4ActionStr := MessageUnpackerFb.TryReadString('action', 'pin_op');
+					IF M4ActionStr = 'coord1_bind' THEN
+						FlyEventTempData.ActionType := FlyEventActType.COORD1_BIND;
+					ELSE
+						FlyEventTempData.ActionType := FlyEventActType.PIN_OPERATION;
+					END_IF;
 
 					// Optional 'trig' field selects trigger family. Default
 					// 20 = MovmentProgressTrigger preserves legacy callers
@@ -310,6 +317,18 @@
 					// safe-ish only with a positive TTL. Callers should supply an
 					// explicit pulse target.
 					FlyEventTempData.TargetPulseValue := TO_DINT(MessageUnpackerFb.TryReadINT64('pulse_target', 0));
+
+					// COORD1_BIND action payload (Phase 4 step 3). Only meaningful
+					// when ActionType = COORD1_BIND; other actions ignore. Pulled
+					// off the wire unconditionally to keep the parser simple --
+					// stale reads cost a handful of cycles, not correctness.
+					FlyEventTempData.BindRefXyzX := TO_LREAL(MessageUnpackerFb.TryReadREAL('ref_xyz[0]', 0));
+					FlyEventTempData.BindRefXyzY := TO_LREAL(MessageUnpackerFb.TryReadREAL('ref_xyz[1]', 0));
+					FlyEventTempData.BindRefXyzZ := TO_LREAL(MessageUnpackerFb.TryReadREAL('ref_xyz[2]', 0));
+					FlyEventTempData.BindScaleX  := TO_LREAL(MessageUnpackerFb.TryReadREAL('scale[0]', 0));
+					FlyEventTempData.BindScaleY  := TO_LREAL(MessageUnpackerFb.TryReadREAL('scale[1]', 0));
+					FlyEventTempData.BindScaleZ  := TO_LREAL(MessageUnpackerFb.TryReadREAL('scale[2]', 0));
+					FlyEventTempData.BindExitPulseOffset := TO_DINT(MessageUnpackerFb.TryReadINT64('exit_pulse_offset', 0));
 
 					FlyEventTempData.EventId := TO_DINT(MessageUnpackerFb.TryReadINT64('event_id', 0));
 
@@ -410,11 +429,19 @@
 					// Registration gate: progress trigger needs a real target movement id;
 					// distance + pulse triggers don't (they gate on Cartesian pose /
 					// conveyor pulse), so accept regardless of MotionTargetMovementId
-					// for those branches.
-					IF (FlyEventTempData.IoStageCount > 0
-					    AND (MotionTargetMovementId <> 0
-					         OR FlyEventTempData.TriggerType = FlyEventTriggerType.DistanceTrigger
-					         OR FlyEventTempData.TriggerType = FlyEventTriggerType.PulseTrigger)) THEN
+					// for those branches. COORD1_BIND action has no IO stages and
+					// MUST be paired with PulseTrigger (gates the bind on a precise
+					// conveyor pulse); refuse the registration otherwise so a host
+					// can't accidentally end up with a never-firing bind sitting in
+					// the slot.
+					IF (FlyEventTempData.ActionType = FlyEventActType.COORD1_BIND
+					    AND FlyEventTempData.TriggerType = FlyEventTriggerType.PulseTrigger
+					    AND FlyEventTempData.BindExitPulseOffset > 0)
+					   OR (FlyEventTempData.ActionType = FlyEventActType.PIN_OPERATION
+					       AND FlyEventTempData.IoStageCount > 0
+					       AND (MotionTargetMovementId <> 0
+					            OR FlyEventTempData.TriggerType = FlyEventTriggerType.DistanceTrigger
+					            OR FlyEventTempData.TriggerType = FlyEventTriggerType.PulseTrigger)) THEN
 
 						FOR Index := 0 TO TO_INT( FlyEventBufferSize - 1) DO
 

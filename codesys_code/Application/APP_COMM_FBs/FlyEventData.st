@@ -27,6 +27,19 @@ STRUCT
 	   reset-counter scenarios should clear FlyEvents first. *)
 	TargetPulseValue: DINT;
 
+	(* COORD1_BIND action payload (Phase 4 step 3). Only relevant when
+	   ActionType = COORD1_BIND. The FlyEvent's TriggerType decides when
+	   the bind fires (typically PulseTrigger so bind happens at a precise
+	   conveyor encoder value); this struct carries the bind parameters
+	   that the action handler writes into GVL.Coord1* when fired. *)
+	BindRefXyzX : LREAL;
+	BindRefXyzY : LREAL;
+	BindRefXyzZ : LREAL;
+	BindScaleX  : LREAL;
+	BindScaleY  : LREAL;
+	BindScaleZ  : LREAL;
+	BindExitPulseOffset : DINT;
+
 
 
 

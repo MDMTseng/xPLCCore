@@ -72,6 +72,12 @@ PROGRAM AxisGroupSM
 
         MoveLinearAbsoluteFb: SM3_Robotics.MC_MoveLinearAbsolute;
         GroupWaitFb: SM3_Robotics.SMC_GroupWait;
+        // Phase 4 step 3: emergency stop the arm when COORD1 tracking
+        // raises a fault. Fired on EV_ERROR rising edge alongside the
+        // event push so the arm doesn't keep chasing a stale belt
+        // target while the host is recovering.
+        GroupStopFb: SM3_Robotics.MC_GroupStop;
+        GroupStopExecute: BOOL := FALSE;
 
         (* Phase 4: conveyor encoder bridge. ConveyorEncoderAxis is an
            SMC_VirtualDrive added to the SoftMotion General Axis Pool by
@@ -385,6 +391,10 @@ PROGRAM AxisGroupSM
     // MC_TrackConveyorBelt (linear, default) and MC_TrackRotaryTable
     // (future). Empty / absent treated as 'linear' for backwards compat.
     BindKind         : STRING(16);
+    // Phase 4 step 3: M4 'action' field dispatches FlyEvent payload
+    // between pin operations (default, legacy) and COORD1_BIND
+    // (scheduled track bind at a specific belt pulse).
+    M4ActionStr      : STRING(16);
 
     END_VAR
 (* =========== IMPLEMENTATION =========== *)
@@ -411,8 +421,14 @@ PROGRAM AxisGroupSM
     // Synthetic conveyor pulse generator (Phase 4 testing). Runs BEFORE
     // Coord1OriginNow recompute so this scan's offset uses the freshly
     // advanced pulse. Disabled by default; toggle via daemon force.
+    // Monotonic DINT accumulation (no 16-bit wrap) so visualisations
+    // see a single straight ramp instead of sawtooth jumps. Real EC
+    // encoders also won't wrap inside a test run (~2.1e9 pulse headroom
+    // on a 32-bit signed counter), so this matches the eventual
+    // hardware path; the bridge code below already handles arbitrarily
+    // large values cleanly via TO_LREAL.
     IF GVL.ConveyorPulseSyntheticEnable THEN
-        GVL.ConveyorPulseRaw := (GVL.ConveyorPulseRaw + GVL.ConveyorPulseSyntheticStep) AND 16#FFFF;
+        GVL.ConveyorPulseRaw := GVL.ConveyorPulseRaw + GVL.ConveyorPulseSyntheticStep;
     END_IF;
 
     // Phase 4 bridge: power the conveyor virtual axis + drive its
@@ -588,6 +604,112 @@ PROGRAM AxisGroupSM
 
 
     UpdateMotionProgress();
+
+
+    // Phase 4 step 3: COORD1 tracking window-exit detector. Once Coord1
+    // is bound and the conveyor pulse has crossed Coord1ExitPulse, the
+    // pick window is over (either the arm caught up but spent too long
+    // grabbing, or it never caught up at all). Latch the diagnostic
+    // context for the COORD1_ERROR event push below and trigger EV_ERROR
+    // so the supervisor freezes the arm via MC_GroupStop. Coord1ExitPulse
+    // sentinel -1 means "no window check" (dev/test SYS BIND path).
+    // Skip when already in Error/UnInited so we don't re-latch each scan
+    // while the host is recovering.
+    IF GVL.Coord1Bound AND GVL.Coord1ExitPulse >= 0
+       AND GVL.ConveyorPulseRaw > GVL.Coord1ExitPulse
+       AND AxisGroupManagerFb._eState <> E_RobotState.Error
+       AND AxisGroupManagerFb._eState <> E_RobotState.UnInited THEN
+        GVL.Coord1ErrPending     := TRUE;
+        GVL.Coord1ErrAtMovementId := CurrentMovementId;
+        GVL.Coord1ErrAtProgress  := CurrentMovementIdProgress;
+        GVL.Coord1ErrAtPulse     := GVL.ConveyorPulseRaw;
+        GVL.Coord1ErrAtArmX      := ReadPosition.c.x;
+        GVL.Coord1ErrAtArmY      := ReadPosition.c.y;
+        GVL.Coord1ErrAtArmZ      := ReadPosition.c.z;
+        GVL.Coord1ErrAtPcsX      := Pcs1KernelTransform.X;
+        GVL.Coord1ErrAtPcsY      := Pcs1KernelTransform.Y;
+        GVL.Coord1ErrAtPcsZ      := Pcs1KernelTransform.Z;
+        GVL.Coord1ErrRefPulse    := GVL.Coord1RefPulse;
+        GVL.Coord1ErrExitPulse   := GVL.Coord1ExitPulse;
+        GVL.LastErrorSource      := 'Coord1:window_exit';
+        AxisGroupManagerFb.Transition(E_RobotEvent.EV_ERROR);
+    END_IF;
+
+
+    // Phase 4 step 3: MC_GroupStop while the FSM is in Error. Brings the
+    // arm to a controlled deceleration stop and locks the AxisGroup so
+    // no further motion goes through until EV_RESET cycles us out. Uses
+    // the latest G1's decel/jerk so the stop matches the motion profile
+    // the operator expected -- not a hard E-stop.
+    IF AxisGroupManagerFb._eState = E_RobotState.Error THEN
+        GroupStopExecute := TRUE;
+    ELSE
+        GroupStopExecute := FALSE;
+    END_IF;
+    GroupStopFb(
+        AxisGroup := AxisGroupManagerFb._agAxisGroup,
+        Execute := GroupStopExecute,
+        Deceleration := LatestDeceleration,
+        Jerk := LatestJerk
+    );
+
+
+    // Phase 4 step 3: emit a single COORD1_ERROR event when the
+    // window-exit detector latches a fault. Auto-unbind so a host that
+    // sees the event + state=Error can do its normal Reset->climb
+    // sequence and start the next cycle clean. Drop-newest on ring
+    // overflow per the SPSC rationale documented in UpdateMotionProgress.
+    IF GVL.Coord1ErrPending THEN
+        IF (GVL.reMP_info_ridx.space() > 0) THEN
+            EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+            MsgPakInfoClear(EventPacketPointer^);
+            EventPacketPointer^.ele_count := 15;
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('event'));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('name'));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('COORD1_ERROR'));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('event_id'));
+            EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := TO_LINT(GVL.Coord1BindEventId));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('ref_pulse'));
+            EventPacketPointer^.whead := MessagePackerFb.PackDINT(pStart := EventPacketPointer^.whead, diValue := GVL.Coord1ErrRefPulse);
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('exit_pulse'));
+            EventPacketPointer^.whead := MessagePackerFb.PackDINT(pStart := EventPacketPointer^.whead, diValue := GVL.Coord1ErrExitPulse);
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('pulse_at_err'));
+            EventPacketPointer^.whead := MessagePackerFb.PackDINT(pStart := EventPacketPointer^.whead, diValue := GVL.Coord1ErrAtPulse);
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('movement_id'));
+            EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := TO_LINT(GVL.Coord1ErrAtMovementId));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('mv_progress'));
+            EventPacketPointer^.whead := MessagePackerFb.PackREAL(pStart := EventPacketPointer^.whead, rValue := GVL.Coord1ErrAtProgress);
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('arm_x'));
+            EventPacketPointer^.whead := MessagePackerFb.PackREAL(pStart := EventPacketPointer^.whead, rValue := TO_REAL(GVL.Coord1ErrAtArmX));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('arm_y'));
+            EventPacketPointer^.whead := MessagePackerFb.PackREAL(pStart := EventPacketPointer^.whead, rValue := TO_REAL(GVL.Coord1ErrAtArmY));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('arm_z'));
+            EventPacketPointer^.whead := MessagePackerFb.PackREAL(pStart := EventPacketPointer^.whead, rValue := TO_REAL(GVL.Coord1ErrAtArmZ));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('pcs_x'));
+            EventPacketPointer^.whead := MessagePackerFb.PackREAL(pStart := EventPacketPointer^.whead, rValue := TO_REAL(GVL.Coord1ErrAtPcsX));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('pcs_y'));
+            EventPacketPointer^.whead := MessagePackerFb.PackREAL(pStart := EventPacketPointer^.whead, rValue := TO_REAL(GVL.Coord1ErrAtPcsY));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('pcs_z'));
+            EventPacketPointer^.whead := MessagePackerFb.PackREAL(pStart := EventPacketPointer^.whead, rValue := TO_REAL(GVL.Coord1ErrAtPcsZ));
+            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('runtime_ms'));
+            EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
+            MsgPakInfoWrapup(EventPacketPointer^);
+            GVL.reMP_info_ridx.pushHead();
+            GVL.Coord1ErrPending := FALSE;
+            GVL.Coord1ErrCount   := GVL.Coord1ErrCount + 1;
+            // Auto-release tracking so the next cycle starts clean.
+            GVL.Coord1Bound      := FALSE;
+            GVL.Coord1ExitPulse  := -1;
+        ELSE
+            GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
+            // No dedicated drop counter -- this should be rare; the ring
+            // would have to be saturated by ST_CHG / move_done / heartbeat
+            // events the operator hasn't read. The host still sees
+            // state=Error from the supervisor; only the diagnostic
+            // payload is lost.
+        END_IF;
+    END_IF;
 
 
     // Compute AxisGroupReady early so the unified packet-drain loop below
@@ -1016,7 +1138,7 @@ PROGRAM AxisGroupSM
                 // sanity-check visibility only). Read-only.
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
-                ResponsePacketPointer^.ele_count := 28;
+                ResponsePacketPointer^.ele_count := 30;
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('bound'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := GVL.Coord1Bound);
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('mode'));
@@ -1100,6 +1222,14 @@ PROGRAM AxisGroupSM
                 ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(ReadPosition.c.y));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('arm_z'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(ReadPosition.c.z));
+                // Phase 4 step 2 probe: SM3 motion progress for the move
+                // currently in flight. With CoordSystem := PCS_1 on a
+                // belt-tracking move, this is the data point we need to
+                // answer "does progress 0->1 mean tracking 0->1".
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('mv_id'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := TO_LINT(CurrentMovementId));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('mv_progress'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := CurrentMovementIdProgress);
             ELSE
                 // Unknown SYS command -- emit NAK so the TS caller doesn't hang on timeout.
                 ShouldReturn := TRUE;
