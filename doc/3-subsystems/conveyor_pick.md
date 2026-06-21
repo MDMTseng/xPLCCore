@@ -5,7 +5,7 @@ today. Covers the kernel-native belt-tracking layer (PLC Phase 4) and
 the renderer orchestrator skeleton that consumes it (Phase 6 step 1).
 
 For PLC source structure see [`plc.md`](./plc.md); for the base wire
-shape see [`protocol.md`](./protocol.md).
+shape see [`protocol.md`](../2-contracts/protocol.md).
 
 ---
 

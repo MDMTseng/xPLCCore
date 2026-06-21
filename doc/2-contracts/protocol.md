@@ -6,10 +6,10 @@ dispatcher (`AxisGroupSM.st`). When this file and the code disagree,
 the code wins and this file is wrong — fix it.
 
 Cross-refs:
-- PLC handlers: [`plc.md`](./plc.md) §"Command protocol".
+- PLC handlers: [`plc.md`](../3-subsystems/plc.md) §"Command protocol".
 - Architecture (transport, ring buffers, push events):
-  [`architecture.md`](./architecture.md).
-- Typed builders: [`../lib/protocol.ts`](../lib/protocol.ts) — every
+  [`architecture.md`](../1-concepts/architecture.md).
+- Typed builders: [`../../lib/protocol.ts`](../../lib/protocol.ts) — every
   outbound packet should go through one of these; raw object literals
   in component code are migration debt.
 
@@ -97,7 +97,7 @@ parameters.
 | `SetCoord0` | — | `{ack:true}` | Zero current coord transform. Sets `CoordSystemConfigured := TRUE` (unblocks `G1`). Also fires `COORD_SET` push. |
 | `SetCoord1` | — | `{ack:true}` | Preset coord transform (A := 60°). Same gating effect as `SetCoord0`. |
 | `BLOCK_FOR_MOTION_STOP` / `WAIT_FOR_MOTION_STOP` | `timeout_ms?` (LINT, ms) | `{ack:true}` | Wait until motion buffer drains. `0`/absent = wait forever. NAK `block_timeout` on expiry. The two names are aliases; UI has historically used `WAIT_FOR_MOTION_STOP`. |
-| `BLOCK_FOR_DIGITAL_INPUT` | `pin` (uint), `state` (uint), `group?` (uint), `timeout_ms?` (LINT) | `{ack:true}` | Wait for digital input bit to match `state`. Returns 0/no-op if `HECAT_1616` unwired. Same timeout semantics as `BLOCK_FOR_MOTION_STOP`. **No `WAIT_FOR_DIGITAL_INPUT` alias** — unlike `WAIT_FOR_MOTION_STOP`, the dispatcher does not accept a `WAIT_FOR_…` form here ([AxisGroupSM.st:1218](../codesys_code/Application/APPs/AxisGroupSM.st#L1218)). |
+| `BLOCK_FOR_DIGITAL_INPUT` | `pin` (uint), `state` (uint), `group?` (uint), `timeout_ms?` (LINT) | `{ack:true}` | Wait for digital input bit to match `state`. Returns 0/no-op if `HECAT_1616` unwired. Same timeout semantics as `BLOCK_FOR_MOTION_STOP`. **No `WAIT_FOR_DIGITAL_INPUT` alias** — unlike `WAIT_FOR_MOTION_STOP`, the dispatcher does not accept a `WAIT_FOR_…` form here ([AxisGroupSM.st:1218](../../codesys_code/Application/APPs/AxisGroupSM.st#L1218)). |
 | `WAIT_FOR_TRIGGER_MOTION_PROGRESS` | `motion_id_offset?` (int), `motion_progress` (REAL) | `{ack:true}` | Renderer-side await of a fly-event firing point. NAKs with `TRIGGER_TIMEOUT_ERR` if the referenced motion never fires the trigger. |
 | `READ_LATEST_CMD_LOCATION` | — | `{X, Y, Z, A, ...}` | Last commanded Cartesian pose (post-coord-transform). |
 | `GET_DIGITAL_INPUT` | `group?` | `{value}` | Current digital input word. Returns 0 when `HECAT_1616` unwired. |
@@ -112,7 +112,7 @@ parameters.
 | `GET_MACHINE_STATE` | — | `{st, st_str, err_src, err_id, motion_buffer_size, movement_id, runtime_ms, coord_set, axes_err_mask, axes_state, axes_err_id}` | Pure read; doesn't touch FSM. Renderer fires automatically on every `tcpConnected` false→true. `axes_err_mask`: bit 0–3 = `EAxis0/1/2/reelpullmotor.bError`. `axes_state`: byte 0–3 = each axis's `nAxisState` ordinal. `axes_err_id`: 4-element msgpack array of `uiDriveInterfaceError` per axis (DS402 drive-interface fault code; same ordering as the mask bits); 0 = no fault. |
 | `GET_DIAG` | — | `{runtime_ms, sm_scans, remp_drop, overlen_drop, send_stall_drop, group_not_ready_nak, missing_type_nak, coord_not_cfg_nak, proto_mismatch_nak, idle_reset, read_err_reset, parser_err_reset, ui_ping_count, ui_hb_stale_count, ping_max_gap_ms, last_ui_ping_ms, st_chg_event_count}` | Comm-stability counter dump for `DiagPanel`. Pure read. Resettable via `RESET_DBG_INFO`. |
 | `RESET_DBG_INFO` | — | `{reset:true}` | SYS-side branch — clears all counters above. Does **not** require FSM=Ready (the M-side variant does). |
-| `GA_EV` | `ev` (int — `E_RobotEvent` ordinal) | `{st, st_str, err_src, err_id}` | Drive FSM transition. UI uses this to step `EV_POWER_ON` / `EV_GROUP_ENABLE` / `EV_HOME_GO` / `EV_RESET`. SYS-only — there is no `type:'M'` GA_EV handler (the dead `IF FALSE` block at [AxisGroupSM.st:910](../codesys_code/Application/APPs/AxisGroupSM.st#L910) is not live). See [memory: E_RobotEvent numeric values](../../../../.claude/projects/c--Users-X1-Desktop-X2-5-TCP-UI-TCP-UI/memory/plc_event_numeric_values.md). |
+| `GA_EV` | `ev` (int — `E_RobotEvent` ordinal) | `{st, st_str, err_src, err_id}` | Drive FSM transition. UI uses this to step `EV_POWER_ON` / `EV_GROUP_ENABLE` / `EV_HOME_GO` / `EV_RESET`. SYS-only — there is no `type:'M'` GA_EV handler (the dead `IF FALSE` block at [AxisGroupSM.st:910](../../codesys_code/Application/APPs/AxisGroupSM.st#L910) is not live). See [memory: E_RobotEvent numeric values](../../.claude/projects/c--Users-X1-Desktop-X2-5-TCP-UI-TCP-UI/memory/plc_event_numeric_values.md). |
 
 ## Push events (PLC → UI, no `id`)
 

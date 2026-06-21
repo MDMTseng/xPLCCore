@@ -3,8 +3,8 @@
 This is the integrated picture of the machine as it stands today. For
 the moving-target detail (workstream phasing, per-item status), see
 [`solidification.md`](./solidification.md). For PLC source structure,
-[`plc.md`](./plc.md). For renderer cycle structure, [`calibpage.md`](./calibpage.md).
-For the host↔vision flow, [`vision_contract.md`](./vision_contract.md).
+[`plc.md`](../3-subsystems/plc.md). For renderer cycle structure, [`calibpage.md`](../3-subsystems/calibpage.md).
+For the host↔vision flow, [`vision_contract.md`](../2-contracts/vision_contract.md).
 
 This doc explicitly covers **what's there now**, not what's planned.
 "Open" / "Future" callouts are deliberately minimised — they live in
@@ -77,7 +77,7 @@ by the same `PluginHello.tsx` socket layer via `VP_sendTcpMsgPack` /
 `VP_regTcpMsgCB`). It does **not** share the PLC envelope, schema, or
 ring buffers. The PLC is vision-blind: the renderer is the only thing
 that interprets verdicts and commands the bin/toss actuator (via PLC
-`M4` pulses). See [`vision_contract.md`](./vision_contract.md) for the
+`M4` pulses). See [`vision_contract.md`](../2-contracts/vision_contract.md) for the
 full flow, check-ID table, and trigger-timing diagram.
 
 ---
@@ -135,7 +135,7 @@ supervisors. Domain/business logic lives in the renderer.
 This explicitly excludes from the PLC:
 - Material-flow state (no `WaitingForMaterial`, no `FEED` command —
   W2 was rejected on these grounds; renderer-side watchdog at
-  [CalibPage.tsx:809](../components/CalibPage.tsx#L809) stays).
+  [CalibPage.tsx:809](../../components/CalibPage.tsx#L809) stays).
 - NG classification, recipe parameters, vision result interpretation.
 - Direct vision↔PLC integration (e.g. PLC-issued M4 triggers driven by
   vision verdicts). **Rejected 2026-04-26** on the same generic-PLC
@@ -176,12 +176,12 @@ and **no `id` / `ack`**. The host dispatches them via window
 
 For the full command table (G1, G4, ReelGo, SetCoord*, M4, GA_EV,
 BLOCK_*, GET_*, RESET_DBG_INFO, push events), see
-[`plc.md` §Command protocol](./plc.md#command-protocol-messagepack-map).
+[`plc.md` §Command protocol](../3-subsystems/plc.md#command-protocol-messagepack-map).
 For the MessagePack library's known footguns (map32 / array32 / bin /
-ext) see [`msgpack.md`](./msgpack.md).
+ext) see [`msgpack.md`](../2-contracts/msgpack.md).
 
 **Typed builders (host side).** Renderer call sites no longer hand-roll
-the envelope. [`lib/protocol.ts`](../lib/protocol.ts) exports `cmd.*`
+the envelope. [`lib/protocol.ts`](../../lib/protocol.ts) exports `cmd.*`
 builders (`cmd.G1({X,Y,Z})`, `cmd.M4({...})`, `cmd.Ping()`,
 `cmd.GetMachineState()`, etc.) that stamp `type` and `cmd` and strip
 undefined fields. The `Envelope<R>` carries a phantom reply-shape
@@ -242,8 +242,8 @@ camera triggers return Promises that are awaited many robot moves
 later, so auxiliary actions (FlexBowl shake, feeder cam, reel top
 cam two-shot, reel advance) fit inside the windows where the robot
 is moving away from the relevant station. Throughput depends on
-this. See [`plc.md` §Timing diagram](./plc.md#timing-diagram-one-steady-state-cycle)
-and [`calibpage.md`](./calibpage.md) for the rules.
+this. See [`plc.md` §Timing diagram](../3-subsystems/plc.md#timing-diagram-one-steady-state-cycle)
+and [`calibpage.md`](../3-subsystems/calibpage.md) for the rules.
 
 ---
 

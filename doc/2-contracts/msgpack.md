@@ -1,12 +1,12 @@
 # MessagePack library review (PLC side)
 
-Survey of [`codesys_code/Application/COMM_FBs/FB_MpPacker/`](../codesys_code/Application/COMM_FBs/FB_MpPacker/)
-and [`codesys_code/Application/COMM_FBs/FB_MpUnpacker/`](../codesys_code/Application/COMM_FBs/FB_MpUnpacker/)
+Survey of [`codesys_code/Application/COMM_FBs/FB_MpPacker/`](../../codesys_code/Application/COMM_FBs/FB_MpPacker/)
+and [`codesys_code/Application/COMM_FBs/FB_MpUnpacker/`](../../codesys_code/Application/COMM_FBs/FB_MpUnpacker/)
 (10 + 14 files, ~1244 lines). Works today. This file is the working
 list for tightening it up without changing the wire format.
 
 Wire format is stable and co-owned with
-[`@msgpack/msgpack`](../package.json) on the host — **do not change
+[`@msgpack/msgpack`](../../package.json) on the host — **do not change
 what we emit or accept**, only how the ST code is organized and
 bounded.
 
@@ -17,12 +17,12 @@ bounded.
 ### Read side
 
 1. **Four parallel marker-dispatch tables.**
-   [`UnpackNext.st`](../codesys_code/Application/COMM_FBs/FB_MpUnpacker/UnpackNext.st),
-   [`SkipValue.st`](../codesys_code/Application/COMM_FBs/FB_MpUnpacker/SkipValue.st),
-   [`TryReadREAL.st`](../codesys_code/Application/COMM_FBs/FB_MpUnpacker/TryReadREAL.st),
-   [`TryReadINT64.st`](../codesys_code/Application/COMM_FBs/FB_MpUnpacker/TryReadINT64.st),
-   [`TryReadUINT64.st`](../codesys_code/Application/COMM_FBs/FB_MpUnpacker/TryReadUINT64.st),
-   [`TryReadINTBuffer.st`](../codesys_code/Application/COMM_FBs/FB_MpUnpacker/TryReadINTBuffer.st)
+   [`UnpackNext.st`](../../codesys_code/Application/COMM_FBs/FB_MpUnpacker/UnpackNext.st),
+   [`SkipValue.st`](../../codesys_code/Application/COMM_FBs/FB_MpUnpacker/SkipValue.st),
+   [`TryReadREAL.st`](../../codesys_code/Application/COMM_FBs/FB_MpUnpacker/TryReadREAL.st),
+   [`TryReadINT64.st`](../../codesys_code/Application/COMM_FBs/FB_MpUnpacker/TryReadINT64.st),
+   [`TryReadUINT64.st`](../../codesys_code/Application/COMM_FBs/FB_MpUnpacker/TryReadUINT64.st),
+   [`TryReadINTBuffer.st`](../../codesys_code/Application/COMM_FBs/FB_MpUnpacker/TryReadINTBuffer.st)
    each implement the same `CASE byMarker OF 16#CC, 16#CD, … 16#D3, 16#CA, 16#CB`
    ladder. 5 places to edit whenever the spec is extended. Drift is
    already visible: UnpackNext clamps `uint 64` → DINT silently;
@@ -38,7 +38,7 @@ bounded.
 
 3. **`FindValueByPath` allocates a temp `FB_MpUnpacker` per map
    lookup.**
-   [line 14](../codesys_code/Application/COMM_FBs/FB_MpUnpacker/FindValueByPath.st#L14)
+   [line 14](../../codesys_code/Application/COMM_FBs/FB_MpUnpacker/FindValueByPath.st#L14)
    — `fbTempUnpacker : FB_MpUnpacker;` inside VAR. For a map with N
    keys the walk does N × (Init + UnpackNext + STRING copy into
    `sLastString`). A pointer-level key-match primitive
@@ -66,7 +66,7 @@ bounded.
 7. **String truncation is silent and inconsistent.**
    `UnpackNext` for `str 32` clamps `udiLength := 255` and continues
    as if nothing happened
-   ([UnpackNext.st:141-143](../codesys_code/Application/COMM_FBs/FB_MpUnpacker/UnpackNext.st#L141-L143)).
+   ([UnpackNext.st:141-143](../../codesys_code/Application/COMM_FBs/FB_MpUnpacker/UnpackNext.st#L141-L143)).
    No flag, no return code. Caller can't tell a 255-byte string from
    a truncated 10 KB blob. `TryReadString` at least returns `default`
    on overflow — but via `TryReadStringBuffer`, which returns the
@@ -117,7 +117,7 @@ bounded.
     exhaustion would catch this at the first overrun.
 
 15. **`PackString` manual strlen with `FOR iLoop := 0 TO 999999`.**
-    [PackString.st:35](../codesys_code/Application/COMM_FBs/FB_MpPacker/PackString.st#L35).
+    [PackString.st:35](../../codesys_code/Application/COMM_FBs/FB_MpPacker/PackString.st#L35).
     Magic bound; scans up to 1 MB looking for `\0` if the buffer is
     uninitialized memory. Add a length parameter or cap at buffer
     size.
@@ -135,7 +135,7 @@ bounded.
 
 19. **No version field, no schema.**
     Referenced by W1 / W3 in
-    [`solidification.md`](./solidification.md). Mentioned here for
+    [`solidification.md`](../1-concepts/solidification.md). Mentioned here for
     completeness — belongs in the envelope, not the lib, but the lib
     has no hook to enforce a version tag on received frames either.
 
@@ -163,7 +163,7 @@ Leverage ÷ risk. Stop-the-world issues first, structural last.
 | 9 | **Cursor API on maps / arrays** (finding #4). `BeginMap(sPath): BOOL` + `NextField(OUT pKey, OUT pValue): BOOL`. Optional, but the W3 protocol rewrite will appreciate it when we start having records with 10+ fields. | Medium | Medium | Deferred until W3 |
 | 10 | **Buffer-size on `Pack*`** (finding #14). Breaking signature change. Do it once, together, with a `TCtx_Packer` record holding `pCur, pEnd, bOverflow`. Chain calls become `ctx.PackDINT(x); ctx.PackString(s)`. | Medium | High (safety) | Open |
 | 11 | **Delete dead code + fix typos** (findings #17, #18). | Zero | Readability | **Done 2026-04-26** — `SwapREAL.st` removed (PackREAL uses `Swap32To` directly); `PackDINT` doc comment was already corrected in the compact-encoding rewrite. |
-| 12 | **Round-trip test FB** (finding #20). `FB_MsgPackTests` with a dozen pack→unpack→verify cases, runnable from PLC_PRG on demand. Gates every future change. | Low | High | Open — `FB_MsgPackTests` exists ([GVL.st:28](../codesys_code/Application/GVL.st#L28) `bRunMsgPackTests`) but the test set isn't comprehensive yet. Belongs before #6/#10. |
+| 12 | **Round-trip test FB** (finding #20). `FB_MsgPackTests` with a dozen pack→unpack→verify cases, runnable from PLC_PRG on demand. Gates every future change. | Low | High | Open — `FB_MsgPackTests` exists ([GVL.st:28](../../codesys_code/Application/GVL.st#L28) `bRunMsgPackTests`) but the test set isn't comprehensive yet. Belongs before #6/#10. |
 
 ---
 

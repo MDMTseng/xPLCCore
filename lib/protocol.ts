@@ -1,5 +1,5 @@
 // Typed builders for UI ↔ PLC msgpack packets.
-// Authoritative spec: doc/protocol.md.
+// Authoritative spec: doc/2-contracts/protocol.md.
 //
 // Builders only shape the packet — they do not send. Caller still owns
 // sendTcpMsgPack(...) including await-tracking and timeouts.

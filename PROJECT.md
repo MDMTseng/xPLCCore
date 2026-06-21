@@ -34,19 +34,19 @@ mounts our renderer is also out of scope.
 | Capability | Status | Where |
 |---|---|---|
 | TCP/msgpack PLC link with heartbeat, reconnect snapshot, server-push events | ✅ Production | [`PluginHello.tsx`](PluginHello.tsx), [`AxisGroupSM.st`](codesys_code/Application/APPs/AxisGroupSM/) |
-| FSM safety contract (UnInited → Powering → ... → Ready / Error, no silent drops) | ✅ Production | [`doc/plc.md`](doc/plc.md), [`doc/architecture.md`](doc/architecture.md) |
+| FSM safety contract (UnInited → Powering → ... → Ready / Error, no silent drops) | ✅ Production | [`doc/plc.md`](doc/3-subsystems/plc.md), [`doc/architecture.md`](doc/1-concepts/architecture.md) |
 | Coord gate (G1/G2/G3 require SetCoord0/1) | ✅ Production | PLC, A2 invariant |
 | Heartbeat watchdog (UI 1s → stale 3.5s → PLC trip 5s) | ✅ Production | A3 invariant |
 | `GET_MACHINE_STATE` reconnect snapshot | ✅ Production | A4 invariant |
 | Protocol version enforcement | ✅ Production | W3 |
 | Operator UI (Welcome / Operation / Calib / MiscControls / Control) | ✅ Production | [`components/`](components/) |
-| `CalibPage` calibration loop (FFeeder check, Side / BTM / TOP checks, toss routing) | ✅ Production | [`doc/calibpage.md`](doc/calibpage.md), [`doc/vision_contract.md`](doc/vision_contract.md) |
+| `CalibPage` calibration loop (FFeeder check, Side / BTM / TOP checks, toss routing) | ✅ Production | [`doc/calibpage.md`](doc/3-subsystems/calibpage.md), [`doc/vision_contract.md`](doc/2-contracts/vision_contract.md) |
 | FlexBowl serial control | ✅ Production | [`SerialManager.tsx`](SerialManager.tsx) |
-| CODESYS RPC daemon (replaces inbox-watcher) | ✅ Production | [`codesys_scripts/rpc.py`](codesys_scripts/), [`doc/scripting.md`](doc/scripting.md) |
+| CODESYS RPC daemon (replaces inbox-watcher) | ✅ Production | [`codesys_scripts/rpc.py`](codesys_scripts/), [`doc/scripting.md`](doc/4-dev/scripting.md) |
 | FlyEvent scheduler (DistanceTrigger, PulseTrigger, MotionProgressTrigger) | ✅ Production | PLC `ProcessMotionPacket.st` |
-| Diagnostic ring buffers (reMP_info ring 32 slots, minfo_buf 6 slots) | ✅ Production | [`doc/ringbuf-bugs.md`](doc/ringbuf-bugs.md) |
+| Diagnostic ring buffers (reMP_info ring 32 slots, minfo_buf 6 slots) | ✅ Production | [`doc/ringbuf-bugs.md`](doc/3-subsystems/ringbuf-bugs.md) |
 | Build provenance stamping (commit SHA + timestamp into GVL on every push) | ✅ Production | `codesys_scripts/stamp_build.py` |
-| Conveyor pick — kernel-native belt tracking (PCS_1 + `MC_TrackConveyorBelt`) | ✅ Phase 4 done | [`doc/conveyor_pick.md`](doc/conveyor_pick.md) |
+| Conveyor pick — kernel-native belt tracking (PCS_1 + `MC_TrackConveyorBelt`) | ✅ Phase 4 done | [`doc/conveyor_pick.md`](doc/3-subsystems/conveyor_pick.md) |
 | Conveyor pick — FlyEvent COORD1_BIND + window-exit fault | ✅ Phase 4 step 3 done | [`flyevent_coord1_bind` memory](.claude/projects/.../memory/flyevent_coord1_bind.md) |
 | Conveyor pick — renderer orchestrator (`runConveyorPick`) | 🚧 Phase 6 step 1 (skeleton, no UI) | [`orchestrator/conveyorPick.ts`](orchestrator/conveyorPick.ts) |
 | Real EC encoder for belt | ⏳ Phase 0 not started (synthetic pulse in use) | — |
@@ -205,8 +205,8 @@ NAK codes (non-exhaustive): `group_not_ready`, `coord_not_configured`,
 `missing_type_field`, `Coord1:rebind_active`, `Coord1:bad_scale`,
 `Coord1:window_exit`.
 
-Authoritative spec: [`doc/protocol.md`](doc/protocol.md). Per-feature:
-- Conveyor pick: [`doc/conveyor_pick.md`](doc/conveyor_pick.md)
+Authoritative spec: [`doc/protocol.md`](doc/2-contracts/protocol.md). Per-feature:
+- Conveyor pick: [`doc/conveyor_pick.md`](doc/3-subsystems/conveyor_pick.md)
 - Schema drift guards: `lib/protocol.ts` `REQUIRED_KEYS` +
   `plc:schema-drift` window event
 
@@ -215,7 +215,7 @@ Authoritative spec: [`doc/protocol.md`](doc/protocol.md). Per-feature:
 Push-message channel. Per-camera IDs route to per-callback tunnels
 (`VP_regTcpMsgCB`). Pre-armed promises drained by `CalibPage.runAllObjects`.
 
-Spec: [`doc/vision_contract.md`](doc/vision_contract.md).
+Spec: [`doc/vision_contract.md`](doc/2-contracts/vision_contract.md).
 
 ### C) Renderer ↔ FlexBowl  (serial COMx)
 
@@ -225,7 +225,7 @@ Owned by `SerialManager.tsx`. Out of scope of TCP stack.
 
 RPC daemon protocol (replaces the old inbox-watcher). `rpc.py exec
 --file foo.py` ships an IronPython 2.7 script into the warm CODESYS
-scripting session. Spec: [`doc/scripting.md`](doc/scripting.md).
+scripting session. Spec: [`doc/scripting.md`](doc/4-dev/scripting.md).
 
 ---
 
@@ -294,7 +294,7 @@ idle → binding → tracking → picking → untracking → placing → done
                      ─── COORD1_ERROR (event_id match) ────▶ error
 ```
 
-See [`doc/conveyor_pick.md`](doc/conveyor_pick.md).
+See [`doc/conveyor_pick.md`](doc/3-subsystems/conveyor_pick.md).
 
 ---
 
@@ -379,23 +379,23 @@ Architecture & planning:
 
 | Doc | Read it for |
 |---|---|
-| [`doc/architecture.md`](doc/architecture.md) | Integrated component map snapshot |
-| [`doc/solidification.md`](doc/solidification.md) | Workstream execution plan + status |
-| [`doc/redesign.md`](doc/redesign.md) | Architectural direction (keep/change/reject) |
-| [`doc/coupling_invariants.md`](doc/coupling_invariants.md) | Cross-layer invariants that MUST move together |
+| [`doc/architecture.md`](doc/1-concepts/architecture.md) | Integrated component map snapshot |
+| [`doc/solidification.md`](doc/1-concepts/solidification.md) | Workstream execution plan + status |
+| [`doc/redesign.md`](doc/1-concepts/redesign.md) | Architectural direction (keep/change/reject) |
+| [`doc/coupling_invariants.md`](doc/1-concepts/coupling_invariants.md) | Cross-layer invariants that MUST move together |
 
 Per-area detail:
 
 | Doc | Read it for |
 |---|---|
-| [`doc/plc.md`](doc/plc.md) | PLC source map, FSM, timing, items P0–P3 / A1–A6 |
-| [`doc/protocol.md`](doc/protocol.md) | Wire spec (PLC ↔ renderer) |
-| [`doc/calibpage.md`](doc/calibpage.md) | Renderer main loop (calibration cycle) |
-| [`doc/vision_contract.md`](doc/vision_contract.md) | Vision TCP plugin protocol |
-| [`doc/conveyor_pick.md`](doc/conveyor_pick.md) | Conveyor pick architecture (Phase 4 + 6) |
-| [`doc/msgpack.md`](doc/msgpack.md) | PLC-side msgpack library review |
-| [`doc/scripting.md`](doc/scripting.md) | CODESYS scripting + RPC daemon |
-| [`doc/ringbuf-bugs.md`](doc/ringbuf-bugs.md) | Ring-buffer pitfalls catalogue |
+| [`doc/plc.md`](doc/3-subsystems/plc.md) | PLC source map, FSM, timing, items P0–P3 / A1–A6 |
+| [`doc/protocol.md`](doc/2-contracts/protocol.md) | Wire spec (PLC ↔ renderer) |
+| [`doc/calibpage.md`](doc/3-subsystems/calibpage.md) | Renderer main loop (calibration cycle) |
+| [`doc/vision_contract.md`](doc/2-contracts/vision_contract.md) | Vision TCP plugin protocol |
+| [`doc/conveyor_pick.md`](doc/3-subsystems/conveyor_pick.md) | Conveyor pick architecture (Phase 4 + 6) |
+| [`doc/msgpack.md`](doc/2-contracts/msgpack.md) | PLC-side msgpack library review |
+| [`doc/scripting.md`](doc/4-dev/scripting.md) | CODESYS scripting + RPC daemon |
+| [`doc/ringbuf-bugs.md`](doc/3-subsystems/ringbuf-bugs.md) | Ring-buffer pitfalls catalogue |
 
 ---
 

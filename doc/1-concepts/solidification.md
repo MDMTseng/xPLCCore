@@ -10,9 +10,9 @@ Per-side detail still lives in:
   what the system is right now** (component map, concurrency, safety
   contract, generic-PLC principle, diagnostic surfaces). Read this
   first if you're new to the tree.
-- [`plc.md`](./plc.md) — PLC item
+- [`plc.md`](../3-subsystems/plc.md) — PLC item
   tables (P0–P3, A1–A6) + machine sequence + timing diagram.
-- [`calibpage.md`](./calibpage.md) — renderer
+- [`calibpage.md`](../3-subsystems/calibpage.md) — renderer
   main-loop cleanup (items #1–#9).
 - [`redesign.md`](./redesign.md) — scope / architectural direction.
 
@@ -29,7 +29,7 @@ what order, and how we know it's done.
    half.
 2. **Cycle time is the acceptance gate.** Any workstream that
    measurably slows the machine is wrong until proven otherwise.
-   See [timing diagram](./plc.md#timing-diagram-one-steady-state-cycle).
+   See [timing diagram](../3-subsystems/plc.md#timing-diagram-one-steady-state-cycle).
 3. **Invariants belong on the PLC.** Whenever host and PLC both
    check something, delete the host check. The host should only
    *display* invariants, not enforce them.
@@ -47,10 +47,10 @@ the machine stays in a known-safe state and resumes cleanly.
 
 | Side | Item | Ref | Status |
 |---|---|---|---|
-| PLC | Verify motion commands rejected in Error state | [plc.md A1](./plc.md) | **Done 2026-04-24** — per-packet NAK with `err='group_not_ready'`. |
+| PLC | Verify motion commands rejected in Error state | [plc.md A1](../3-subsystems/plc.md) | **Done 2026-04-24** — per-packet NAK with `err='group_not_ready'`. |
 | PLC | `BLOCK_FOR_*` timeout parameter; NAK on timeout | A2 | **Done 2026-04-24** — optional `timeout_ms` on both BLOCK handlers; NAK with `err='block_timeout'`. Fixed UI↔PLC name-mismatch by aliasing `WAIT_FOR_MOTION_STOP`. |
 | PLC | Heartbeat watchdog; on miss → halt motion, drop fly events, enter recoverable idle | A3 (PLC half) | **Done 2026-04-24** — Supervisor in `AxisGroupSM` transitions FSM to Error when `RuntimeMs - LastUiPingMs > UI_HEARTBEAT_TIMEOUT_MS` (5000ms, gated to Ready state). Motion winds down via Error-state `GroupDisable + Reset` cycle; counter on `GVL.UiHeartbeatStaleCount`. |
-| PLC | Expose `GET_MACHINE_STATE` — homed flag, current state, last accepted `movement_id`, last completed `movement_id`, fault info | A4 (PLC half) | **Done 2026-04-24** — SYS/`GET_MACHINE_STATE` returns `{st, st_str, err_src, err_id, motion_buffer_size, movement_id, runtime_ms}`. Follow-on (from [plc.md A6/follow-on](./plc.md)): per-axis fault detail. |
+| PLC | Expose `GET_MACHINE_STATE` — homed flag, current state, last accepted `movement_id`, last completed `movement_id`, fault info | A4 (PLC half) | **Done 2026-04-24** — SYS/`GET_MACHINE_STATE` returns `{st, st_str, err_src, err_id, motion_buffer_size, movement_id, runtime_ms}`. Follow-on (from [plc.md A6/follow-on](../3-subsystems/plc.md)): per-axis fault detail. |
 | PLC | Protocol version field enforced; NAK mismatched version | new, see W3 | **Done 2026-04-25** — PLC reads `protocol_version` off every packet; if present and != `GVL.PROTOCOL_VERSION` (currently 1), packet is NAK'd pre-dispatch with `err='protocol_version_mismatch', err_got=<got>`. Absent is legacy-allowed. Host half: `PluginHello.sendTcpMsgPack` stamps `protocol_version: 1` on every outbound packet. Counter: `GVL.ProtocolVersionMismatchCount`. |
 | Host | Heartbeat tx (every N ms, interval TBD — probably 200 ms) | A3 (host half) | **Done 2026-04-24** — 1s interval, 3.5s stale threshold, exposed via `get_heartbeat_status` harness action. Interval can be tuned by adjusting `HEARTBEAT_INTERVAL_MS` / `HEARTBEAT_STALE_MS` in `PluginHello.tsx`. |
 | Host | On reconnect: query `GET_MACHINE_STATE`, reconcile renderer state, resume or prompt operator | A4 (host half) | **Done 2026-04-24** — snapshot auto-fetched on reconnect, cached in `lastMachineSnapshotRef`, broadcast on `window` as `plc:machine-state` event. `ControlPage` force-routes tab to `Welcome` when `st_str != 'Ready'` or `coord_set=false`. Reconcile result exposed via `get_tab` harness action as `lastReconcile`. |
@@ -77,7 +77,7 @@ the machine stays in a known-safe state and resumes cleanly.
 **Status: rejected.** The user wants the PLC to stay generic — motion,
 IO, safety supervisors only. Material-flow is domain/business logic
 and belongs in the renderer. The renderer-side watchdog at
-[CalibPage.tsx:809](../components/CalibPage.tsx#L809) stays.
+[CalibPage.tsx:809](../../components/CalibPage.tsx#L809) stays.
 
 Tradeoff accepted: if the renderer dies, material flow stops. The
 W1 host-authority safety contract still ensures the *machine* stays
@@ -105,13 +105,13 @@ runtime-NAK on the other.
 
 | Side | Item | Ref |
 |---|---|---|
-| Shared | [`protocol.md`](./protocol.md) — authoritative list of commands, params, return shapes, error strings, push events. | **Done 2026-04-26** |
+| Shared | [`protocol.md`](../2-contracts/protocol.md) — authoritative list of commands, params, return shapes, error strings, push events. | **Done 2026-04-26** |
 | Shared | Version field in envelope (both send + check) | **Done 2026-04-25** (W1 A5) |
-| Host | [`lib/protocol.ts`](../lib/protocol.ts) — typed builders (`cmd.G1({X, Y, Z, A})`, etc.) for every command in `protocol.md`. | **Done 2026-04-26** — module published, all current commands covered. Builder return type now carries a phantom reply-shape (`Envelope<R>`); opt-in `send<R>(fn, env)` helper recovers typed replies (e.g. `await send(sendTcpMsgPack, cmd.GetMachineState())` → `MachineState`). Plain `await sendTcpMsgPack(cmd.X(...))` calls continue to work unchanged. |
+| Host | [`lib/protocol.ts`](../../lib/protocol.ts) — typed builders (`cmd.G1({X, Y, Z, A})`, etc.) for every command in `protocol.md`. | **Done 2026-04-26** — module published, all current commands covered. Builder return type now carries a phantom reply-shape (`Envelope<R>`); opt-in `send<R>(fn, env)` helper recovers typed replies (e.g. `await send(sendTcpMsgPack, cmd.GetMachineState())` → `MachineState`). Plain `await sendTcpMsgPack(cmd.X(...))` calls continue to work unchanged. |
 | Host | Replace every `sendTcpMsgPack({...literal...})` call with `cmd.X(...)`. Grep for raw MsgPack object literals returns empty. | **Done 2026-04-26** — all active call sites migrated across `CalibPage.tsx`, `MiscControlsPage.tsx`, `OperationPage.tsx`, `JoggingPad.tsx`, `PluginHello.tsx`, `DiagPanel.tsx`. Remaining literal matches are in JSX block comments only. `tsc --noEmit` clean. |
 | PLC | Commands listed in `protocol.md` ↔ ST dispatcher in sync. | **Done 2026-04-26** — table cross-checked against `AxisGroupSM.st` while writing protocol.md. |
 | PLC | Dispatcher NAKs unknown commands cleanly with a diagnostic response (not silent drop). | **Done 2026-04-25** (`missing_type_field` for missing `type`; generic `ack:false` for unknown `cmd`). |
-| PLC | MsgPack library correctness + symmetry fixes (Phase A/B in [`msgpack.md`](./msgpack.md)). | **Done 2026-04-26** — UnpackNext/SkipValue bounds-checked, PackLINT compact. |
+| PLC | MsgPack library correctness + symmetry fixes (Phase A/B in [`msgpack.md`](../2-contracts/msgpack.md)). | **Done 2026-04-26** — UnpackNext/SkipValue bounds-checked, PackLINT compact. |
 
 **Acceptance tests:**
 
@@ -168,7 +168,7 @@ doing, what it did, and why it rejected parts. No more guessing.
 | Host | SQLite (better-sqlite3) for part history — one row per cycle, timestamps, NG reason ID, measurements, saved image filenames. | new |
 | Host | Structured logging wrapper (cycle / state / level tags) → JSON lines on disk. Kill `console.log`. | new |
 | Host | Live counters panel: pack count, NG by reason, recent cycle-time trend. | new |
-| Host | i18n: Chinese strings in control flow ([CalibPage.tsx:854](../components/CalibPage.tsx#L854)) become IDs; UI translates. | new |
+| Host | i18n: Chinese strings in control flow ([CalibPage.tsx:854](../../components/CalibPage.tsx#L854)) become IDs; UI translates. | new |
 | PLC | Expose error detail in `GET_MACHINE_STATE` (axis that faulted, SMC error code). Today errors are "Error state" with no categorization. | **Partial 2026-04-25** — added `axes_err_mask` (bit i = axis i `bError`) and `axes_state` (packed `nAxisState` per axis) to the SYS/`GET_MACHINE_STATE` reply. UI can now identify which axis faulted. **Open follow-on:** SMC error code per axis — `nErrorID`/`LastError` are not exposed on this DS402 drive type (verified via probe); needs either drive-specific SDO reads or per-axis `MC_ReadAxisError` FB instances. |
 | PLC | Optional: push structured events on state change instead of host polling. Not required; cheaper than every-N-ms polls. | **Done 2026-04-25** — `ST_CHG`, `COORD_SET`, `MOVE_DONE` server-push events emitted into `reMP_info_ridx` with the same envelope (`kind:'event', name, ..., runtime_ms`). Host dispatches via `window` `plc:event`. |
 | PLC | `SYS/GET_DIAG` — single-call dump of comm-stability counters for UI dashboard | **Done 2026-04-26** — 17-field reply (drop/NAK/reset counters + `ping_max_gap_ms`). Resettable via `SYS/RESET_DBG_INFO`. |
@@ -219,7 +219,7 @@ integration is an explicit decision.
 
 | Side | Item | Ref |
 |---|---|---|
-| Shared | [`vision_contract.md`](./vision_contract.md) — who decides pass/fail, who owns part-ID, who commands the bin actuator, trigger timing tolerances. | **Phase-1 done 2026-04-26** — as-is documented (channels, IDs, trigger timing diagram, pass/fail interpretation, bin path). Open questions section enumerates what's still unanswered. |
+| Shared | [`vision_contract.md`](../2-contracts/vision_contract.md) — who decides pass/fail, who owns part-ID, who commands the bin actuator, trigger timing tolerances. | **Phase-1 done 2026-04-26** — as-is documented (channels, IDs, trigger timing diagram, pass/fail interpretation, bin path). Open questions section enumerates what's still unanswered. |
 | Host | Today's flow documented as-is first. | **Done 2026-04-26** — see vision_contract.md sections 1–6. |
 | ~~Future~~ | ~~Possibly direct vision ↔ PLC M4 triggers for sub-cycle latency.~~ | **Rejected 2026-04-26** — PLC stays vision-blind; vision must route through the host. Same generic-PLC reasoning as W2. |
 
@@ -277,7 +277,7 @@ codebase.
 - **Cycle time captured before every phase**, compared after.
   Regression ≥ 2% blocks the merge until understood.
 - **Update the sub-docs as you go.** When a P/A item lands, mark it
-  Fixed in [`plc.md`](./plc.md) *and*
+  Fixed in [`plc.md`](../3-subsystems/plc.md) *and*
   reference the workstream here. Keep one source of truth per item.
 - **This file is the index.** Don't duplicate item detail here; link
   out.

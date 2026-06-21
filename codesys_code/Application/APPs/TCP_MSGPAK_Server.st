@@ -21,7 +21,7 @@ VAR
 	// socket reports xActive=TRUE (half-open / TX backpressure), the
 	// reply ring would fill up forever. Drop the head packet after
 	// SEND_MAX_RETRIES consecutive cycles and count it. See
-	// doc/ringbuf-bugs.md #7.
+	// doc/3-subsystems/ringbuf-bugs.md #7.
 	send_retry_count: UDINT := 0;
 	// Comm task is 5ms; 20 cycles ~= 100ms before head-drop. Keeps the
 	// ring from filling up behind one stuck packet during a half-open TX
@@ -73,7 +73,7 @@ IF fbMyServer.PKT_IDX > TMP_PKT_IDX THEN
 
 	// Length guard: slots are 256 bytes (1 len + 255 payload). Over-length
 	// packets would wrap via DINT_TO_BYTE and corrupt the slot silently.
-	// See doc/ringbuf-bugs.md #1. Type/cmd dispatch happens in AxisGroupSM
+	// See doc/3-subsystems/ringbuf-bugs.md #1. Type/cmd dispatch happens in AxisGroupSM
 	// after the slot is drained; unrecognised types NAK with
 	// 'missing_type_field'.
 	IF (fbMyServer.BUFFER_LEN > GVL.MAX_SLOT_PAYLOAD) THEN
@@ -114,7 +114,7 @@ IF GVL.reMP_info_ridx.size()>0 THEN
 	ELSE
 		// xActive=TRUE but Send keeps failing -> TX stall / half-open.
 		// Drop the head packet after SEND_MAX_RETRIES cycles so the ring
-		// doesn't fill up behind a stuck packet. See doc/ringbuf-bugs.md #7.
+		// doesn't fill up behind a stuck packet. See doc/3-subsystems/ringbuf-bugs.md #7.
 		send_retry_count := send_retry_count + 1;
 		IF send_retry_count >= SEND_MAX_RETRIES THEN
 			GVL.reMP_info_ridx.consumeTail();
@@ -136,6 +136,6 @@ IF GVL.reMP_info_ridx.size()>0 THEN
 END_IF
 
 // --- MsgPack self-test harness hook (Comm task; runs cyclically).
-// See doc/msgpack.md and FB_MsgPackTests. Toggle GVL.bRunMsgPackTests
+// See doc/2-contracts/msgpack.md and FB_MsgPackTests. Toggle GVL.bRunMsgPackTests
 // in online mode to fire; results on GVL.fbMsgPackTests.*.
 GVL.fbMsgPackTests(bRun := GVL.bRunMsgPackTests);

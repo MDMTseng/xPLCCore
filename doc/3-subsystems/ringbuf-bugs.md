@@ -6,7 +6,7 @@ push/consume returns) is correct; the holes are all in the usage.
 (`aux{0,1,2}_info_buf` removed 2026-04-27 — see #12.)
 
 > **Status sweep 2026-04-27:** all High items closed; #5/#6 closed by POU
-> deletion; #7/#8 closed in [TCP_MSGPAK_Server.st](../codesys_code/Application/APPs/TCP_MSGPAK_Server.st);
+> deletion; #7/#8 closed in [TCP_MSGPAK_Server.st](../../codesys_code/Application/APPs/TCP_MSGPAK_Server.st);
 > #11 closed by SPSC lock-free refactor of FB_RingBufferIndex; **#12
 > closed by AUX removal** — `reMP_info_ridx` is now single-producer
 > (AxisGroupSM only).
@@ -28,16 +28,16 @@ push/consume returns) is correct; the holes are all in the usage.
 Both AUX and minfo ingress paths now drop packets with
 `fbMyServer.BUFFER_LEN > GVL.MAX_SLOT_PAYLOAD` (255) and bump
 `GVL.OverlenDropCount` instead of wrapping via `DINT_TO_BYTE`.
-See [TCP_MSGPAK_Server.st:80-82, 136-138](../codesys_code/Application/APPs/TCP_MSGPAK_Server.st#L80).
+See [TCP_MSGPAK_Server.st:80-82, 136-138](../../codesys_code/Application/APPs/TCP_MSGPAK_Server.st#L80).
 
 ### 2. AUX packet dropped silently when ring is full — **Closed 2026-04-26**
 AUX path now always emits an ack via the `reMP_info_ridx` reply ring,
 with `auxPacketStored` reflecting whether the packet was actually
 queued. Drop case yields `{id, ack:false}`; client sees the NAK and can
-retry. See [TCP_MSGPAK_Server.st:112-128](../codesys_code/Application/APPs/TCP_MSGPAK_Server.st#L112).
+retry. See [TCP_MSGPAK_Server.st:112-128](../../codesys_code/Application/APPs/TCP_MSGPAK_Server.st#L112).
 
 ### 3. `PKT_ALLOW_NEXT` only gates minfo — **Closed-with-rationale 2026-04-27**
-[`TCP_MSGPAK_Server.st:58`](../codesys_code/Application/APPs/TCP_MSGPAK_Server.st#L58)
+[`TCP_MSGPAK_Server.st:58`](../../codesys_code/Application/APPs/TCP_MSGPAK_Server.st#L58)
 still gates only on `minfo_buf_ridx`. Acceptable now because #2 is
 fixed: AUX-ring-full produces an explicit `ack:false` instead of a
 silent drop, so the client surfaces backpressure without depending on
@@ -46,15 +46,15 @@ NAK loop becomes load.
 
 ### 4. `reMP_info_ridx` overflow + getHead OOB — **Closed 2026-04-27**
 All 11 live `getHead()`-then-pushHead callsites in
-[AxisGroupSM.st](../codesys_code/Application/APPs/AxisGroupSM.st)
+[AxisGroupSM.st](../../codesys_code/Application/APPs/AxisGroupSM.st)
 (lines 298, 329, 465, 524, 555, 747, 779, 873, 992, 1046, 1173) are now
 preceded by an explicit `IF GVL.reMP_info_ridx.space() = 0 THEN
 consumeTail(); GVL.ReMpDropCount := GVL.ReMpDropCount + 1; END_IF`
-guard. Twelfth match at [line 913](../codesys_code/Application/APPs/AxisGroupSM.st#L913)
+guard. Twelfth match at [line 913](../../codesys_code/Application/APPs/AxisGroupSM.st#L913)
 sits inside an `IF FALSE THEN ... END_IF` dead-code block (per repo
 convention — see plc.md item #9, "Won't fix").
 
-The matching site in [TCP_MSGPAK_Server.st:116-119](../codesys_code/Application/APPs/TCP_MSGPAK_Server.st#L116)
+The matching site in [TCP_MSGPAK_Server.st:116-119](../../codesys_code/Application/APPs/TCP_MSGPAK_Server.st#L116)
 has the same guard. Pattern is now codebase-wide convention; see #9
 below for the contract callers must follow.
 
@@ -66,12 +66,12 @@ current project; the live comm path is `TCP_MSGPAK_Server`).
 
 ### 6. Three files consume `minfo_buf_ridx` — **Closed 2026-04-27**
 `EthercatPOU.st` and `POU_BUFFER_RUN.st` are gone from the tree. Only
-[AxisGroupSM.st](../codesys_code/Application/APPs/AxisGroupSM.st) calls
+[AxisGroupSM.st](../../codesys_code/Application/APPs/AxisGroupSM.st) calls
 `minfo_buf_ridx.consumeTail()` now. Verified via grep across
 `codesys_code/`.
 
 ### 7. Retry-forever while socket xActive=TRUE — **Closed 2026-04-26**
-[TCP_MSGPAK_Server.st:173-183](../codesys_code/Application/APPs/TCP_MSGPAK_Server.st#L173)
+[TCP_MSGPAK_Server.st:173-183](../../codesys_code/Application/APPs/TCP_MSGPAK_Server.st#L173)
 drops the head packet after `SEND_MAX_RETRIES` (100) consecutive
 failed-Send cycles while `xActive=TRUE`, bumps `GVL.SendStallDropCount`,
 and resets the retry counter. xActive=FALSE path drains the entire
@@ -81,7 +81,7 @@ backlog (no point replaying stale replies to a future client).
 AUX ack is now packed into a `reMP_info_ridx` slot like every other
 reply, so a transient `Send()` failure gets retried next scan instead
 of being lost.
-See [TCP_MSGPAK_Server.st:112-128](../codesys_code/Application/APPs/TCP_MSGPAK_Server.st#L112).
+See [TCP_MSGPAK_Server.st:112-128](../../codesys_code/Application/APPs/TCP_MSGPAK_Server.st#L112).
 
 ## Defensive
 
@@ -112,7 +112,7 @@ empty (`head == tail`) and full (`size == capacity`) are
 unambiguous. Each task writes only its own pointer; UINT writes are
 atomic on the underlying CPU, so a stale cross-task read produces a
 conservative miss (false-full / false-empty) that self-corrects on the
-next scan. See [FB_RingBufferIndex.st](../codesys_code/Application/COMM_FBs/FB_RingBufferIndex/FB_RingBufferIndex.st)
+next scan. See [FB_RingBufferIndex.st](../../codesys_code/Application/COMM_FBs/FB_RingBufferIndex/FB_RingBufferIndex.st)
 header for the full SPSC argument.
 
 `clear()` writes both pointers and is **not** preemption-safe — only

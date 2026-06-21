@@ -4,7 +4,7 @@
     only -- copies a descriptive message into sFirstFail.
 
     Tests marked [REGRESSION-FIX-N] are designed to FAIL on today's code
-    and PASS after the corresponding fix in doc/msgpack.md lands. That
+    and PASS after the corresponding fix in doc/2-contracts/msgpack.md lands. That
     asymmetry is the point -- it's how we know the test is real.
 *)
 METHOD PRIVATE RunAll

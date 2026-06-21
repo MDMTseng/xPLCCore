@@ -9,7 +9,7 @@ export type COMCtrlObj = {
   // Vision Plugin channel: JSON `;`-delimited on localhost:7950. Always
   // request/reply via auto-stamped `id`; no fire-and-forget mode and no
   // per-call timeout (callers rely on upstream `delay()` aborts). See
-  // doc/vision_contract.md.
+  // doc/2-contracts/vision_contract.md.
   VP_sendTcpMsgPack: (data: any) => Promise<any>;
   FlexVibCtrl: any;
 };

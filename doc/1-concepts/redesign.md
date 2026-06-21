@@ -8,8 +8,8 @@ parts for a one-person project.
 
 This file is the working list for the larger-scale improvements.
 Point-fix issues (P0–A6) live in
-[`plc.md`](./plc.md); renderer main-loop
-cleanup lives in [`calibpage.md`](./calibpage.md).
+[`plc.md`](../3-subsystems/plc.md); renderer main-loop
+cleanup lives in [`calibpage.md`](../3-subsystems/calibpage.md).
 This one is for things that span both sides and don't fit in either.
 
 ---

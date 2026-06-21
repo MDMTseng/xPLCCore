@@ -54,15 +54,19 @@ MessagePack/TCP.
 
 ## Documentation map
 
-| Doc | Purpose |
-|---|---|
-| [`doc/solidification.md`](doc/solidification.md) | **Start here.** Integrated execution plan. Workstreams spanning PLC + host, acceptance tests, phasing. |
-| [`doc/redesign.md`](doc/redesign.md) | Architectural direction: what we keep, what we change in place, what we rejected and why. |
-| [`doc/plc.md`](doc/plc.md) | PLC source map, state machine, timing diagram, review items (P0–P3, A1–A6), progress log. |
-| [`doc/calibpage.md`](doc/calibpage.md) | Renderer main-loop cleanup items (`CalibPage.tsx`). |
-| [`doc/msgpack.md`](doc/msgpack.md) | PLC-side MessagePack library review — findings, ranked fixes, phasing. |
-| [`doc/scripting.md`](doc/scripting.md) | CODESYS scripting round-trip: warm-session TCP, export/import flow, encoding rules, tooling gotchas. |
-| [`doc/ringbuf-bugs.md`](doc/ringbuf-bugs.md) | Known ring-buffer pitfalls (catalogued while hardening `reMP_info_ridx` / `minfo_buf_ridx`). |
+**Start here:** [`doc/README.md`](doc/README.md) — guided reading tour
+with role-based paths (PLC dev / renderer dev / conveyor pick /
+architecture review). For the full overview + capability matrix, see
+[`PROJECT.md`](PROJECT.md).
+
+Docs are grouped into four tiers under `doc/`:
+
+| Tier | Folder | Contents |
+|---|---|---|
+| 1 | [`doc/1-concepts/`](doc/1-concepts/) | Architecture, design rationale, coupling invariants, execution plan |
+| 2 | [`doc/2-contracts/`](doc/2-contracts/) | Wire protocols (PLC, vision, msgpack library) |
+| 3 | [`doc/3-subsystems/`](doc/3-subsystems/) | PLC / renderer cycle / conveyor pick / ring buffers |
+| 4 | [`doc/4-dev/`](doc/4-dev/) | Dev tooling (CODESYS scripting + RPC daemon) |
 
 ---
 
@@ -100,7 +104,7 @@ the wire format changes.
 > If you craft test packets by hand, remember **`type:"SYS"` is
 > required** for PING/GA_EV/GET_MACHINE_STATE. Without it they land
 > in the motion buffer and come back NAK'd. See
-> [`doc/plc.md`](doc/plc.md) §Protocol.
+> [`doc/plc.md`](doc/3-subsystems/plc.md) §Protocol.
 
 ### Server-push channel
 
@@ -209,7 +213,7 @@ Gotchas: IronPython 2.7 inside CODESYS; all scripts need
 `# -*- coding: ascii -*-`. Expression format for `read_value` does not
 take the `Application.` prefix. Results come back as stringified IEC
 values (`"UDINT#42"`, `"BOOL#TRUE"`). See
-[`doc/scripting.md`](doc/scripting.md) for the full catalogue.
+[`doc/scripting.md`](doc/4-dev/scripting.md) for the full catalogue.
 
 ---
 
@@ -232,10 +236,10 @@ by the host Electron application, which is out of scope for this repo.
   A-number, workstream step) lands, mark its **Status** column in the
   relevant doc and log the change in "Recently completed."
 - **New findings go into the appropriate doc.** PLC items →
-  `doc/plc.md`. Renderer items → `doc/calibpage.md`. Cross-cutting →
-  `doc/solidification.md`.
+  `doc/3-subsystems/plc.md`. Renderer items → `doc/3-subsystems/calibpage.md`.
+  Cross-cutting → `doc/1-concepts/solidification.md`.
 - **Cycle time is the acceptance gate for any refactor.** See
-  [`doc/plc.md`](doc/plc.md) §Timing diagram.
+  [`doc/plc.md`](doc/3-subsystems/plc.md) §Timing diagram.
 - **No silent drops.** Every client request must get a reply — `ack`
   true or false with a machine-readable `err`. This is an invariant,
   not a nicety: the UI's `sendTcpMsgPack` would otherwise hang until

@@ -1,17 +1,17 @@
 # CalibPage solidification plan
 
-Findings from a review of [CalibPage.tsx](../components/CalibPage.tsx) (~3200 lines, single
+Findings from a review of [CalibPage.tsx](../../components/CalibPage.tsx) (~3200 lines, single
 component, `runAllObjects` ~1000 lines of nested closures). This file is
 the working list for making the main loop less clunky without changing
 runtime behavior. Update the **Status** column as items land.
 
 Scope: the renderer-side main production loop. PLC, vision, and
 architecture decisions are out of scope — see
-[`plc.md`](./plc.md), [`vision_contract.md`](./vision_contract.md),
-[`architecture.md`](./architecture.md), and chat history.
+[`plc.md`](./plc.md), [`vision_contract.md`](../2-contracts/vision_contract.md),
+[`architecture.md`](../1-concepts/architecture.md), and chat history.
 
 PLC command literals in this file are now built via the typed
-`cmd.*` builders from [`lib/protocol.ts`](../lib/protocol.ts)
+`cmd.*` builders from [`lib/protocol.ts`](../../lib/protocol.ts)
 (`cmd.G1({...})`, `cmd.M4({...})`, etc.). Hand-rolled `{type:'M', cmd:...}`
 literals should not appear in new code.
 
@@ -20,11 +20,11 @@ literals should not appear in new code.
 ## Why it's clunky (structural diagnosis)
 
 1. **`runAllObjects` is a god-function.**
-   [`checkSlot_and_reelAdv`](../components/CalibPage.tsx#L595),
-   [`checkFlexFeederPlate`](../components/CalibPage.tsx#L712),
-   [`goCheckFlexFeederPlate`](../components/CalibPage.tsx#L778),
-   [`waitTime`](../components/CalibPage.tsx#L1055),
-   [`placeObject`](../components/CalibPage.tsx#L1213) are all defined *inside* the
+   [`checkSlot_and_reelAdv`](../../components/CalibPage.tsx#L595),
+   [`checkFlexFeederPlate`](../../components/CalibPage.tsx#L712),
+   [`goCheckFlexFeederPlate`](../../components/CalibPage.tsx#L778),
+   [`waitTime`](../../components/CalibPage.tsx#L1055),
+   [`placeObject`](../../components/CalibPage.tsx#L1213) are all defined *inside* the
    main loop and close over its locals. That tangle is the #1 reason
    any edit feels risky.
 
@@ -40,21 +40,21 @@ literals should not appear in new code.
    `slotCheckPromise_BK` pipeline vision with motion correctly, but
    reading-order ≠ execution-order, which is hard to follow.
 
-4. **`_this` ref as untyped mutable bag** ([line 68](../components/CalibPage.tsx#L68)):
+4. **`_this` ref as untyped mutable bag** ([line 68](../../components/CalibPage.tsx#L68)):
    `_this.isRunning`, `_this.run_cycle_stop`, `_this.current_error`.
    Invisible to React, untyped, used as the thread-stop signal. Every
    field is a landmine.
 
 5. **NaN-as-signal pattern**: `targetPickSlotIdx==targetPickSlotIdx`
    and `slotHoleOffset.X!=slotHoleOffset.X`
-   ([lines 1197, 1300](../components/CalibPage.tsx#L1197)). Works, unreadable.
+   ([lines 1197, 1300](../../components/CalibPage.tsx#L1197)). Works, unreadable.
 
 6. **Command literals repeated with subtle variants** — every
    `{ "type": "M", "cmd": "M4", "pin": 1<<IO_Pins.O.X | 1<<IO_Pins.O.Y, "state": ..., reset_ms: N, ... }`
    is hand-built. Impossible to grep "all places that trigger the
    bottom camera."
 
-7. **Input watchdog is a fire-and-forget IIFE** ([line 809](../components/CalibPage.tsx#L809)).
+7. **Input watchdog is a fire-and-forget IIFE** ([line 809](../../components/CalibPage.tsx#L809)).
    Stop signal is `_this.run_cycle_stop` (not reset anywhere obvious;
    leak-prone on error paths).
 
@@ -138,6 +138,6 @@ async function inspectBottom(): Promise<BtmData> {
 - **2026-04-26** — Fixes #2, #3, #4, #5, #7 landed; #6 partial (in-file
   unified, separate constants module deferred). All call sites of
   hand-rolled `{type:'M', cmd:...}` in CalibPage now route through
-  `cmd.*` builders from [`lib/protocol.ts`](../lib/protocol.ts).
+  `cmd.*` builders from [`lib/protocol.ts`](../../lib/protocol.ts).
   Camera+light strobe pulses go through the new `camTrig(camPin,
   lightPin, opts)` helper. `npx tsc --noEmit` clean throughout.

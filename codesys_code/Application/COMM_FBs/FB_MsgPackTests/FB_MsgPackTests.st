@@ -3,7 +3,7 @@
     Self-contained round-trip + regression tests for the MsgPack lib.
     Bypasses the web UI -- flip bRun to TRUE once; results appear on
     outputs. Several tests are *expected to fail* on today's code --
-    they are the regression tests for the findings in doc/msgpack.md.
+    they are the regression tests for the findings in doc/2-contracts/msgpack.md.
 
     Intended call site: PLC_PRG cyclically invokes this FB with
     bRun := GVL.bRunMsgPackTests. Operator toggles that bool in online

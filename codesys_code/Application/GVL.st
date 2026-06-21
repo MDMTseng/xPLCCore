@@ -49,7 +49,7 @@ VAR_GLOBAL
 
 	(* --- MsgPack self-test harness (bypasses web UI).
 	   Toggle bRunMsgPackTests in online mode; read outputs on the FB
-	   instance. See doc/msgpack.md for expected failures on today's
+	   instance. See doc/2-contracts/msgpack.md for expected failures on today's
 	   code. *)
 	bRunMsgPackTests : BOOL;
 	fbMsgPackTests   : FB_MsgPackTests;

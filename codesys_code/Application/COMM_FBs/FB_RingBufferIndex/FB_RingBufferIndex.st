@@ -39,7 +39,7 @@
     oldest") which created a second consumer racing the Comm task; that
     has been replaced everywhere with a "drop-newest" pattern (skip the
     write if space()=0, or pack into GVL.reMP_info_scratch and decline
-    to pushHead). See doc/ringbuf-bugs.md item #12.
+    to pushHead). See doc/3-subsystems/ringbuf-bugs.md item #12.
 
     Author:         Gemini (initial), refactored to SPSC lock-free 2026-04-27
     Version:        2.0

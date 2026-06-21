@@ -2,7 +2,7 @@
 
 This documents the **current** vision↔host↔PLC flow. It is descriptive,
 not prescriptive: future changes (e.g. direct vision↔PLC fly-event
-integration discussed in [solidification.md W7](./solidification.md))
+integration discussed in [solidification.md W7](../1-concepts/solidification.md))
 should be a separate document on top of this one.
 
 ---
@@ -120,15 +120,15 @@ Required envelope fields: `type` (group), `cmd_type` (subcommand within
 the group). All other fields are per-command. Reply shape mirrors the
 request `id` plus per-command result fields; no `ack` flag (a thrown
 exception is the only failure mode visible to the caller, raised when
-the socket isn't connected — see [PluginHello.tsx:784](../PluginHello.tsx#L784)).
+the socket isn't connected — see [PluginHello.tsx:784](../../PluginHello.tsx#L784)).
 
 ### `type:"TopInsp"`
 
 | `cmd_type` | Request fields | Reply fields | Used at |
 |---|---|---|---|
-| `save_target` | `t0?: string`, `t1?: string`, `t2?: string` — image filename per slot; `undefined` slots are skipped | implementation-defined ack | [CalibPage.tsx:1253](../components/CalibPage.tsx#L1253) (production save on NG-pick), [CalibPage.tsx:3043](../components/CalibPage.tsx#L3043) (operator dev tool) |
-| `revisit` | `index: number` (saved-object index, 0..buffer-1); `revisit_idx?: number` (per-object subview index, -1..2); `SL_sens_alpha?: number` (sensitivity override) | re-run inspection result on the saved frame; same shape as a `TOPCheckID` push but inline | [CalibPage.tsx:3034](../components/CalibPage.tsx#L3034), [CalibPage.tsx:3056](../components/CalibPage.tsx#L3056), [CalibPage.tsx:3072](../components/CalibPage.tsx#L3072) (slider drag), [CalibPage.tsx:3076](../components/CalibPage.tsx#L3076) (arrow key); also bottom-cam variant at [CalibPage.tsx:3002](../components/CalibPage.tsx#L3002) |
-| `BufferSize` | _none_ | number of saved targets currently in VP's buffer | [CalibPage.tsx:3087](../components/CalibPage.tsx#L3087) |
+| `save_target` | `t0?: string`, `t1?: string`, `t2?: string` — image filename per slot; `undefined` slots are skipped | implementation-defined ack | [CalibPage.tsx:1253](../../components/CalibPage.tsx#L1253) (production save on NG-pick), [CalibPage.tsx:3043](../../components/CalibPage.tsx#L3043) (operator dev tool) |
+| `revisit` | `index: number` (saved-object index, 0..buffer-1); `revisit_idx?: number` (per-object subview index, -1..2); `SL_sens_alpha?: number` (sensitivity override) | re-run inspection result on the saved frame; same shape as a `TOPCheckID` push but inline | [CalibPage.tsx:3034](../../components/CalibPage.tsx#L3034), [CalibPage.tsx:3056](../../components/CalibPage.tsx#L3056), [CalibPage.tsx:3072](../../components/CalibPage.tsx#L3072) (slider drag), [CalibPage.tsx:3076](../../components/CalibPage.tsx#L3076) (arrow key); also bottom-cam variant at [CalibPage.tsx:3002](../../components/CalibPage.tsx#L3002) |
+| `BufferSize` | _none_ | number of saved targets currently in VP's buffer | [CalibPage.tsx:3087](../../components/CalibPage.tsx#L3087) |
 
 Notes:
 
@@ -145,7 +145,7 @@ Notes:
 
 This section closes [open question #3](#open-questions-deferred-to-w7-phase-2)
 at the documentation level. Promoting `{type, cmd_type}` into a typed
-builder analogous to [`lib/protocol.ts`](../lib/protocol.ts) is still
+builder analogous to [`lib/protocol.ts`](../../lib/protocol.ts) is still
 open and would be the next step if the VP command surface grows.
 
 ---
@@ -163,7 +163,7 @@ The renderer interprets the vision result. Per inspection:
 4. NG classification is currently inline in `runAllObjects` via
    `tossReasons` array; class 0/1/2 are emitted into the
    `runinng_checkpoint("NG_COUNT", ...)` stream. This is the spot
-   [solidification.md W4 #8](./solidification.md) targets for
+   [solidification.md W4 #8](../1-concepts/solidification.md) targets for
    data-driven taxonomy.
 
 ---
@@ -174,7 +174,7 @@ The "bin" is the nozzle's blow line, not a separate actuator. To toss:
 
 1. Renderer commands `cmd.G1(...)` to one of `TOSS_LOCATION_0/1/2`
    (currently keyed on NG class but using static module-scope locations
-   — see [solidification.md W4 #6](./solidification.md)).
+   — see [solidification.md W4 #6](../1-concepts/solidification.md)).
 2. Renderer issues `cmd.M4({pin: Nozzle_suck, state: 0})` (suck off)
    then `cmd.M4({pin: Nozzle_blow, state: 1, reset_ms: 20})` (blow
    pulse) to release the part.
@@ -214,4 +214,4 @@ the contract can be considered complete:
    remains the only thing that interprets verdicts and commands the
    bin. Don't reopen this without revisiting the generic-PLC preference.
 
-These are gating questions for [P3 #15](./plc.md) (AxisGroupSM split).
+These are gating questions for [P3 #15](../3-subsystems/plc.md) (AxisGroupSM split).

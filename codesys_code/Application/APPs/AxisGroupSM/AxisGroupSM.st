@@ -22,7 +22,7 @@ PROGRAM AxisGroupSM
         // +/-360 deg. We divide by this constant here and multiply by
         // the same constant on the SM_Drive_GenericDSP402 axis-side
         // scaling (CODESYS GUI), so the wrap is dodged round-trip.
-        // Both ends MUST match. See doc/coupling_invariants.md
+        // Both ends MUST match. See doc/1-concepts/coupling_invariants.md
         // "A-axis /10 scaling" before changing.
         A_AXIS_KIN_WRAP_SCALE   : LREAL := 10;
         // Bound on per-scan SYS-drain iterations. Prevents a flood of SYS
