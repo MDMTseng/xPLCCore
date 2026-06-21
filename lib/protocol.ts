@@ -89,6 +89,11 @@ export interface G1Args {
   Cor?: number;
   ACC?: number; DEA?: number; JERK?: number;
   abort?: boolean;
+  // Phase 4 step 2 — coordinate frame tag. 0 = WCS (default), 1 = PCS_1
+  // (conveyor-tracking, requires an active Coord1 bind). PLC NAKs other
+  // values with err='bad_frame' or, if frame=1 without a bind, NAKs
+  // upstream of MoveLinear.
+  frame?: 0 | 1;
 }
 
 export interface M4Args {
@@ -103,6 +108,26 @@ export interface M4Args {
   event_id?: number;
   ttl_ms?: number;
   pin_op_seq?: unknown;
+  // Phase 4 step 3 — FlyEvent COORD1_BIND variant. trig=130 (PulseTrigger)
+  // + action='coord1_bind' + pulse_target schedules a conveyor bind to fire
+  // when ConveyorPulseRaw crosses pulse_target. exit_pulse_offset (>0)
+  // defines the pick window — when belt overshoots ref_pulse+offset, PLC
+  // emits COORD1_ERROR + transitions to Error + MC_GroupStop.
+  trig?: number;
+  action?: 'coord1_bind' | 'pin_op';
+  pulse_target?: number;
+  ref_xyz?: [number, number, number];
+  scale?: [number, number, number];
+  exit_pulse_offset?: number;
+}
+
+export interface M4BindArgs {
+  pulse_target: number;
+  ref_xyz: [number, number, number];
+  exit_pulse_offset: number;
+  event_id: number;
+  scale?: [number, number, number];   // default [100, 0, 0]
+  ttl_ms?: number;
 }
 
 export interface ReelGoArgs {
@@ -173,12 +198,28 @@ export interface DiagSnapshot {
 
 export interface PushEvent {
   kind: 'event';
-  name: 'ST_CHG' | 'COORD_SET' | 'MOVE_DONE';
+  name: 'ST_CHG' | 'COORD_SET' | 'MOVE_DONE' | 'COORD1_ERROR';
   runtime_ms: number;
   // COORD_SET only: BOOL gate state on this edge (true = SetCoord0/1
   // just raised it; false = UnInited entry just cleared it).
   value?: boolean;
   [k: string]: unknown;
+}
+
+// Phase 4 step 3 — COORD1_ERROR payload. Fired when the conveyor pulse
+// overshoots Coord1ExitPulse during a bound tracking move, or when a
+// bind is rejected (rebind_active / malformed scale). PLC source:
+// AxisGroupSM.st window-exit detector.
+export interface Coord1ErrorEvent extends PushEvent {
+  name: 'COORD1_ERROR';
+  event_id: number;
+  ref_pulse: number;
+  exit_pulse: number;
+  pulse_at_err: number;
+  movement_id: number;
+  mv_progress: number;
+  arm_x: number; arm_y: number; arm_z: number;
+  pcs_x: number; pcs_y: number; pcs_z: number;
 }
 
 // Strip undefined keys so the wire packet doesn't carry phantom fields.
@@ -202,6 +243,24 @@ export const cmd = {
   G1: (a: G1Args = {}) => env<G1Reply>({ type: 'M', cmd: 'G1', ...compact(a) }),
   G4: (P: number) => env<AckReply>({ type: 'M', cmd: 'G4', P }),
   M4: (a: M4Args) => env<M4Reply>({ type: 'M', cmd: 'M4', ...compact(a) }),
+  // Convenience builder for the FlyEvent COORD1_BIND variant.
+  // trig=130 (PulseTrigger), action='coord1_bind', scale defaults to
+  // [100, 0, 0] (X-only conveyor); exit_pulse_offset is the pick window
+  // — PLC fires COORD1_ERROR + Error state when ConveyorPulseRaw
+  // exceeds ref_pulse + exit_pulse_offset.
+  M4Bind: (a: M4BindArgs) => env<M4Reply>({
+    type: 'M', cmd: 'M4',
+    ...compact({
+      trig: 130,
+      action: 'coord1_bind' as const,
+      pulse_target: a.pulse_target,
+      ref_xyz: a.ref_xyz,
+      scale: a.scale ?? [100, 0, 0],
+      exit_pulse_offset: a.exit_pulse_offset,
+      event_id: a.event_id,
+      ttl_ms: a.ttl_ms,
+    }),
+  }),
   ReelGo: (a: ReelGoArgs) => env<AckReply>({ type: 'M', cmd: 'ReelGo', ...compact(a) }),
   SetCoord0: () => env<AckReply>({ type: 'M', cmd: 'SetCoord0' }),
   SetCoord1: () => env<AckReply>({ type: 'M', cmd: 'SetCoord1' }),
