@@ -93,15 +93,43 @@ export async function writeScratchpad(
   return reply?.ack === true;
 }
 
-// Convenience: stamp the "I'm about to advance reel" intent with the
-// PLC's currently-accepted movement id so resume can compare against
-// LastCompletedMovementId after the fact.
+// Stamp an intent into the PLC scratchpad. The exact wire write happens
+// here; the contract about *when* to call it is load-bearing for the
+// whole §4 (3) blow-off path -- get it wrong and resume can never
+// detect "started but not finished":
+//
+//   ▶ CALL THIS *AFTER* the action's wire packet is acked, NEVER BEFORE.
+//   ▶ Pass `intent_movement_id` = the `movement_id` echoed in the
+//     action's ack reply (e.g. G1Reply.movement_id). Do NOT pass the
+//     PLC's current `last_completed_movement_id` -- that's the previous
+//     move and the comparison on resume would always look "completed".
+//
+// Sequence per unrecoverable action (e.g. reel advance):
+//   1. send G1 / motion command, await reply
+//   2. read reply.movement_id (the id PLC assigned this action)
+//   3. await writeIntent({ intent_movement_id: reply.movement_id, ... })
+//   4. (action executes physically; takes scans/ms/seconds)
+//   5. on completion the PLC's last_completed_movement_id advances.
+//
+// Step 3 is the durable mark. If the renderer crashes between 1 and 3,
+// the cursor is stale by one action -- preferable to the alternative
+// (crashing between 2 and 4 with no mark) because step 1 is reversible
+// in practice via the next scan's PLC state. See
+// implementation_review_2026-06-22.md §2.
+//
+// Window between step 3 ack and the actual physical motion: a single
+// PLC scan (~1ms on EC_Task). Acceptable for the blow-off semantics
+// because a crash in that window leaves the move "queued but not
+// drained" -- last_completed_movement_id < intent_movement_id, which
+// resume correctly classifies as state-2 (blow-off).
 export async function writeIntent(
   send: SendFn,
   opts: {
     plan_id: number;
     plan_index: number;
     intent_kind: IntentKindValue;
+    // The movement_id echoed in the just-acked action's reply.
+    // See contract block above.
     intent_movement_id: number;
     last_vision_pulse?: number;
   },
@@ -168,10 +196,16 @@ export function reconcileOnResume(
     };
   }
 
+  // CRITICAL: compare against last_completed_movement_id, NOT
+  // movement_id. movement_id is the move currently being executed (or
+  // at rest, the last accepted) -- it bumps the moment a move *starts*,
+  // so a comparison against it would mis-report an unfinished move as
+  // completed and skip the blow-off path entirely. See
+  // implementation_review_2026-06-22.md §2 and the writeIntent contract.
   const intent_completed =
     sp.intent_kind !== IntentKind.Idle &&
     sp.intent_movement_id !== 0 &&
-    machineState.movement_id >= sp.intent_movement_id;
+    machineState.last_completed_movement_id >= sp.intent_movement_id;
 
   const vision_result_unknown =
     intent_completed && ctx.vision_result_seen === false;

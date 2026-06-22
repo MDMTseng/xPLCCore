@@ -49,6 +49,8 @@ mounts our renderer is also out of scope.
 | Conveyor pick — kernel-native belt tracking (PCS_1 + `MC_TrackConveyorBelt`) | ✅ Phase 4 done | [`doc/conveyor_pick.md`](doc/3-subsystems/conveyor_pick.md) |
 | Conveyor pick — FlyEvent COORD1_BIND + window-exit fault | ✅ Phase 4 step 3 done | [`flyevent_coord1_bind` memory](.claude/projects/.../memory/flyevent_coord1_bind.md) |
 | Conveyor pick — renderer orchestrator (`runConveyorPick`) | 🚧 Phase 6 step 1 (skeleton, no UI) | [`orchestrator/conveyorPick.ts`](orchestrator/conveyorPick.ts) |
+| Crash-and-resume (W6) — PLC scratchpad + reel pos + boot_epoch + last_completed_movement_id | ✅ PLC live (verified by B.4 burst probe) | [`doc_review/decisions_2026-06-22.md`](doc_review/decisions_2026-06-22.md) |
+| Crash-and-resume — renderer reconcile / planResumeAction / writeIntent | 🚧 scaffolding only (`orchestrator/resume.ts` + 17 vitest unit tests; not wired into CalibPage.runAllObjects yet) | [`orchestrator/resume.ts`](orchestrator/resume.ts) |
 | Real EC encoder for belt | ⏳ Phase 0 not started (synthetic pulse in use) | — |
 | Vision → bind adapter on renderer | ⏳ Phase 6 step 3 pending | — |
 | 4hr fuzz baseline (240min @25pkt/s clean) | ✅ Captured 2026-06-17 | `plc_4hr_fuzz_baseline` memory |

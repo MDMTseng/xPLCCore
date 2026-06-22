@@ -865,9 +865,11 @@ PROGRAM AxisGroupSM
                 IF IoConfig_Globals.EAxis1.bError THEN AxesErrMask := AxesErrMask OR 16#2; END_IF;
                 IF IoConfig_Globals.EAxis2.bError THEN AxesErrMask := AxesErrMask OR 16#4; END_IF;
                 IF reelpullmotor.bError           THEN AxesErrMask := AxesErrMask OR 16#8; END_IF;
-                // 15 top-level keys: 12 baseline + reel_pos (§4 (1))
-                // + scratchpad + boot_epoch_now (§4 (2)).
-                ResponsePacketPointer^.ele_count := 15;
+                // 16 top-level keys: 12 baseline + reel_pos (§4 (1)) +
+                // scratchpad + boot_epoch_now (§4 (2)) +
+                // last_completed_movement_id (§4 (2) intent reconcile,
+                // per implementation_review_2026-06-22.md §2).
+                ResponsePacketPointer^.ele_count := 16;
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('st'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := AxisGroupManagerFb._eState);
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('st_str'));
@@ -952,6 +954,19 @@ PROGRAM AxisGroupSM
                 // restarted since the write -> scratchpad stale.
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('boot_epoch_now'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := UDINT_TO_DINT(GVL.BootEpochCount));
+                // last_completed_movement_id : latched at the MOVE_DONE
+                // emit site (UpdateMotionProgress.st line 81 / 92), so it
+                // tracks "the last move that actually finished and drained
+                // the buffer", NOT "the move id corresponding to current
+                // arm position" (which is what `movement_id` above is,
+                // updated as soon as a move starts executing). Renderer
+                // resume reconcile MUST compare its scratchpad
+                // intent_movement_id against THIS field, not `movement_id`
+                // -- otherwise a move that started but didn't finish is
+                // mis-reported as completed. See
+                // implementation_review_2026-06-22.md §2.
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('last_completed_movement_id'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := TO_LINT(PrevCompletedMovementId));
             ELSIF (CommandType = 'SCRATCHPAD_WRITE') THEN
                 // §4 (2) -- host write path. Take the host-controlled fields
                 // off the request and store them. PLC NEVER interprets any of

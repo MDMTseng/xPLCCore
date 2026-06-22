@@ -133,6 +133,23 @@ See [`memory/codesys_import_then_online_change.md`](../../.claude/projects/c--Us
 
 ---
 
+## Scratchpad intent movement_id timing
+**Sites:**
+- [`orchestrator/resume.ts`](../../orchestrator/resume.ts) `writeIntent()` — host stamps `intent_movement_id` after an action is acked
+- [`orchestrator/resume.ts`](../../orchestrator/resume.ts) `reconcileOnResume()` — compares `scratchpad.intent_movement_id` vs `machineState.last_completed_movement_id` (NOT `machineState.movement_id`)
+- [`AxisGroupSM.st`](../../codesys_code/Application/APPs/AxisGroupSM/AxisGroupSM.st) GET_MACHINE_STATE packer — `last_completed_movement_id` from `PrevCompletedMovementId` (latched at MOVE_DONE), `movement_id` from `GroupReadPositionFb.MovementId` (bumps when a move starts executing)
+
+**Constraint:** Three pieces have to agree on which id is being compared:
+1. Host writes `intent_movement_id` = the movement_id echoed in the action's ack reply (e.g. `G1Reply.movement_id`). MUST happen AFTER the ack, NEVER BEFORE.
+2. PLC tracks `last_completed_movement_id` separately from `movement_id`. The completed one bumps only at MOVE_DONE; the current one bumps when execution starts.
+3. Resume reconcile uses `last_completed_movement_id` for the `>= intent_movement_id` comparison.
+
+**Failure mode if broken:** State-2 (blow-off) detection becomes a constant TRUE (intent always looks completed), so the renderer skips the safety blow-off after every resume — duplicate reel advance, skipped carrier slot, **scrap**. This is the exact failure mode `decisions §4 (2)` exists to prevent.
+
+**History:** `last_completed_movement_id` was added 2026-06-22 after [`implementation_review §2`](../../doc_review/implementation_review_2026-06-22.md) caught the comparison aliased to `movement_id` (which on virtual axes snaps to target instantly and would have masked all unfinished-move scenarios).
+
+---
+
 ## Action: keeping this doc honest
 
 When you add or change a coupling, **add the entry here in the same commit**. The

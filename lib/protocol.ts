@@ -188,6 +188,15 @@ export interface MachineState {
   // scratchpad.boot_epoch on resume; mismatch -> PLC restarted since
   // the last scratchpad write -> cursor is stale.
   boot_epoch_now: number;
+  // Last move id that actually finished (latched at the MOVE_DONE emit
+  // site). Distinct from `movement_id` above, which is "the move id
+  // corresponding to the current arm position" and updates as soon as
+  // a move starts executing. Renderer resume reconcile MUST compare
+  // scratchpad.intent_movement_id against THIS field -- using
+  // `movement_id` would mis-report a started-but-unfinished move as
+  // completed, defeating state-2 blow-off detection.
+  // (implementation_review_2026-06-22.md §2)
+  last_completed_movement_id: number;
 }
 
 export interface Scratchpad {
@@ -357,6 +366,7 @@ export const REQUIRED_KEYS = {
     'movement_id', 'runtime_ms', 'coord_set',
     'axes_err_mask', 'axes_state', 'axes_err_id', 'axes_labels',
     'reel_pos', 'scratchpad', 'boot_epoch_now',
+    'last_completed_movement_id',
   ],
   DiagSnapshot: [
     'runtime_ms', 'sm_scans', 'remp_drop', 'overlen_drop', 'send_stall_drop',
