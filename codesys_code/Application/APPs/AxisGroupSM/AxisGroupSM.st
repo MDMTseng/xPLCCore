@@ -408,6 +408,9 @@ PROGRAM AxisGroupSM
     ScratchpadIntentMidRaw       : LINT;
     ScratchpadLastVisionPulseRaw : LINT;
 
+    // GA_EV ev field raw read (-1 sentinel = key missing in request).
+    GaEvRaw : LINT;
+
     END_VAR
 (* =========== IMPLEMENTATION =========== *)
 
@@ -818,31 +821,46 @@ PROGRAM AxisGroupSM
 
             IF (CommandType = 'GA_EV') THEN
                 ShouldReturn := TRUE;
-                CommandAck := TRUE;
-                InputEvent := TO_UDINT(MessageUnpackerFb.TryReadINT64('ev', - 1));
-                AxisGroupManagerFb.TRANSITION(
-                    eEvent := InputEvent
-                );
+                GaEvRaw := MessageUnpackerFb.TryReadINT64('ev', -1);
+                // 2026-06-23 code-review fix: validate ev before posting.
+                // Pre-fix: TO_UDINT(-1) wrapped to 16#FFFFFFFF, Transition
+                // no-op'd, but reply still ACKed -- host couldn't tell the
+                // FSM did nothing. Range check covers E_RobotEvent's UDINT
+                // enum: NONE=0..EV_ER=11. Out-of-range (including the -1
+                // missing-key sentinel) is rejected with err='unknown_event'.
+                IF (GaEvRaw < 1) OR (GaEvRaw > 11) THEN
+                    CommandAck := FALSE;
+                    GVL.UnknownEventNakCount := GVL.UnknownEventNakCount + 1;
+                    ResponsePacketPointer^.ele_count := 2;
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := FALSE);
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('unknown_event'));
+                ELSE
+                    CommandAck := TRUE;
+                    InputEvent := TO_UDINT(GaEvRaw);
+                    AxisGroupManagerFb.TRANSITION(
+                        eEvent := InputEvent
+                    );
 
-                ShouldReturn := TRUE;
-                CommandAck := TRUE;
-                ResponsePacketPointer^.ele_count := 4;
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('st'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := AxisGroupManagerFb._eState);
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('st_str'));
-                StateString := TO_STRING(AxisGroupManagerFb._eState);
-                // NOTE: PrevAxisGroupState is intentionally NOT updated here.
-                // The ST_CHG push-event detector above at line ~255 owns that
-                // variable; pre-updating it would suppress the ST_CHG event
-                // for any transition triggered via SYS/GA_EV (verified live
-                // 2026-04-24: UnInited->Powering was silently swallowed).
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(StateString));
-                // Error latch: empty string + 0 when no error has been recorded
-                // since the last EV_RESET -> UnInited cycle.
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_src'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(GVL.LastErrorSource));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_id'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.LastErrorID));
+                    ResponsePacketPointer^.ele_count := 4;
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('st'));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := AxisGroupManagerFb._eState);
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('st_str'));
+                    StateString := TO_STRING(AxisGroupManagerFb._eState);
+                    // NOTE: PrevAxisGroupState is intentionally NOT updated here.
+                    // The ST_CHG push-event detector above at line ~255 owns that
+                    // variable; pre-updating it would suppress the ST_CHG event
+                    // for any transition triggered via SYS/GA_EV (verified live
+                    // 2026-04-24: UnInited->Powering was silently swallowed).
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(StateString));
+                    // Error latch: empty string + 0 when no error has been recorded
+                    // since the last EV_RESET -> UnInited cycle.
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_src'));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(GVL.LastErrorSource));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_id'));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.LastErrorID));
+                END_IF
             ELSIF (CommandType = 'PING') THEN
                 // A3: UI heartbeat. Stamp last-seen and bump counter; reply with runtime.
                 // Track worst-case PING-to-PING gap (PLC clock) for comm-jitter

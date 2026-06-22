@@ -193,6 +193,20 @@ VAR_GLOBAL
 	   whole write if any field is missing; this counter bumps each NAK. *)
 	ScratchpadPartialNakCount : UDINT := 0;
 
+	(* SetCoord0/1 motion-in-flight rejection. SetCoord0/1 mutates the
+	   active MC_COORD_REF transform (CoordTransform) and pulses
+	   MC_SetCoordinateTransform's Execute. If a G1 is mid-flight the WCS
+	   origin shifts under it and the arm darts. Mirrors COORD1_BIND's
+	   own MotionBufferSize>0 guard. *)
+	SetCoordBusyNakCount : UDINT := 0;
+
+	(* GA_EV unknown-event rejection. Pre-fix, TryReadINT64('ev', -1)
+	   followed by TO_UDINT(-1) wrapped to 16#FFFFFFFF and was passed to
+	   Transition; no CASE matched so the FSM no-op'd but the reply still
+	   carried CommandAck=TRUE, fooling the host into thinking its event
+	   landed. NAK these instead so a malformed GA_EV is observable. *)
+	UnknownEventNakCount : UDINT := 0;
+
 	(* Server-initiated event packets (push notifications).
 	   AxisGroupSM emits an `ST_CHG` event into reMP_info_ridx on every
 	   FSM state change (detected by PrevAxisGroupState diff). Packet shape:

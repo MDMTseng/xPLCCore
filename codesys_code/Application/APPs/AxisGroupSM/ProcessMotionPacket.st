@@ -151,41 +151,66 @@
             END_IF;
 
         ELSIF (CommandType = 'SetCoord0') THEN
-            CoordTransform.X := 0.0;
-            CoordTransform.Y := 0.0;
-            CoordTransform.Z := 0.0;
-            CoordTransform.A := 0.0;
-            CoordTransform.B := 0.0;
-            CoordTransform.C := 0.0;
-            ApplyCoordTransform := TRUE;
-            GVL.CoordSystemConfigured := TRUE;
+            // 2026-06-23 code-review fix: refuse if a G1 is in flight.
+            // Pulsing MC_SetCoordinateTransform while a move is executing
+            // shifts the WCS origin under the move and the arm darts.
+            // Mirrors COORD1_BIND's own motion-in-flight guard.
+            IF MotionBufferSize > 0 THEN
+                ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('motion_in_flight'));
+                GVL.SetCoordBusyNakCount := GVL.SetCoordBusyNakCount + 1;
+                ShouldReturn := TRUE;
+                CommandAck := FALSE;
+                GVL.minfo_buf_ridx.consumeTail();
+            ELSE
+                CoordTransform.X := 0.0;
+                CoordTransform.Y := 0.0;
+                CoordTransform.Z := 0.0;
+                CoordTransform.A := 0.0;
+                CoordTransform.B := 0.0;
+                CoordTransform.C := 0.0;
+                ApplyCoordTransform := TRUE;
+                GVL.CoordSystemConfigured := TRUE;
 
-            ShouldReturn := TRUE;
-            CommandAck := TRUE;
-            GVL.minfo_buf_ridx.consumeTail();
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                GVL.minfo_buf_ridx.consumeTail();
+            END_IF
 
         ELSIF (CommandType = 'SetCoord1') THEN
-            CoordTransform.X := 0.0;
-            CoordTransform.Y := 0.0;
-            CoordTransform.Z := 0.0;
-            CoordTransform.A := 60.0;
-            CoordTransform.B := 0.0;
-            CoordTransform.C := 0.0;
-            ApplyCoordTransform := TRUE;
-            GVL.CoordSystemConfigured := TRUE;
-            GVL.DBG_SetCoord1AcceptMs := RuntimeMs;
-            // Reset the lifecycle DBG_SetCoord* fields so an old reading
-            // doesn't get mistaken for the new run.
-            GVL.DBG_SetCoordExecuteRiseMs  := 0;
-            GVL.DBG_SetCoordBusyFirstMs    := 0;
-            GVL.DBG_SetCoordDoneMs         := 0;
-            GVL.DBG_SetCoordErrorMs        := 0;
-            GVL.DBG_SetCoordLastErrorID    := 0;
-            GVL.DBG_SetCoordExecuteFallMs  := 0;
+            // Same guard as SetCoord0 -- see comment above.
+            IF MotionBufferSize > 0 THEN
+                ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('motion_in_flight'));
+                GVL.SetCoordBusyNakCount := GVL.SetCoordBusyNakCount + 1;
+                ShouldReturn := TRUE;
+                CommandAck := FALSE;
+                GVL.minfo_buf_ridx.consumeTail();
+            ELSE
+                CoordTransform.X := 0.0;
+                CoordTransform.Y := 0.0;
+                CoordTransform.Z := 0.0;
+                CoordTransform.A := 60.0;
+                CoordTransform.B := 0.0;
+                CoordTransform.C := 0.0;
+                ApplyCoordTransform := TRUE;
+                GVL.CoordSystemConfigured := TRUE;
+                GVL.DBG_SetCoord1AcceptMs := RuntimeMs;
+                // Reset the lifecycle DBG_SetCoord* fields so an old reading
+                // doesn't get mistaken for the new run.
+                GVL.DBG_SetCoordExecuteRiseMs  := 0;
+                GVL.DBG_SetCoordBusyFirstMs    := 0;
+                GVL.DBG_SetCoordDoneMs         := 0;
+                GVL.DBG_SetCoordErrorMs        := 0;
+                GVL.DBG_SetCoordLastErrorID    := 0;
+                GVL.DBG_SetCoordExecuteFallMs  := 0;
 
-            ShouldReturn := TRUE;
-            CommandAck := TRUE;
-            GVL.minfo_buf_ridx.consumeTail();
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                GVL.minfo_buf_ridx.consumeTail();
+            END_IF
 
         ELSIF (CommandType = 'RESET_DBG_INFO') THEN
             IoTriggerCount := 0;
