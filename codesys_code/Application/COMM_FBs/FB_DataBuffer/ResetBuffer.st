@@ -1,4 +1,4 @@
-METHOD reset_buffer : BOOL
+METHOD ResetBuffer : BOOL
 VAR_INPUT
 	p_sBuffer : POINTER TO BYTE; (* IN: The address of the external buffer array *)
     udi_Capacity : DINT   ;      (* IN: The total capacity of the external buffer *)

@@ -1,3 +1,3 @@
-METHOD clear
+METHOD Clear
 (* =========== IMPLEMENTATION =========== *)
 udiCurrentSize:=0;

@@ -1,12 +1,12 @@
 (*
-    METHOD get_space : UDINT
+    METHOD GetSpace : UDINT
     
     Returns the number of available bytes from the head to the end of the buffer.
 *)
-METHOD get_space : DINT
+METHOD GetSpace : DINT
 (* =========== IMPLEMENTATION =========== *)
 IF pBuffer <> 0 THEN
-    get_space := udiCapacity - udiCurrentSize;
+    GetSpace := udiCapacity - udiCurrentSize;
 ELSE
-    get_space := 0;
+    GetSpace := 0;
 END_IF

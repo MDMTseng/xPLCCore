@@ -1,8 +1,8 @@
-METHOD get_head : POINTER TO BYTE
+METHOD GetHead : POINTER TO BYTE
 (* =========== IMPLEMENTATION =========== *)
 IF pBuffer <> 0 THEN
-    get_head := pBuffer + udiCurrentSize;
+    GetHead := pBuffer + udiCurrentSize;
 ELSE
     // If the buffer has not been reset, return a NULL pointer.
-    get_head := 0;
+    GetHead := 0;
 END_IF

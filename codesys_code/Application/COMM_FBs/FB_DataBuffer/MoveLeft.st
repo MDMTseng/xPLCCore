@@ -1,4 +1,4 @@
-METHOD move_left : BOOL
+METHOD MoveLeft : BOOL
 VAR_INPUT
 	udiIndex : DINT;
 END_VAR

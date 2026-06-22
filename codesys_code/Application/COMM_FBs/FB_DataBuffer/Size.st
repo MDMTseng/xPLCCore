@@ -1,4 +1,4 @@
-METHOD size : DINT
+METHOD Size : DINT
 (* =========== IMPLEMENTATION =========== *)
 
-size := udiCurrentSize;
+Size := udiCurrentSize;

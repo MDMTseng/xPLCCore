@@ -1,10 +1,10 @@
 (*
-    METHOD write_length
-    
+    METHOD WriteLength
+
     Increments the buffer's size by the specified length, effectively "writing" data to it.
     This should be called after an external write operation (e.g., NBS.Read).
 *)
-METHOD write_length
+METHOD WriteLength
 VAR_INPUT
      udiLength: DINT;
 END_VAR

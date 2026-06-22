@@ -72,7 +72,7 @@ END_VAR
 IF bFirstCycle THEN
     fbMsgPakParser.ResetParser();
     iParseIdx := 0;
-    fbDataBuffer.reset_buffer(ADR(aInternalBuffer[0]), SIZEOF(aInternalBuffer));
+    fbDataBuffer.ResetBuffer(ADR(aInternalBuffer[0]), SIZEOF(aInternalBuffer));
     bFirstCycle := FALSE;
 END_IF
 
@@ -129,7 +129,7 @@ IF xResetConnection THEN
         // Grace period elapsed — disable CLIENT and flush internal buffers.
         xEnableConnection := FALSE;
         fbMsgPakParser.ResetParser();
-        fbDataBuffer.clear();
+        fbDataBuffer.Clear();
         // TCP stack has confirmed the socket is closed; ready to accept a new connection.
         IF NOT CLIENT.xActive THEN
             xResetConnection := FALSE;
@@ -147,7 +147,7 @@ CLIENT(itfServer := itfServer, xEnable := xEnableConnection);
 
 // --- 6. Consume the previously exposed packet from the buffer ---
 IF iProcessedPacketLen > 0 THEN
-    fbDataBuffer.move_left(iProcessedPacketLen);
+    fbDataBuffer.MoveLeft(iProcessedPacketLen);
     iParseIdx           := iParseIdx - iProcessedPacketLen;
     iProcessedPacketLen := 0;
 END_IF
@@ -155,10 +155,10 @@ END_IF
 // --- 7. Read incoming data and parse for complete MessagePack packets ---
 IF PKT_ALLOW_NEXT THEN
     // Read new data into the buffer if the connection is active and space is available.
-    IF CLIENT.xActive AND fbDataBuffer.get_space() > 0 THEN
+    IF CLIENT.xActive AND fbDataBuffer.GetSpace() > 0 THEN
         eReadErrorID := CLIENT.Read(
-            fbDataBuffer.get_head(),
-            fbDataBuffer.get_space(),
+            fbDataBuffer.GetHead(),
+            fbDataBuffer.GetSpace(),
             udiCount => udiBytesReceived
         );
         IF eReadErrorID <> NBS.ERROR.NO_ERROR THEN
@@ -169,14 +169,14 @@ IF PKT_ALLOW_NEXT THEN
         ELSIF udiBytesReceived > 0 THEN
             fbIdleWatchdog(IN := FALSE);  // Feed the watchdog — connection is alive.
             DBG_recvCount := DBG_recvCount + udiBytesReceived;
-            fbDataBuffer.write_length(udiBytesReceived);
+            fbDataBuffer.WriteLength(udiBytesReceived);
         END_IF
     END_IF
 
     // Parse buffered bytes until a complete packet is found.
-    IF iParseIdx < fbDataBuffer.size() - 1 THEN
-        tmpParserPtr := fbDataBuffer.get_buffer();
-        FOR iParseIdx := iParseIdx TO fbDataBuffer.size() - 1 DO
+    IF iParseIdx < fbDataBuffer.Size() - 1 THEN
+        tmpParserPtr := fbDataBuffer.GetBuffer();
+        FOR iParseIdx := iParseIdx TO fbDataBuffer.Size() - 1 DO
             pre_stack_size := fbMsgPakParser.ui_level_stack_size;
             fbMsgPakParser(in_byte := tmpParserPtr[iParseIdx]);
 

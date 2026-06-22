@@ -1,8 +1,8 @@
-METHOD get_buffer : POINTER TO BYTE
+METHOD GetBuffer : POINTER TO BYTE
 (* =========== IMPLEMENTATION =========== *)
 IF pBuffer <> 0 THEN
-    get_buffer := pBuffer;
+    GetBuffer := pBuffer;
 ELSE
     // If the buffer has not been reset, return a NULL pointer.
-    get_buffer := 0;
+    GetBuffer := 0;
 END_IF
