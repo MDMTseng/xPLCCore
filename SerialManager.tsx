@@ -24,9 +24,44 @@ const SerialManager: React.FC<{env_path: string, lib_path: string, UI_path: stri
   const [ports, setPorts] = useState<any[]>([]);
   const [isOpen, setIsOpen] = useState(modbusClient.isOpen);
   const [receivedData, setReceivedData] = useState<string[]>([]);
+  // A.3 fail-safe (decisions_2026-06-22.md). Declared up here so the
+  // onConnect handler in the next useEffect can capture it via ref.
+  const [failSafeCommands, setFailSafeCommands] = useState<{name: string, slaveId: number, modbusFunction: string, address: number, value: string}[]>([]);
+
+  // Stable ref to the latest failSafeCommands so the onConnect handler
+  // (registered once on mount) always sees the current list without
+  // re-mounting the effect.
+  const failSafeRef = React.useRef(failSafeCommands);
+  React.useEffect(() => { failSafeRef.current = failSafeCommands; }, [failSafeCommands]);
 
   useEffect(() => {
-    const handleConnect = () => setIsOpen(true);
+    const handleConnect = async () => {
+        setIsOpen(true);
+        // A.3 fail-safe: run the configured failSafeOnConnect commands
+        // in declared order. Sequential so a Modbus device with strict
+        // request/reply ordering doesn't get racey writes. Failures are
+        // logged but don't abort the sequence -- the goal is best-effort
+        // alignment, not a hard contract.
+        const cmds = failSafeRef.current;
+        if (cmds.length === 0) return;
+        setReceivedData(prev => [...prev, `[A.3] running ${cmds.length} fail-safe command(s) on connect`]);
+        for (const cmd of cmds) {
+            try {
+                if (cmd.modbusFunction === 'write_register') {
+                    await modbusClient.writeReg(cmd.slaveId, cmd.address, parseNumber(cmd.value));
+                } else if (cmd.modbusFunction === 'write_registers') {
+                    const values = cmd.value.split(/[,\s]+/).filter(Boolean).map(v => parseNumber(v.trim()));
+                    await modbusClient.writeRegs(cmd.slaveId, cmd.address, values);
+                } else if (cmd.modbusFunction === 'read_holding_registers') {
+                    await modbusClient.readRegs(cmd.slaveId, cmd.address, parseNumber(cmd.value));
+                }
+                setReceivedData(prev => [...prev, `[A.3] ${cmd.name ?? 'unnamed'} ok`]);
+            } catch (e: any) {
+                setReceivedData(prev => [...prev, `[A.3 error] ${cmd.name ?? 'unnamed'}: ${e?.message ?? String(e)}`]);
+            }
+        }
+        setReceivedData(prev => [...prev, `[A.3] fail-safe sequence done`]);
+    };
     const handleDisconnect = () => setIsOpen(false);
     const handleData = (data: string) => {
         setReceivedData(prev => [...prev, `[Unsolicited] ${JSON.stringify(data)}`]);
@@ -64,6 +99,9 @@ const SerialManager: React.FC<{env_path: string, lib_path: string, UI_path: stri
             if (config.selectedPort) setSelectedPort(config.selectedPort);
             if (config.baudRate) setBaudRate(config.baudRate);
             if (config.savedCommands) setSavedCommands(config.savedCommands);
+            if (Array.isArray(config.failSafeOnConnect)) {
+                setFailSafeCommands(config.failSafeOnConnect);
+            }
             if (!silent) alert('Configuration loaded successfully.');
         } catch (err: any) {
             if (!silent) alert(`Failed to load configuration: ${err.message}`);
@@ -99,6 +137,11 @@ const SerialManager: React.FC<{env_path: string, lib_path: string, UI_path: stri
 
   const [functionName, setFunctionName] = useState('');
   const [savedCommands, setSavedCommands] = useState<{name: string, slaveId: number, modbusFunction: string, address: number, value: string}[]>([]);
+  // failSafeCommands lives further up (used by the onConnect handler).
+  // Configured in ModbusClientSetup.json under "failSafeOnConnect" with
+  // the same shape as savedCommands. Operator owns the actual register
+  // addresses (vendor-specific). If empty / missing, connect behaves
+  // exactly as before. Decisions: doc_review/decisions_2026-06-22.md A.3.
 
   const handleConnect = () => {
     if (selectedPort) {
