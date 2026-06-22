@@ -96,19 +96,58 @@ export const RecoveryDemoPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrl
     }
   }, [send, appendLog]);
 
-  const driveToReady = useCallback(async () => {
+  const sendEv = useCallback(async (ev: number, label: string) => {
     setBusy(true);
     try {
-      // EV_RESET clears any prior state, then walk up the FSM.
-      for (const ev of [EV_RESET, EV_POWER_ON, EV_GROUP_ENABLE, EV_HOME_FSK]) {
-        await sendTracked(cmd.GA_EV(ev), `GA_EV(${ev})`);
-        await new Promise((r) => setTimeout(r, 600));
-      }
-      await sendTracked(cmd.SetCoord0(), 'SetCoord0');
+      await sendTracked(cmd.GA_EV(ev), `GA_EV(${label})`);
     } finally {
       setBusy(false);
     }
   }, [sendTracked]);
+
+  // Drive FSM in stages, aborting between stages if state hasn't
+  // progressed -- so a wedged Homing transition doesn't drag the next
+  // step into the swamp. Bounded poll for state advance between
+  // events. If `stopAtGroupEnabled` is true, omit HOME_FSK -- useful
+  // when the homing FB itself is broken on this rig and we just need
+  // a state high enough to verify other things.
+  const driveToReady = useCallback(async (stopAtGroupEnabled: boolean) => {
+    setBusy(true);
+    try {
+      const steps: Array<[number, string, number]> = [
+        [EV_RESET,        'RESET',        10],   // -> 10 UnInited
+        [EV_POWER_ON,     'POWER_ON',     30],   // -> 30 Powered (via 20)
+        [EV_GROUP_ENABLE, 'GROUP_ENABLE', 50],   // -> 50 GroupEnabled (via 40)
+      ];
+      if (!stopAtGroupEnabled) steps.push([EV_HOME_FSK, 'HOME_FSK', 70]);
+      for (const [ev, label, target] of steps) {
+        await sendTracked(cmd.GA_EV(ev), `GA_EV(${label})`);
+        // Poll for the target state. Bail out at 3s -- typical
+        // transitions complete in <300ms; if we're still not there
+        // after 3s something is wedged.
+        const reached = await pollUntilState(target);
+        if (!reached) {
+          appendLog(`drive aborted: ${label} did not advance to st=${target} within 3s`);
+          return;
+        }
+      }
+      if (!stopAtGroupEnabled) {
+        await sendTracked(cmd.SetCoord0(), 'SetCoord0');
+      }
+    } finally {
+      setBusy(false);
+    }
+  }, [sendTracked, appendLog]);
+
+  const pollUntilState = useCallback(async (target: number, timeoutMs = 3000): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const r = await send(cmd.GetMachineState(), true, 1000);
+      if (r && typeof r === 'object' && (r as any).st === target) return true;
+      await new Promise((res) => setTimeout(res, 200));
+    }
+    return false;
+  }, [send]);
 
   // ── plan persistence ──────────────────────────────────────────────
   const onSavePlan = useCallback(() => {
@@ -124,7 +163,26 @@ export const RecoveryDemoPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrl
     const next = savePlan(parts, plan);
     setPlan(next);
     appendLog(`plan saved: id=${next.plan_id} len=${parts.length}`);
-  }, [planText, plan, appendLog]);
+    // Stamp the new plan_id into PLC scratchpad immediately so the
+    // disk-vs-scratchpad badge goes green. intent_kind=Idle,
+    // intent_movement_id=0 -- "plan loaded, nothing in flight yet".
+    // Best-effort: if PLC is unreachable the disk side is still saved
+    // and the next reconcile will detect the mismatch correctly.
+    (async () => {
+      try {
+        const ok = await writeScratchpad(send, {
+          plan_id: next.plan_id,
+          plan_index: 0,
+          intent_kind: IntentKind.Idle,
+          intent_movement_id: 0,
+          last_vision_pulse: 0,
+        });
+        appendLog(`scratchpad stamped with new plan_id=${next.plan_id} -> ack=${ok}`);
+      } catch (e: any) {
+        appendLog(`scratchpad stamp failed (disk save still ok): ${e?.message ?? e}`);
+      }
+    })();
+  }, [planText, plan, appendLog, send]);
 
   const onClearPlan = useCallback(() => {
     clearPlan();
@@ -279,9 +337,19 @@ export const RecoveryDemoPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrl
 
         {/* FSM helpers */}
         <Section title="FSM helpers">
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            <button type="button" onClick={driveToReady} disabled={busy}>RESET → POWER → GROUP → HOME → SetCoord0</button>
-            <button type="button" onClick={() => sendTracked(cmd.GA_EV(EV_RESET), 'GA_EV(RESET)')} disabled={busy}>Reset only</button>
+          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>
+            Two drive variants. Use <b>stop at GroupEnabled</b> when HOME_FSK wedges on this rig (PLC homing FB stuck, virtual motors not forced, etc.). Individual step buttons below let you nudge state manually if the drive aborts mid-walk.
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
+            <button type="button" onClick={() => driveToReady(false)} disabled={busy}>Drive to Ready (full walk + SetCoord0)</button>
+            <button type="button" onClick={() => driveToReady(true)} disabled={busy}>Drive to GroupEnabled (skip HOME_FSK)</button>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 12 }}>
+            <button type="button" onClick={() => sendEv(EV_RESET, 'RESET')} disabled={busy}>RESET</button>
+            <button type="button" onClick={() => sendEv(EV_POWER_ON, 'POWER_ON')} disabled={busy}>POWER_ON</button>
+            <button type="button" onClick={() => sendEv(EV_GROUP_ENABLE, 'GROUP_ENABLE')} disabled={busy}>GROUP_ENABLE</button>
+            <button type="button" onClick={() => sendEv(EV_HOME_FSK, 'HOME_FSK')} disabled={busy}>HOME_FSK</button>
+            <button type="button" onClick={() => sendTracked(cmd.SetCoord0(), 'SetCoord0')} disabled={busy}>SetCoord0</button>
           </div>
         </Section>
 
