@@ -87,9 +87,18 @@ IF PendingMoveDoneId <> 0 THEN
         // forever and silently swallow every subsequent MOVE_DONE edge
         // (newest-wins overwrites the latch each scan; the UI has no
         // way to know it's stuck).
+        //
+        // PR review fix: drop ONLY the pending event; do NOT advance
+        // PrevCompletedMovementId here. PrevCompletedMovementId is the
+        // host-visible last_completed_movement_id used by the §4(2)
+        // resume reconcile (scratchpad intent_movement_id vs this
+        // field). Advancing it without successfully delivering MOVE_DONE
+        // would tell the host "the move that you have an intent for
+        // already completed" when in fact the host never saw the event.
+        // Worst-case result: renderer skips a blow_off and reel
+        // double-advances.
         PendingMoveDoneRetryScans := PendingMoveDoneRetryScans + 1;
         IF PendingMoveDoneRetryScans >= PENDING_RETRY_MAX_SCANS THEN
-            PrevCompletedMovementId := PendingMoveDoneId;
             PendingMoveDoneId := 0;
             PendingMoveDoneRetryScans := 0;
             GVL.PendingMoveDoneDropCount := GVL.PendingMoveDoneDropCount + 1;
