@@ -24,6 +24,19 @@ CASE _eState OF
             // re-call SetCoord0/SetCoord1 before G1 motion is accepted.
             GVL.CoordSystemConfigured := FALSE;
 
+            // 2026-06-23 code-review fix: clear COORD1 tracking state on
+            // UnInited entry too. Pre-fix, EV_RESET while a COORD1_BIND
+            // was active looped FSM back through UnInited but left
+            // Coord1Bound=TRUE with the previous cycle's PCS_1 transform
+            // alive. The next frame=1 G1 then passed the
+            // ProcessMotionPacket Coord1Bound gate against stale
+            // calibration; subsequent COORD1_BIND was rejected with
+            // 'rebind_requires_unbind' and the operator couldn't recover
+            // without an explicit SYS COORD1_UNBIND.
+            GVL.Coord1Bound       := FALSE;
+            GVL.Coord1ExitPulse   := -1;
+            GVL.Coord1BindEventId := 0;
+
             // Reset Group FBs
             SMC_GroupDisable(AxisGroup:=_agAxisGroup, Execute:=FALSE);
             SMC_GroupReset(AxisGroup:=_agAxisGroup, Execute:=FALSE);
