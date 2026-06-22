@@ -31,7 +31,8 @@ import {
 
 const EV_POWER_ON = 2;
 const EV_GROUP_ENABLE = 4;
-const EV_HOME_FSK = 7;
+const EV_HOME_GO = 6;
+const EV_HOME_GO_FORCE_SKIP = 7;
 const EV_RESET = 8;
 
 const POLL_MS = 1000;
@@ -119,7 +120,7 @@ export const RecoveryDemoPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrl
         [EV_POWER_ON,     'POWER_ON',     30],   // -> 30 Powered (via 20)
         [EV_GROUP_ENABLE, 'GROUP_ENABLE', 50],   // -> 50 GroupEnabled (via 40)
       ];
-      if (!stopAtGroupEnabled) steps.push([EV_HOME_FSK, 'HOME_FSK', 70]);
+      if (!stopAtGroupEnabled) steps.push([EV_HOME_GO_FORCE_SKIP, 'HOME_GO_FORCE_SKIP', 70]);
       for (const [ev, label, target] of steps) {
         await sendTracked(cmd.GA_EV(ev), `GA_EV(${label})`);
         // Poll for the target state. Bail out at 3s -- typical
@@ -338,17 +339,18 @@ export const RecoveryDemoPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrl
         {/* FSM helpers */}
         <Section title="FSM helpers">
           <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>
-            Two drive variants. Use <b>stop at GroupEnabled</b> when HOME_FSK wedges on this rig (PLC homing FB stuck, virtual motors not forced, etc.). Individual step buttons below let you nudge state manually if the drive aborts mid-walk.
+            Two drive variants. <b>Full walk</b> uses <code>HOME_GO_FORCE_SKIP</code> (ev=7) which bypasses the home routine and jumps straight to Ready -- needed when the rig can't physically home (virtual motors not forced, home sensor unwired, etc.). <b>Stop at GroupEnabled</b> doesn't issue any home event at all -- useful when even FORCE_SKIP wedges. Individual step buttons below let you nudge state manually if the drive aborts.
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
-            <button type="button" onClick={() => driveToReady(false)} disabled={busy}>Drive to Ready (full walk + SetCoord0)</button>
-            <button type="button" onClick={() => driveToReady(true)} disabled={busy}>Drive to GroupEnabled (skip HOME_FSK)</button>
+            <button type="button" onClick={() => driveToReady(false)} disabled={busy}>Drive to Ready (RESET → POWER → GROUP → HOME_FORCE_SKIP → SetCoord0)</button>
+            <button type="button" onClick={() => driveToReady(true)} disabled={busy}>Drive to GroupEnabled (no home event)</button>
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 12 }}>
-            <button type="button" onClick={() => sendEv(EV_RESET, 'RESET')} disabled={busy}>RESET</button>
-            <button type="button" onClick={() => sendEv(EV_POWER_ON, 'POWER_ON')} disabled={busy}>POWER_ON</button>
-            <button type="button" onClick={() => sendEv(EV_GROUP_ENABLE, 'GROUP_ENABLE')} disabled={busy}>GROUP_ENABLE</button>
-            <button type="button" onClick={() => sendEv(EV_HOME_FSK, 'HOME_FSK')} disabled={busy}>HOME_FSK</button>
+            <button type="button" onClick={() => sendEv(EV_RESET, 'RESET')} disabled={busy}>RESET (ev=8)</button>
+            <button type="button" onClick={() => sendEv(EV_POWER_ON, 'POWER_ON')} disabled={busy}>POWER_ON (ev=2)</button>
+            <button type="button" onClick={() => sendEv(EV_GROUP_ENABLE, 'GROUP_ENABLE')} disabled={busy}>GROUP_ENABLE (ev=4)</button>
+            <button type="button" onClick={() => sendEv(EV_HOME_GO, 'HOME_GO')} disabled={busy} title="Real homing -- only works if the rig can physically home">HOME_GO (ev=6)</button>
+            <button type="button" onClick={() => sendEv(EV_HOME_GO_FORCE_SKIP, 'HOME_GO_FORCE_SKIP')} disabled={busy} title="Bypass home routine, jump to Ready">HOME_GO_FORCE_SKIP (ev=7)</button>
             <button type="button" onClick={() => sendTracked(cmd.SetCoord0(), 'SetCoord0')} disabled={busy}>SetCoord0</button>
           </div>
         </Section>
