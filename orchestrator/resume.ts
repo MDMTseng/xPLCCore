@@ -184,3 +184,79 @@ export function reconcileOnResume(
     vision_result_unknown,
   };
 }
+
+// ─── 4. Resume action planner ────────────────────────────────────────
+//
+// §4 (3) -- given a ResumeDecision, decide the *first action* the
+// renderer should take on resume. This is a pure planner: it returns
+// a discriminated union and the production loop dispatches it. Mapping
+// to the four states from decisions §B B.6:
+//
+//   State 1 (nothing in flight)          -> 'continue_plan'
+//   State 2 (intent unfinished)          -> 'blow_off'       (D.11)
+//   State 3 (intent done + vision OK)    -> 'continue_plan'
+//   State 4 (intent done + vision ???)   -> 'bowl_back'      (B.6)
+//
+// The action carries the relevant scratchpad context so the production
+// dispatcher doesn't have to re-derive it.
+
+export type ResumeAction =
+  // Plan was reset / no recoverable cursor. Operator must (re)load a
+  // plan before production can start.
+  | { kind: 'cold_start'; reason: string }
+  // Carry on from the cursor. The plan's runAllObjects loop resumes
+  // from plan_index normally.
+  | { kind: 'continue_plan'; plan: PersistedPlan; plan_index: number }
+  // Unfinished motion (state 2). Renderer should:
+  //   1. drive arm to toss bin
+  //   2. Nozzle_blow (M4 pin pulse)
+  //   3. clear scratchpad intent (writeIntent kind=Idle)
+  //   4. continue_plan from plan_index (without advancing -- we
+  //      didn't actually consume the unit)
+  | {
+      kind: 'blow_off';
+      plan: PersistedPlan;
+      plan_index: number;
+      reason: string;
+    }
+  // Vision result lost (state 4). Renderer should route the unit back
+  // to the feeder per the existing "可能誤判" production handling, then
+  // continue_plan from plan_index without advancing.
+  | {
+      kind: 'bowl_back';
+      plan: PersistedPlan;
+      plan_index: number;
+      reason: string;
+    };
+
+export function planResumeAction(decision: ResumeDecision): ResumeAction {
+  if (decision.kind === 'cold_start') {
+    return { kind: 'cold_start', reason: decision.reason };
+  }
+  const { plan, scratchpad, intent_completed, vision_result_unknown } = decision;
+  // State 1: nothing in flight.
+  if (scratchpad.intent_kind === IntentKind.Idle ||
+      scratchpad.intent_movement_id === 0) {
+    return { kind: 'continue_plan', plan, plan_index: scratchpad.plan_index };
+  }
+  // State 2: intent unfinished -> blow-off.
+  if (!intent_completed) {
+    return {
+      kind: 'blow_off',
+      plan,
+      plan_index: scratchpad.plan_index,
+      reason: `intent ${scratchpad.intent_kind} pending: movement_id ${scratchpad.intent_movement_id} not yet completed (cursor predates PLC progress)`,
+    };
+  }
+  // State 4: intent done, vision unknown -> bowl-back.
+  if (vision_result_unknown) {
+    return {
+      kind: 'bowl_back',
+      plan,
+      plan_index: scratchpad.plan_index,
+      reason: 'intent completed but vision result missing -- route to feeder per production "possible misjudgment" handling',
+    };
+  }
+  // State 3: intent done, vision result available -> continue.
+  return { kind: 'continue_plan', plan, plan_index: scratchpad.plan_index };
+}
