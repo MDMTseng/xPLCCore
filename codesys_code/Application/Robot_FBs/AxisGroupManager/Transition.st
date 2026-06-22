@@ -24,13 +24,19 @@ CASE _eState OF
 		
 	E_RobotState.Powering:
 		CASE eEvent OF
-			E_RobotEvent.EV_POWER_OFF,
-			E_RobotEvent.EV_ERROR,
-			E_RobotEvent.EV_RESET:
-			   new_state:=E_RobotState.UnInited;
 			E_RobotEvent.EV_OK:
 			   new_state:=E_RobotState.Powered;
 		END_CASE
+		// EV_ERROR / EV_RESET intentionally NOT listed in the CASE above.
+		// They fall through to the universal handler below:
+		//   EV_ERROR -> Error  (controlled GroupStop fires; st=990 visible
+		//                       to host so recovery UI engages)
+		//   EV_RESET -> UnInited (universal reset, any state)
+		// Pre-2026-06-23 code review: this CASE mapped EV_ERROR to
+		// UnInited, so a fault during power-ramp (e.g. EtherCAT bus drop)
+		// silently looked like a normal cold-down. GroupStopExecute is
+		// gated on _eState=Error so the controlled stop never ran, and
+		// the host's Error-state recovery path never engaged.
 	E_RobotState.Powered:
 		CASE eEvent OF
 		E_RobotEvent.EV_GROUP_ENABLE:
