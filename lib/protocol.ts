@@ -174,6 +174,13 @@ export interface MachineState {
   // Source of truth for axis ordering -- UI must consume this rather
   // than hardcoding, so a PLC reorder propagates automatically.
   axes_labels: string[];
+  // Reel axis absolute position in axis-scaled user units (typically
+  // mm under current GenericDSP402 scaling). Renderer derives the
+  // carrier-tape cell number on resume:
+  //   cell = round((reel_pos - origin) / pitch)
+  // PLC is origin/pitch-agnostic -- it just reports the raw axis
+  // position. See doc_review/decisions_2026-06-22.md §4 (1).
+  reel_pos: number;
 }
 
 export interface DiagSnapshot {
@@ -304,6 +311,7 @@ export const REQUIRED_KEYS = {
     'st', 'st_str', 'err_src', 'err_id', 'motion_buffer_size',
     'movement_id', 'runtime_ms', 'coord_set',
     'axes_err_mask', 'axes_state', 'axes_err_id', 'axes_labels',
+    'reel_pos',
   ],
   DiagSnapshot: [
     'runtime_ms', 'sm_scans', 'remp_drop', 'overlen_drop', 'send_stall_drop',

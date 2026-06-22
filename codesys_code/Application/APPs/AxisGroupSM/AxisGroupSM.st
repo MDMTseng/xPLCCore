@@ -911,6 +911,17 @@ PROGRAM AxisGroupSM
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('EAxis1 (arm2)'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('EAxis2 (arm3)'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('reelpullmotor'));
+                // reel_pos : reelpullmotor.fActPosition (REAL, axis-scaled
+                // user units -- mm under current GenericDSP402 scaling).
+                // Driven by decisions_2026-06-22.md §4 (1): renderer uses
+                // this on resume to derive the carrier-tape cell number
+                // (cell = round((reel_pos - origin) / pitch)). PLC stays
+                // generic and reports raw position; the "origin" and
+                // "pitch" semantics live entirely on the host.
+                // Retention across PLC restart scenarios verified by
+                // probe_reel_retain (STOP+START path conclusive).
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('reel_pos'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := reelpullmotor.fActPosition);
             ELSIF (CommandType = 'RESET_DBG_INFO') THEN
                 // SYS-side reset: clears comm-stability counters without
                 // requiring FSM=Ready (the motion-side RESET_DBG_INFO at the
