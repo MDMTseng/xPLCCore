@@ -150,6 +150,22 @@ See [`memory/codesys_import_then_online_change.md`](../../.claude/projects/c--Us
 
 ---
 
+## `last_completed_movement_id` is a monotonic watermark, not a per-action ID
+**Sites:**
+- [`UpdateMotionProgress.st`](../../codesys_code/Application/APPs/AxisGroupSM/UpdateMotionProgress.st) MOVE_DONE edge — "newest-edge-wins": when two MOVE_DONE edges fire while the reMP ring is full, `PendingMoveDoneId` is overwritten with the newer id; the older one is intentionally lost (UI sees the skip via the global `seq` gap)
+- [`orchestrator/resume.ts`](../../orchestrator/resume.ts) `reconcileOnResume()` — uses `>=` comparison, treating `last_completed_movement_id` as a watermark
+
+**Constraint:** The renderer MUST treat `intent_movement_id` and `last_completed_movement_id` as monotonic **watermarks**, never as unique IDs for a specific action:
+- `last_completed_movement_id >= intent_movement_id` means "everything up to and including this intent has drained the buffer" — NOT "the specific move with id N completed".
+- If the renderer needs to correlate a particular reel advance / pick with a specific motion outcome, it must use the **MOVE_DONE event payload** for that movement_id directly, not the watermark.
+- Intermediate IDs may be missing from the host's observed sequence (ring-full collapses N consecutive edges to the latest).
+
+**Failure mode if broken:** Host code that assumes "I wrote intent_movement_id=42, so seeing last_completed=50 means specifically that move 42 finished" — *no*, it means "the buffer drained at least to 50; move 42's outcome may have been collapsed in the newest-edge-wins path". For pick/place state machines that branch on "did THIS particular pick succeed?", use the per-movement MOVE_DONE event, not the watermark.
+
+**History:** 2026-06-23 PLC code review (finding #4) flagged the newest-edge-wins behavior in UpdateMotionProgress.st. The watermark semantic is intentional (collapsing is the right backpressure response); the constraint here is informing host code so it doesn't misinterpret the wire shape.
+
+---
+
 ## Action: keeping this doc honest
 
 When you add or change a coupling, **add the entry here in the same commit**. The

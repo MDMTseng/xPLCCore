@@ -17,12 +17,15 @@ STRUCT
        Memory layout sized to fit comfortably in the SYS reply envelope
        and the retain area budget. Future fields go in `Reserved`. *)
     SchemaVersion     : USINT;
-    PlanId            : UDINT;   (* host-defined plan identifier *)
-    PlanIndex         : UDINT;   (* plan-internal cursor *)
-    IntentKind        : USINT;   (* host enum: 0=idle 1=advance_reel
-                                    2=pick 3=bowl_back ... *)
+    PlanId            : UDINT;   (* opaque to PLC *)
+    PlanIndex         : UDINT;   (* opaque to PLC *)
+    IntentKind        : USINT;   (* opaque to PLC -- host-defined enum.
+                                    Semantics live in the host (see
+                                    `orchestrator/resume.ts` IntentKind);
+                                    do NOT branch on this in PLC code,
+                                    per memory `plc_stays_generic`. *)
     IntentMovementId  : UDINT;   (* LastAcceptedMovementId at intent write *)
-    LastVisionPulse   : UDINT;   (* most recent vision trigger pulse *)
+    LastVisionPulse   : UDINT;   (* opaque to PLC *)
     BootEpoch         : UDINT;   (* GVL.BootEpochCount at last write *)
     Reserved          : ARRAY[0..7] OF BYTE;
 END_STRUCT
