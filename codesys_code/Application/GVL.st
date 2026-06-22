@@ -184,6 +184,15 @@ VAR_GLOBAL
 	CoordSystemConfigured : BOOL := FALSE;
 	CoordNotConfiguredNakCount : UDINT := 0;
 
+	(* SCRATCHPAD_WRITE partial-write rejection. The §4(2) wire contract
+	   requires the host to send ALL 5 fields per write (plan_id,
+	   plan_index, intent_kind, intent_movement_id, last_vision_pulse).
+	   Pre-fix, TryReadINT64 returned default 0 on a missing key so a host
+	   bug that omitted a field silently zero-stomped that slot AND ACKed
+	   success. Post-fix, the handler reads with -1 sentinel and NAKs the
+	   whole write if any field is missing; this counter bumps each NAK. *)
+	ScratchpadPartialNakCount : UDINT := 0;
+
 	(* Server-initiated event packets (push notifications).
 	   AxisGroupSM emits an `ST_CHG` event into reMP_info_ridx on every
 	   FSM state change (detected by PrevAxisGroupState diff). Packet shape:

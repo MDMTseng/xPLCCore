@@ -396,6 +396,18 @@ PROGRAM AxisGroupSM
     // (scheduled track bind at a specific belt pulse).
     M4ActionStr      : STRING(16);
 
+    // SCRATCHPAD_WRITE field-presence scratch. Five fields are read from
+    // the request map into these temporaries; a -1 sentinel return from
+    // TryReadINT64 means "key absent in the request" (host fields are
+    // unsigned on the wire so -1 is unambiguously a missing key). If
+    // ANY temporary is negative the whole write is NAKed -- the existing
+    // scratchpad fields are left untouched. See code review 2026-06-23.
+    ScratchpadPlanIdRaw          : LINT;
+    ScratchpadPlanIndexRaw       : LINT;
+    ScratchpadIntentKindRaw      : LINT;
+    ScratchpadIntentMidRaw       : LINT;
+    ScratchpadLastVisionPulseRaw : LINT;
+
     END_VAR
 (* =========== IMPLEMENTATION =========== *)
 
@@ -981,18 +993,46 @@ PROGRAM AxisGroupSM
                 // unnecessary for v1 -- the host writes the entire cursor
                 // before each unrecoverable action anyway, so partial-write
                 // optimisation buys nothing.
+                //
+                // 2026-06-23 code-review fix: detect missing fields with a
+                // -1 sentinel default and NAK the whole write rather than
+                // silently zero-stomp the slot. Pre-fix, a host bug that
+                // omitted e.g. 'intent_movement_id' set it to 0, ACKed, and
+                // broke the next resume reconcile (host thinks no move was
+                // in flight when in fact the previous intent is now lost).
                 ShouldReturn := TRUE;
-                CommandAck := TRUE;
-                GVL.ScratchpadV1.PlanId           := TO_UDINT(MessageUnpackerFb.TryReadINT64('plan_id', 0));
-                GVL.ScratchpadV1.PlanIndex        := TO_UDINT(MessageUnpackerFb.TryReadINT64('plan_index', 0));
-                GVL.ScratchpadV1.IntentKind       := TO_USINT(MessageUnpackerFb.TryReadINT64('intent_kind', 0));
-                GVL.ScratchpadV1.IntentMovementId := TO_UDINT(MessageUnpackerFb.TryReadINT64('intent_movement_id', 0));
-                GVL.ScratchpadV1.LastVisionPulse  := TO_UDINT(MessageUnpackerFb.TryReadINT64('last_vision_pulse', 0));
-                GVL.ScratchpadV1.SchemaVersion := 1;
-                GVL.ScratchpadV1.BootEpoch := GVL.BootEpochCount;
-                ResponsePacketPointer^.ele_count := 1;
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := TRUE);
+                ScratchpadPlanIdRaw          := MessageUnpackerFb.TryReadINT64('plan_id', -1);
+                ScratchpadPlanIndexRaw       := MessageUnpackerFb.TryReadINT64('plan_index', -1);
+                ScratchpadIntentKindRaw      := MessageUnpackerFb.TryReadINT64('intent_kind', -1);
+                ScratchpadIntentMidRaw       := MessageUnpackerFb.TryReadINT64('intent_movement_id', -1);
+                ScratchpadLastVisionPulseRaw := MessageUnpackerFb.TryReadINT64('last_vision_pulse', -1);
+                IF (ScratchpadPlanIdRaw < 0)
+                   OR (ScratchpadPlanIndexRaw < 0)
+                   OR (ScratchpadIntentKindRaw < 0)
+                   OR (ScratchpadIntentMidRaw < 0)
+                   OR (ScratchpadLastVisionPulseRaw < 0) THEN
+                    // Partial write -> refuse to commit; existing scratchpad
+                    // contents survive untouched so the host can retry.
+                    CommandAck := FALSE;
+                    GVL.ScratchpadPartialNakCount := GVL.ScratchpadPartialNakCount + 1;
+                    ResponsePacketPointer^.ele_count := 2;
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := FALSE);
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('partial_scratchpad'));
+                ELSE
+                    CommandAck := TRUE;
+                    GVL.ScratchpadV1.PlanId           := TO_UDINT(ScratchpadPlanIdRaw);
+                    GVL.ScratchpadV1.PlanIndex        := TO_UDINT(ScratchpadPlanIndexRaw);
+                    GVL.ScratchpadV1.IntentKind       := TO_USINT(ScratchpadIntentKindRaw);
+                    GVL.ScratchpadV1.IntentMovementId := TO_UDINT(ScratchpadIntentMidRaw);
+                    GVL.ScratchpadV1.LastVisionPulse  := TO_UDINT(ScratchpadLastVisionPulseRaw);
+                    GVL.ScratchpadV1.SchemaVersion := 1;
+                    GVL.ScratchpadV1.BootEpoch := GVL.BootEpochCount;
+                    ResponsePacketPointer^.ele_count := 1;
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := TRUE);
+                END_IF
             ELSIF (CommandType = 'RESET_DBG_INFO') THEN
                 // SYS-side reset: clears comm-stability counters without
                 // requiring FSM=Ready (the motion-side RESET_DBG_INFO at the
