@@ -53,7 +53,7 @@ and reversing it at the axis. See [`memory/a_axis_div10_workaround.md`](../../.c
 ## A3 host-silence supervisor
 **Sites:**
 - [`AxisGroupSM.st:295-307`](../../codesys_code/Application/APPs/AxisGroupSM/AxisGroupSM.st) — trips Ready→Error after `UI_HEARTBEAT_TIMEOUT_MS` of no PING
-- [`GVL.st`](../../codesys_code/Application/GVL.st) — `UI_HEARTBEAT_TIMEOUT_MS : LINT := 10000`
+- [`GVL.st`](../../codesys_code/Application/GVL.st) — `UI_HEARTBEAT_TIMEOUT_MS : LINT := 5000`
 - [`PluginHello.tsx`](../../PluginHello.tsx) — 1Hz `cmd.Ping()` keepalive
 - ONLY `SYS/PING` packets stamp `GVL.LastUiPingMs` — `GA_EV` / `GET_MACHINE_STATE` / `G1` do NOT
 - Scripted tests need their own PING heartbeat thread (see [`test_movement_sequence.py`](../../codesys_scripts/test_movement_sequence.py) `heartbeat_loop`)
