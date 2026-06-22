@@ -17,8 +17,20 @@ import pytest
 HERE = Path(__file__).resolve().parent
 PARENT = HERE.parent
 sys.path.insert(0, str(PARENT))
+# test_movement_sequence.py was moved to _archive/ in the script-tree
+# cleanup (commit 41c8241) but conftest still consumes its helpers.
+# Add the archive dir to sys.path so the import keeps working without
+# resurrecting the file at top level.
+sys.path.insert(0, str(PARENT / "_archive"))
 
 import test_movement_sequence as tms  # noqa: E402
+# tms.HERE/RPC/JOBS are relative to the archived test_movement_sequence.py
+# location (_archive/...) which doesn't host these files anymore. Repoint
+# to the live codesys_scripts/ root.
+tms.HERE = PARENT
+tms.RPC = PARENT / "rpc.py"
+tms.JOBS = PARENT / "jobs" / "templates"
+tms.REMOTE_CTRL = PARENT / "internals" / "remote_ctrl.py"
 
 
 @pytest.fixture(scope="session")
