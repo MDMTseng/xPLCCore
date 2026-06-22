@@ -3,6 +3,7 @@ import type { COMCtrlObj } from '../types';
 import { CalibPage } from './CalibPage';
 import { MiscControlsPage } from './MiscControlsPage';
 import { OperationPage } from './OperationPage';
+import { RecoveryDemoPage } from './RecoveryDemoPage';
 import { t, type UILang } from '../i18n';
 import { useHarnessAction } from '../harness/registry';
 
@@ -20,7 +21,7 @@ export const ControlPage: React.FC<{
   uiLang,
 }) => {
 
-  const [tab, setTab] = useState<"Welcome" | "Calib" | "Operation">("Welcome");
+  const [tab, setTab] = useState<"Welcome" | "Calib" | "Operation" | "Recovery">("Welcome");
   const [plcReady, setPlcReady] = useState(false);
   const [lastReconcile, setLastReconcile] = useState<{reason: string; at: number; snapshot: any} | null>(null);
 
@@ -65,13 +66,13 @@ export const ControlPage: React.FC<{
   useHarnessAction('get_tab', () => ({ tab, plcReady, allCoreLinksConnected: true, lastReconcile }), [tab, plcReady, lastReconcile]);
   useHarnessAction('set_tab', (payload: any) => {
     const target = String(payload?.tab ?? '');
-    if (target !== 'Welcome' && target !== 'Calib' && target !== 'Operation') {
+    if (target !== 'Welcome' && target !== 'Calib' && target !== 'Operation' && target !== 'Recovery') {
       throw new Error(`set_tab: unknown tab '${target}'`);
     }
     setTab(target);
     return { tab: target };
   }, []);
-  const tabs: Array<{ id: "Welcome" | "Calib" | "Operation"; label: string; subtitle: string; requiresReady: boolean }> = [
+  const tabs: Array<{ id: "Welcome" | "Calib" | "Operation" | "Recovery"; label: string; subtitle: string; requiresReady: boolean }> = [
     {
       id: 'Welcome',
       label: t(uiLang, 'tabWelcome'),
@@ -89,6 +90,15 @@ export const ControlPage: React.FC<{
       label: t(uiLang, 'tabOperation'),
       subtitle: t(uiLang, 'tabOperationSub'),
       requiresReady: true,
+    },
+    {
+      // Recovery demo (decisions_2026-06-22.md §4 (2)). Doesn't require
+      // Ready because the page itself drives FSM up via its own buttons
+      // and the resume reconcile is observable in any state.
+      id: 'Recovery',
+      label: 'Recovery demo',
+      subtitle: 'scratchpad / write-ahead / resume',
+      requiresReady: false,
     },
   ] as const;
 
@@ -178,6 +188,9 @@ export const ControlPage: React.FC<{
           </div>
           <div style={{ display: tab === "Operation" ? "block" : "none" }}>
             <OperationPage COMCtrlObj={COMCtrlObj} env_path={env_path} lib_path={lib_path} UI_path={UI_path} uiLang={uiLang} />
+          </div>
+          <div style={{ display: tab === "Recovery" ? "block" : "none" }}>
+            <RecoveryDemoPage COMCtrlObj={COMCtrlObj} />
           </div>
         </section>
       </div>
