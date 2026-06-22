@@ -65,8 +65,18 @@ CASE e_state OF
         ProcessLengthBytes();
         
     E_MsgPakLevelParser_STATE.EXPECT_EXT_TYPE:
-        (* Consume extension type byte - no action needed, just transition *)
-        e_state := E_MsgPakLevelParser_STATE.EXPECT_DATA;
+        (* Consume extension type byte. 2026-06-23 code-review fix:
+           if ui_data_bytes_remaining was set to 0 by ProcessLengthBytes
+           (legal-but-empty ext payload), go straight back to header
+           expectation. Pre-fix unconditionally transitioned to
+           EXPECT_DATA -> ProcessDataBytes decremented from 0 ->
+           UDINT underflow to 16#FFFFFFFF -> ~4 GB silent swallow. *)
+        IF ui_data_bytes_remaining = 0 THEN
+            DecrementStack();
+            e_state := E_MsgPakLevelParser_STATE.EXPECT_HEADER;
+        ELSE
+            e_state := E_MsgPakLevelParser_STATE.EXPECT_DATA;
+        END_IF
         
     E_MsgPakLevelParser_STATE.EXPECT_DATA:
         (* Consume data bytes *)

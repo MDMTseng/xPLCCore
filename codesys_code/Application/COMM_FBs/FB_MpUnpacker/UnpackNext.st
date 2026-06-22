@@ -95,7 +95,9 @@ eLastType := E_MpType.MP_UNKNOWN;
 			IF tmpLint > 2147483647 THEN // MAX_DINT
 				diLastDINT := 2147483647;
 			ELSIF tmpLint < -2147483648 THEN // MIN_DINT
-				diLastDINT := -2147483648;
+				// Prefix-typed literal so the ST parser doesn't evaluate
+				// -(2147483648) (positive overflow then negated). 2026-06-23.
+				diLastDINT := DINT#-2147483648;
 			ELSE
 				diLastDINT := LINT_TO_DINT(tmpLint);
 			END_IF;

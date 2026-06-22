@@ -55,6 +55,7 @@ END_VAR
         pPos := pPos + udiLength;
     16#DA: // str 16
         pWordLen := pPos;
+        udiLength := 0; // Swap16To writes only the low 2 bytes; clear upper bytes from any prior 32-bit length read in this WHILE iteration to avoid an OR'd-in stale value (code review fix 2026-06-23).
         Swap16To(pWordLen, ADR(udiLength)); // Assumes udiLength gets lower 16 bits
         pPos := pPos + 2;
         IF (pPos + udiLength) > (pStart + udiSize) THEN
@@ -80,6 +81,7 @@ END_VAR
         pPos := pPos + udiLength;
     16#C5: // bin 16
         pWordLen := pPos;
+        udiLength := 0; // see str16 note: clear high bytes before Swap16To
         Swap16To(pWordLen, ADR(udiLength));
         pPos := pPos + 2;
         IF (pPos + udiLength) > (pStart + udiSize) THEN
@@ -110,6 +112,7 @@ END_VAR
         pPos := pPos + udiLength;
     16#C8: // ext 16
         pWordLen := pPos;
+        udiLength := 0; // see str16 note: clear high bytes before Swap16To
         Swap16To(pWordLen, ADR(udiLength));
         pPos := pPos + 3; // len(2) + type(1)
         IF (pPos + udiLength) > (pStart + udiSize) THEN

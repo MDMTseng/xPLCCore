@@ -174,7 +174,11 @@ IF PKT_ALLOW_NEXT THEN
     END_IF
 
     // Parse buffered bytes until a complete packet is found.
-    IF iParseIdx < fbDataBuffer.Size() - 1 THEN
+    // 2026-06-23 code-review fix: was `< Size() - 1` which made a
+    // single trailing byte sit in the buffer for one extra scan
+    // (FOR bound is `TO Size()-1` so Size()=1 -> FOR 0 TO 0 still runs;
+    // the IF guard prevented entering the FOR at all). `< Size()` now.
+    IF iParseIdx < fbDataBuffer.Size() THEN
         tmpParserPtr := fbDataBuffer.GetBuffer();
         FOR iParseIdx := iParseIdx TO fbDataBuffer.Size() - 1 DO
             pre_stack_size := fbMsgPakParser.ui_level_stack_size;
