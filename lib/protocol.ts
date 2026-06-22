@@ -181,6 +181,45 @@ export interface MachineState {
   // PLC is origin/pitch-agnostic -- it just reports the raw axis
   // position. See doc_review/decisions_2026-06-22.md §4 (1).
   reel_pos: number;
+  // Host-owned resume cursor (PLC opaque except for schema_version /
+  // boot_epoch). See decisions_2026-06-22.md §4 (2) + Scratchpad_v1.st.
+  scratchpad: Scratchpad;
+  // Current PLC boot-epoch counter. Renderer compares this against
+  // scratchpad.boot_epoch on resume; mismatch -> PLC restarted since
+  // the last scratchpad write -> cursor is stale.
+  boot_epoch_now: number;
+}
+
+export interface Scratchpad {
+  // 0 = uninitialised / cold-reset wiped. PLC stamps 1 on first boot
+  // and on every SCRATCHPAD_WRITE. Renderer treats 0 as invalid and
+  // goes cold-start.
+  schema_version: number;
+  // Host-defined plan identifier; renderer correlates with the
+  // plan file on disk (mismatch -> cold-start).
+  plan_id: number;
+  // Plan-internal step cursor. PLC opaque.
+  plan_index: number;
+  // Host enum (0=idle 1=advance_reel 2=pick 3=bowl_back ...).
+  intent_kind: number;
+  // LastAcceptedMovementId captured by the host at intent-write time.
+  // Renderer compares against the PLC's LastCompletedMovementId on
+  // resume to decide whether the action behind the intent completed.
+  intent_movement_id: number;
+  // Most recent vision-trigger pulse value. Used for NG audit + resume.
+  last_vision_pulse: number;
+  // GVL.BootEpochCount captured at the moment of the LAST host write.
+  // Mismatch on resume vs current BootEpochCount means PLC restarted
+  // since the write -> scratchpad stale -> cold-start.
+  boot_epoch: number;
+}
+
+export interface ScratchpadWriteArgs {
+  plan_id: number;
+  plan_index: number;
+  intent_kind: number;
+  intent_movement_id: number;
+  last_vision_pulse: number;
 }
 
 export interface DiagSnapshot {
@@ -292,6 +331,12 @@ export const cmd = {
   GetDiag: () => env<DiagSnapshot>({ type: 'SYS', cmd: 'GET_DIAG' }),
   ResetDbgInfo: () => env<AckReply>({ type: 'SYS', cmd: 'RESET_DBG_INFO' }),
   GA_EV: (ev: number) => env<GaEvReply>({ type: 'SYS', cmd: 'GA_EV', ev }),
+  // §4 (2) scratchpad write. v1 wire contract: caller sends ALL five
+  // host-controlled fields every write (no partial updates). PLC stamps
+  // schema_version=1 + boot_epoch on every write so subsequent reads
+  // are validatable.
+  ScratchpadWrite: (a: ScratchpadWriteArgs) =>
+    env<AckReply>({ type: 'SYS', cmd: 'SCRATCHPAD_WRITE', ...compact(a) }),
 } as const;
 
 // ─── Runtime schema-drift guard ──────────────────────────────────────
@@ -311,7 +356,7 @@ export const REQUIRED_KEYS = {
     'st', 'st_str', 'err_src', 'err_id', 'motion_buffer_size',
     'movement_id', 'runtime_ms', 'coord_set',
     'axes_err_mask', 'axes_state', 'axes_err_id', 'axes_labels',
-    'reel_pos',
+    'reel_pos', 'scratchpad', 'boot_epoch_now',
   ],
   DiagSnapshot: [
     'runtime_ms', 'sm_scans', 'remp_drop', 'overlen_drop', 'send_stall_drop',

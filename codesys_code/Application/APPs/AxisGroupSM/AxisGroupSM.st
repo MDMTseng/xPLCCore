@@ -865,7 +865,9 @@ PROGRAM AxisGroupSM
                 IF IoConfig_Globals.EAxis1.bError THEN AxesErrMask := AxesErrMask OR 16#2; END_IF;
                 IF IoConfig_Globals.EAxis2.bError THEN AxesErrMask := AxesErrMask OR 16#4; END_IF;
                 IF reelpullmotor.bError           THEN AxesErrMask := AxesErrMask OR 16#8; END_IF;
-                ResponsePacketPointer^.ele_count := 12;
+                // 15 top-level keys: 12 baseline + reel_pos (§4 (1))
+                // + scratchpad + boot_epoch_now (§4 (2)).
+                ResponsePacketPointer^.ele_count := 15;
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('st'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := AxisGroupManagerFb._eState);
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('st_str'));
@@ -922,6 +924,60 @@ PROGRAM AxisGroupSM
                 // probe_reel_retain (STOP+START path conclusive).
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('reel_pos'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := reelpullmotor.fActPosition);
+                // scratchpad : nested map carrying the host-owned resume
+                // cursor. PLC pipes the retained Scratchpad_v1 struct out
+                // verbatim; renderer compares boot_epoch vs GVL.BootEpochCount
+                // (renderer also reads BootEpochCount separately?) to detect
+                // staleness. See decisions_2026-06-22.md §4 (2) + B.6.
+                // 7 nested keys.
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('scratchpad'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackMapHeader(pStart := ResponsePacketPointer^.whead, uiCount := 7);
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('schema_version'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.ScratchpadV1.SchemaVersion));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('plan_id'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := UDINT_TO_DINT(GVL.ScratchpadV1.PlanId));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('plan_index'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := UDINT_TO_DINT(GVL.ScratchpadV1.PlanIndex));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('intent_kind'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.ScratchpadV1.IntentKind));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('intent_movement_id'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := UDINT_TO_DINT(GVL.ScratchpadV1.IntentMovementId));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('last_vision_pulse'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := UDINT_TO_DINT(GVL.ScratchpadV1.LastVisionPulse));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('boot_epoch'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := UDINT_TO_DINT(GVL.ScratchpadV1.BootEpoch));
+                // boot_epoch_now : current GVL.BootEpochCount, top-level peer
+                // of scratchpad. Renderer compares scratchpad.boot_epoch
+                // (captured at last write) against this; mismatch -> PLC
+                // restarted since the write -> scratchpad stale.
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('boot_epoch_now'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := UDINT_TO_DINT(GVL.BootEpochCount));
+            ELSIF (CommandType = 'SCRATCHPAD_WRITE') THEN
+                // §4 (2) -- host write path. Take the host-controlled fields
+                // off the request and store them. PLC NEVER interprets any of
+                // these except SchemaVersion (always set to 1 here so a stored
+                // scratchpad is distinguishable from a cold-reset-wiped one)
+                // and BootEpoch (captured at write time for staleness
+                // detection on the next read).
+                //
+                // Wire contract for v1: caller sends ALL five host-controlled
+                // fields every write. Partial updates require FindValueByPath
+                // (currently private to the unpacker) and were judged
+                // unnecessary for v1 -- the host writes the entire cursor
+                // before each unrecoverable action anyway, so partial-write
+                // optimisation buys nothing.
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                GVL.ScratchpadV1.PlanId           := TO_UDINT(MessageUnpackerFb.TryReadINT64('plan_id', 0));
+                GVL.ScratchpadV1.PlanIndex        := TO_UDINT(MessageUnpackerFb.TryReadINT64('plan_index', 0));
+                GVL.ScratchpadV1.IntentKind       := TO_USINT(MessageUnpackerFb.TryReadINT64('intent_kind', 0));
+                GVL.ScratchpadV1.IntentMovementId := TO_UDINT(MessageUnpackerFb.TryReadINT64('intent_movement_id', 0));
+                GVL.ScratchpadV1.LastVisionPulse  := TO_UDINT(MessageUnpackerFb.TryReadINT64('last_vision_pulse', 0));
+                GVL.ScratchpadV1.SchemaVersion := 1;
+                GVL.ScratchpadV1.BootEpoch := GVL.BootEpochCount;
+                ResponsePacketPointer^.ele_count := 1;
+                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
+                ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := TRUE);
             ELSIF (CommandType = 'RESET_DBG_INFO') THEN
                 // SYS-side reset: clears comm-stability counters without
                 // requiring FSM=Ready (the motion-side RESET_DBG_INFO at the

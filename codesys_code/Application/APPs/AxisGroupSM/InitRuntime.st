@@ -17,3 +17,21 @@ IF RuntimeMs = 0 THEN
         useLargeElementCountField := TRUE
     );
 END_IF;
+
+// Boot-epoch bump (§4 (2) scratchpad). AppBootHandled is non-retained
+// so it defaults FALSE on every cold/warm start; we set it TRUE here
+// after incrementing the retained counter, so this fires once per
+// application boot. Renderer correlates ScratchpadV1.BootEpoch vs
+// GVL.BootEpochCount to detect "PLC restarted since my last write".
+IF NOT GVL.AppBootHandled THEN
+    GVL.BootEpochCount := GVL.BootEpochCount + 1;
+    // SchemaVersion=0 means "cold-reset wiped" -- PLC stamps 1 so the
+    // renderer can distinguish "PLC never had any scratchpad" from
+    // "renderer never wrote one yet on this fresh-init PLC". The
+    // remaining fields stay 0 (host fills them on first write).
+    IF GVL.ScratchpadV1.SchemaVersion = 0 THEN
+        GVL.ScratchpadV1.SchemaVersion := 1;
+        GVL.ScratchpadV1.BootEpoch := GVL.BootEpochCount;
+    END_IF;
+    GVL.AppBootHandled := TRUE;
+END_IF;

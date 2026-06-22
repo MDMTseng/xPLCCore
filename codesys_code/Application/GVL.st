@@ -397,3 +397,27 @@ VAR_GLOBAL
 	BUILD_TS_MS   : LINT       := 0;
 
 END_VAR
+
+VAR_GLOBAL RETAIN
+	(* Host-owned resume scratchpad. See APP_COMM_FBs/Scratchpad_v1.
+	   PLC never interprets fields other than SchemaVersion and
+	   BootEpoch. SCRATCHPAD_WRITE SYS handler stores host bytes;
+	   GET_MACHINE_STATE includes a nested `scratchpad` map on read.
+	   Decisions: doc_review/decisions_2026-06-22.md §4 (2). *)
+	ScratchpadV1 : Scratchpad_v1;
+
+	(* Increments on every cold/warm restart. AxisGroupSM startup path
+	   bumps this once per app boot (gated by AppBootHandled). Renderer
+	   captures into ScratchpadV1.BootEpoch on write; mismatch on
+	   re-read means PLC restarted since the write and the cursor is
+	   stale. Cold reset wipes both to 0 -- renderer treats
+	   SchemaVersion=0 as "invalid, cold-start". *)
+	BootEpochCount : UDINT;
+END_VAR
+
+VAR_GLOBAL
+	(* One-shot flag for boot-epoch increment. NOT retained -- a fresh
+	   FALSE on every cold start, set TRUE in AxisGroupSM after the
+	   first scan does the bump. *)
+	AppBootHandled : BOOL := FALSE;
+END_VAR
