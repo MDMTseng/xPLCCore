@@ -1,5 +1,5 @@
-METHOD capacity : UINT
+METHOD Capacity : UINT
 VAR_INPUT
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
-capacity := _capacity;
+Capacity := _capacity;

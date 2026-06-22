@@ -32,7 +32,7 @@ VAR_GLOBAL
 	// (see UpdateMotionProgress comment) means the producer never writes
 	// to slot[head] when full -- writing there would corrupt the slot the
 	// Comm task is about to consume. Routing the pack into this scratch
-	// slot keeps the inline pack code unchanged; the gate on pushHead
+	// slot keeps the inline pack code unchanged; the gate on PushHead
 	// then quietly drops the packet and bumps ReMpDropCount.
 	reMP_info_scratch: MsgPakInfo;
 	// Same dedicated buffer for the scratch slot. Sized like reMP_info_buf

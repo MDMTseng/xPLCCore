@@ -1,4 +1,4 @@
-METHOD size : UINT
+METHOD Size : UINT
 VAR
     h : UINT;
     t : UINT;
@@ -12,7 +12,7 @@ END_VAR
 h := _head;
 t := _tail;
 IF h >= t THEN
-    size := h - t;
+    Size := h - t;
 ELSE
-    size := h + _cap2 - t;
+    Size := h + _cap2 - t;
 END_IF;

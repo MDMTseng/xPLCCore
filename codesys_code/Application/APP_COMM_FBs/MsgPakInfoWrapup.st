@@ -27,7 +27,7 @@ END_IF
 // already wrote past the buffer end. We can't undo the corruption (the
 // bytes are gone), but we bump a counter so it's visible in DiagPanel and
 // refuse to push the (already-mangled) header. Caller still calls
-// pushHead() unconditionally today; that's a follow-up to make conditional.
+// PushHead() unconditionally today; that's a follow-up to make conditional.
 IF (msgpak.whead - msgpak.buf) > TO_DINT(msgpak.buf_capacity) THEN
 	GVL.ReMpOverflowDropCount := GVL.ReMpOverflowDropCount + 1;
 	MsgPakInfoWrapup := FALSE;

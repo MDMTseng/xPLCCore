@@ -113,8 +113,8 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
         // rationale). The action-clear below still runs even if the error
         // event was dropped -- the FlyEvent itself is one-shot, not the
         // notification.
-        IF (GVL.reMP_info_ridx.space() > 0) THEN
-            ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+        IF (GVL.reMP_info_ridx.Space() > 0) THEN
+            ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
             MsgPakInfoClear(ResponsePacketPointer^);
             ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 3;
 
@@ -129,7 +129,7 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
             ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := TO_LINT(FlyEventBuffer[Index].EventId));
 
             MsgPakInfoWrapup(ResponsePacketPointer^);
-            GVL.reMP_info_ridx.pushHead();
+            GVL.reMP_info_ridx.PushHead();
         ELSE
             GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
             GVL.ReMpDropCount_TriggerEvent := GVL.ReMpDropCount_TriggerEvent + 1;
@@ -247,8 +247,8 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
                 // Drop-newest on overflow (SPSC race rationale in
                 // UpdateMotionProgress). FlyEvent state is cleared either way
                 // so we don't loop on the same one-shot.
-                IF (GVL.reMP_info_ridx.space() > 0) THEN
-                    ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+                IF (GVL.reMP_info_ridx.Space() > 0) THEN
+                    ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
                     MsgPakInfoClear(ResponsePacketPointer^);
 
 
@@ -267,7 +267,7 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
                     ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := TRUE);
 
                     MsgPakInfoWrapup(ResponsePacketPointer^);
-                    GVL.reMP_info_ridx.pushHead();
+                    GVL.reMP_info_ridx.PushHead();
                 ELSE
                     GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
                     GVL.ReMpDropCount_Reply := GVL.ReMpDropCount_Reply + 1;

@@ -70,10 +70,10 @@ END_IF;
 // ST_CHG retry pump (PH#8). PendingStChgFromState >= 0 means an edge is
 // waiting to publish; "to" is the current _eState at retry time, which
 // under newest-wins always pairs cleanly with the latched "from".
-// Producer-only on reMP_info_ridx -- never consumeTail here. No drop
+// Producer-only on reMP_info_ridx -- never ConsumeTail here. No drop
 // counter bump: ring-full just means "try again next scan", not loss.
 IF (PendingStChgFromState >= 0) THEN
-    IF (GVL.reMP_info_ridx.space() <= 0) THEN
+    IF (GVL.reMP_info_ridx.Space() <= 0) THEN
         // Audit-fix: bound the wait. Drop after PENDING_RETRY_MAX_SCANS
         // so a permanently-stuck ring doesn't swallow every subsequent
         // ST_CHG edge silently. Newest-wins means the latched "from"
@@ -87,7 +87,7 @@ IF (PendingStChgFromState >= 0) THEN
         END_IF;
     ELSE
         StateString := TO_STRING(AxisGroupManagerFb._eState);
-        EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+        EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
         MsgPakInfoClear(EventPacketPointer^);
         EventPacketPointer^.ele_count := 6;
         EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
@@ -103,7 +103,7 @@ IF (PendingStChgFromState >= 0) THEN
         EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('runtime_ms'));
         EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
         MsgPakInfoWrapup(EventPacketPointer^);
-        GVL.reMP_info_ridx.pushHead();
+        GVL.reMP_info_ridx.PushHead();
         GVL.StateChangeEventCount := GVL.StateChangeEventCount + 1;
         PendingStChgFromState := -1;
         PendingStChgRetryScans := 0;
@@ -120,8 +120,8 @@ END_IF;
 // `value` carrying the new gate state.
 IF (GVL.CoordSystemConfigured <> PrevCoordSet) THEN
     // Drop-newest on overflow (see UpdateMotionProgress for rationale).
-    IF (GVL.reMP_info_ridx.space() > 0) THEN
-        EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+    IF (GVL.reMP_info_ridx.Space() > 0) THEN
+        EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
         MsgPakInfoClear(EventPacketPointer^);
         EventPacketPointer^.ele_count := 4;
         EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
@@ -133,7 +133,7 @@ IF (GVL.CoordSystemConfigured <> PrevCoordSet) THEN
         EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('runtime_ms'));
         EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
         MsgPakInfoWrapup(EventPacketPointer^);
-        GVL.reMP_info_ridx.pushHead();
+        GVL.reMP_info_ridx.PushHead();
     ELSE
         GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
         GVL.ReMpDropCount_CoordSet := GVL.ReMpDropCount_CoordSet + 1;
@@ -148,8 +148,8 @@ PrevCoordSet := GVL.CoordSystemConfigured;
 // Drop-newest on overflow: ring full means the UI has bigger problems
 // than a missing heartbeat tick; ReMpDropCount grows and the seq jumps.
 IF (LastHeartbeatMs = 0) OR (RuntimeMs - LastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) THEN
-    IF (GVL.reMP_info_ridx.space() > 0) THEN
-        EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+    IF (GVL.reMP_info_ridx.Space() > 0) THEN
+        EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
         MsgPakInfoClear(EventPacketPointer^);
         EventPacketPointer^.ele_count := 6;
         EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
@@ -167,7 +167,7 @@ IF (LastHeartbeatMs = 0) OR (RuntimeMs - LastHeartbeatMs >= HEARTBEAT_INTERVAL_M
         EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('drops_events'));
         EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := TO_LINT(GVL.ReMpDropCount_StChg + GVL.ReMpDropCount_CoordSet + GVL.ReMpDropCount_Heartbeat + GVL.ReMpDropCount_TriggerEvent));
         MsgPakInfoWrapup(EventPacketPointer^);
-        GVL.reMP_info_ridx.pushHead();
+        GVL.reMP_info_ridx.PushHead();
     ELSE
         GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
         GVL.ReMpDropCount_Heartbeat := GVL.ReMpDropCount_Heartbeat + 1;

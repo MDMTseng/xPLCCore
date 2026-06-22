@@ -62,10 +62,10 @@ END_IF;
 PrevMotionBufferSizeForEvent := MotionBufferSize;
 
 // Retry pump: try until the ring has space. Producer-only on
-// reMP_info_ridx -- never consumeTail here.
+// reMP_info_ridx -- never ConsumeTail here.
 IF PendingMoveDoneId <> 0 THEN
-    IF (GVL.reMP_info_ridx.space() > 0) THEN
-        EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+    IF (GVL.reMP_info_ridx.Space() > 0) THEN
+        EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
         MsgPakInfoClear(EventPacketPointer^);
         EventPacketPointer^.ele_count := 4;
         EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
@@ -77,7 +77,7 @@ IF PendingMoveDoneId <> 0 THEN
         EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('runtime_ms'));
         EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
         MsgPakInfoWrapup(EventPacketPointer^);
-        GVL.reMP_info_ridx.pushHead();
+        GVL.reMP_info_ridx.PushHead();
         PrevCompletedMovementId := PendingMoveDoneId;
         PendingMoveDoneId := 0;
         PendingMoveDoneRetryScans := 0;

@@ -1,17 +1,17 @@
 (* =========== IMPLEMENTATION =========== *)
 
-    IF (RetryMotionCommandCooldown = 0 AND PacketType = 'M' AND GVL.minfo_buf_ridx.size() > 0 AND MotionBufferSize < MOTION_BUFFER_THRESHOLD) THEN
+    IF (RetryMotionCommandCooldown = 0 AND PacketType = 'M' AND GVL.minfo_buf_ridx.Size() > 0 AND MotionBufferSize < MOTION_BUFFER_THRESHOLD) THEN
         ShouldReturn := FALSE;
         CommandAck := FALSE;
 
-        // reMP overflow guard: drop-newest. Producer must NOT consumeTail
+        // reMP overflow guard: drop-newest. Producer must NOT ConsumeTail
         // (Comm task is sole consumer; two consumers race on _tail). When
         // the ring is full we route the pack into a scratch slot so the
-        // long branchy block below can stay unchanged; pushHead at the
+        // long branchy block below can stay unchanged; PushHead at the
         // bottom is gated on SlotAvailable. See GVL.reMP_info_scratch.
-        IF (GVL.reMP_info_ridx.space() > 0) THEN
+        IF (GVL.reMP_info_ridx.Space() > 0) THEN
             SlotAvailable := TRUE;
-            ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+            ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
         ELSE
             SlotAvailable := FALSE;
             GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
@@ -35,7 +35,7 @@
 
             ShouldReturn := TRUE;
             CommandAck := FALSE;
-            GVL.minfo_buf_ridx.consumeTail();
+            GVL.minfo_buf_ridx.ConsumeTail();
 
         ELSIF (CommandType = 'BLOCK_FOR_MOTION_STOP' OR CommandType = 'WAIT_FOR_MOTION_STOP') THEN
             // First scan we see this CommandId, latch start time and timeout.
@@ -48,14 +48,14 @@
             IF (GroupReadPositionFb.MovementId = 0) THEN
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
-                GVL.minfo_buf_ridx.consumeTail();
+                GVL.minfo_buf_ridx.ConsumeTail();
             ELSIF (BlockTimeoutMs > 0 AND (RuntimeMs - BlockStartMs) >= BlockTimeoutMs) THEN
                 ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('block_timeout'));
                 ShouldReturn := TRUE;
                 CommandAck := FALSE;
-                GVL.minfo_buf_ridx.consumeTail();
+                GVL.minfo_buf_ridx.ConsumeTail();
             END_IF;
 
         ELSIF (CommandType = 'BLOCK_FOR_DIGITAL_INPUT') THEN
@@ -72,14 +72,14 @@
             IF DigitalInputPointer <> 0 AND ((DigitalInputPointer[InputPinGroup] AND InputPinMask) = (InputPinState AND InputPinMask)) THEN
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
-                GVL.minfo_buf_ridx.consumeTail();
+                GVL.minfo_buf_ridx.ConsumeTail();
             ELSIF (BlockTimeoutMs > 0 AND (RuntimeMs - BlockStartMs) >= BlockTimeoutMs) THEN
                 ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('block_timeout'));
                 ShouldReturn := TRUE;
                 CommandAck := FALSE;
-                GVL.minfo_buf_ridx.consumeTail();
+                GVL.minfo_buf_ridx.ConsumeTail();
             END_IF;
         ELSIF (CommandType = 'GET_DIGITAL_INPUT') THEN
             //InputPinGroup := TO_UINT(MessageUnpackerFb.TryReadINT64('group', 0));
@@ -98,7 +98,7 @@
 
             ShouldReturn := TRUE;
             CommandAck := TRUE;
-            GVL.minfo_buf_ridx.consumeTail();
+            GVL.minfo_buf_ridx.ConsumeTail();
         ELSIF (CommandType = 'READ_LATEST_CMD_LOCATION') THEN	
             ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 6;
 
@@ -117,7 +117,7 @@
 
             ShouldReturn := TRUE;
             CommandAck := TRUE;
-            GVL.minfo_buf_ridx.consumeTail();
+            GVL.minfo_buf_ridx.ConsumeTail();
 
         ELSIF (CommandType = 'G4') THEN
             ShouldReturn := TRUE;
@@ -132,7 +132,7 @@
                 );
 
                 IF (GroupWaitFb.CommandAccepted) THEN
-                    GVL.minfo_buf_ridx.consumeTail();
+                    GVL.minfo_buf_ridx.ConsumeTail();
                     ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
 
                     ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('movement_id'));
@@ -144,7 +144,7 @@
                     RetryMotionCommandCooldown := RETRY_COOLDOWN_G4_MS;
                 END_IF;
             ELSE
-                GVL.minfo_buf_ridx.consumeTail();
+                GVL.minfo_buf_ridx.ConsumeTail();
 
                 ShouldReturn := TRUE;
                 CommandAck := FALSE;
@@ -162,7 +162,7 @@
                 GVL.SetCoordBusyNakCount := GVL.SetCoordBusyNakCount + 1;
                 ShouldReturn := TRUE;
                 CommandAck := FALSE;
-                GVL.minfo_buf_ridx.consumeTail();
+                GVL.minfo_buf_ridx.ConsumeTail();
             ELSE
                 CoordTransform.X := 0.0;
                 CoordTransform.Y := 0.0;
@@ -175,7 +175,7 @@
 
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
-                GVL.minfo_buf_ridx.consumeTail();
+                GVL.minfo_buf_ridx.ConsumeTail();
             END_IF
 
         ELSIF (CommandType = 'SetCoord1') THEN
@@ -187,7 +187,7 @@
                 GVL.SetCoordBusyNakCount := GVL.SetCoordBusyNakCount + 1;
                 ShouldReturn := TRUE;
                 CommandAck := FALSE;
-                GVL.minfo_buf_ridx.consumeTail();
+                GVL.minfo_buf_ridx.ConsumeTail();
             ELSE
                 CoordTransform.X := 0.0;
                 CoordTransform.Y := 0.0;
@@ -209,7 +209,7 @@
 
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
-                GVL.minfo_buf_ridx.consumeTail();
+                GVL.minfo_buf_ridx.ConsumeTail();
             END_IF
 
         ELSIF (CommandType = 'RESET_DBG_INFO') THEN
@@ -239,7 +239,7 @@
 
             ShouldReturn := TRUE;
             CommandAck := TRUE;
-            GVL.minfo_buf_ridx.consumeTail();
+            GVL.minfo_buf_ridx.ConsumeTail();
 
         ELSIF (CommandType = 'ReelGo') THEN
             reelGoDistance := MessageUnpackerFb.TryReadREAL('Distance', reelGoDistance);
@@ -258,7 +258,7 @@
 
             ShouldReturn := TRUE;
             CommandAck := TRUE;
-            GVL.minfo_buf_ridx.consumeTail();
+            GVL.minfo_buf_ridx.ConsumeTail();
 
         ELSIF (CommandType = 'M4') THEN
 
@@ -488,7 +488,7 @@
 
 					END_IF;
 
-					GVL.minfo_buf_ridx.consumeTail();
+					GVL.minfo_buf_ridx.ConsumeTail();
 
 				END_IF;
 
@@ -535,7 +535,7 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
                         END_IF;
                     END_FOR;
                 END_IF;
-                GVL.minfo_buf_ridx.consumeTail();
+                GVL.minfo_buf_ridx.ConsumeTail();
             END_IF;
 
 
@@ -566,7 +566,7 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
                 GVL.DupeCommandCount := GVL.DupeCommandCount + 1;
-                GVL.minfo_buf_ridx.consumeTail();
+                GVL.minfo_buf_ridx.ConsumeTail();
 
             // Post-homing coord-system gate. Refuse G1 motion until the
             // operator has called SetCoord0 or SetCoord1 since the last
@@ -579,7 +579,7 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
                 GVL.CoordNotConfiguredNakCount := GVL.CoordNotConfiguredNakCount + 1;
                 ShouldReturn := TRUE;
                 CommandAck := FALSE;
-                GVL.minfo_buf_ridx.consumeTail();
+                GVL.minfo_buf_ridx.ConsumeTail();
             ELSE
             // Phase 3: read `frame` FIRST so we can NAK before mutating
             // persistent MotionPose / Latest* modal state. A NAK that
@@ -594,7 +594,7 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
                 GVL.Coord1BadFrameNakCount := GVL.Coord1BadFrameNakCount + 1;
                 ShouldReturn := TRUE;
                 CommandAck := FALSE;
-                GVL.minfo_buf_ridx.consumeTail();
+                GVL.minfo_buf_ridx.ConsumeTail();
             ELSIF (G1FrameTag = 1 AND NOT GVL.Coord1Bound) THEN
                 ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
@@ -602,7 +602,7 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
                 GVL.Coord1NotBoundNakCount := GVL.Coord1NotBoundNakCount + 1;
                 ShouldReturn := TRUE;
                 CommandAck := FALSE;
-                GVL.minfo_buf_ridx.consumeTail();
+                GVL.minfo_buf_ridx.ConsumeTail();
             ELSE
             MotionPose.c.X := MessageUnpackerFb.TryReadREAL('X', MotionPose.c.X);
             MotionPose.c.Y := MessageUnpackerFb.TryReadREAL('Y', MotionPose.c.Y);
@@ -666,7 +666,7 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
             );
 
             IF (MoveLinearAbsoluteFb.CommandAccepted) THEN
-                GVL.minfo_buf_ridx.consumeTail();
+                GVL.minfo_buf_ridx.ConsumeTail();
 
                 ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('movement_id'));
@@ -705,10 +705,10 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
 
             ShouldReturn := TRUE;
             CommandAck := TRUE;
-            GVL.minfo_buf_ridx.consumeTail();
+            GVL.minfo_buf_ridx.ConsumeTail();
 
         ELSE
-            GVL.minfo_buf_ridx.consumeTail();
+            GVL.minfo_buf_ridx.ConsumeTail();
             ShouldReturn := TRUE;
         END_IF;
 
@@ -724,7 +724,7 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
             // Only commit the slot if we actually reserved one above.
             // SlotAvailable=FALSE means the pack wrote to the scratch slot.
             IF SlotAvailable THEN
-                GVL.reMP_info_ridx.pushHead();
+                GVL.reMP_info_ridx.PushHead();
             END_IF;
         END_IF;
     END_IF;

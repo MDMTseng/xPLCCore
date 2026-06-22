@@ -1,9 +1,9 @@
-METHOD consumeTail : BOOL
+METHOD ConsumeTail : BOOL
 VAR_INPUT
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
-    IF size() = 0 THEN
-        consumeTail := FALSE; // Buffer empty
+    IF Size() = 0 THEN
+        ConsumeTail := FALSE; // Buffer empty
         RETURN;
     END_IF;
 
@@ -11,4 +11,4 @@ END_VAR
     // slot freed up.
     _tail := (_tail + 1) MOD _cap2;
 
-    consumeTail := TRUE;
+    ConsumeTail := TRUE;

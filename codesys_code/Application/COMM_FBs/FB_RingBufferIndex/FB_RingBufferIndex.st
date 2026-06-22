@@ -15,8 +15,8 @@
              Oldest Data   Next Write Slot
 
     SPSC lock-free safety (added 2026-04-27):
-    - Producer task is the only writer of _head (via pushHead).
-    - Consumer task is the only writer of _tail (via consumeTail).
+    - Producer task is the only writer of _head (via PushHead).
+    - Consumer task is the only writer of _tail (via ConsumeTail).
     - size() / space() are *derived* from _head and _tail; no _count
       RMW that both sides would race on.
     - _head / _tail count modulo (2 * _capacity) to disambiguate empty
@@ -31,15 +31,15 @@
       offline-only), never from inside a producer/consumer loop.
 
     NOT MPSC-safe: if two tasks both push (or both consume) on the same
-    instance, getHead() can return the same slot to both producers and
-    pushHead() can race on _head. In this project reMP_info_ridx is
+    instance, GetHead() can return the same slot to both producers and
+    PushHead() can race on _head. In this project reMP_info_ridx is
     pushed only by EC_Task (AxisGroupSM family) and consumed only by
     Comm task (TCP_MSGPAK_Server) -- a clean SPSC arrangement. Earlier
-    revisions had EC_Task perform consumeTail() on overflow ("drop-
+    revisions had EC_Task perform ConsumeTail() on overflow ("drop-
     oldest") which created a second consumer racing the Comm task; that
     has been replaced everywhere with a "drop-newest" pattern (skip the
     write if space()=0, or pack into GVL.reMP_info_scratch and decline
-    to pushHead). See doc/3-subsystems/ringbuf-bugs.md item #12.
+    to PushHead). See doc/3-subsystems/ringbuf-bugs.md item #12.
 
     Author:         Gemini (initial), refactored to SPSC lock-free 2026-04-27
     Version:        2.0

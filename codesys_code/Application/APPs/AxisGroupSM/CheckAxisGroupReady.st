@@ -3,15 +3,15 @@ AxisGroupReady := (AxisGroupManagerFb._eState = E_RobotState.Ready);
 
 IF NOT AxisGroupReady THEN
     // Host-authority gate (solidification.md W1 A1). Previously this
-    // block called GVL.minfo_buf_ridx.clear() which silently dropped
+    // block called GVL.minfo_buf_ridx.Clear() which silently dropped
     // every queued motion packet with no reply -- the UI's
     // sendTcpMsgPack would hang until its own timeout. Drain each
     // packet with an explicit NAK + err='group_not_ready' so the
     // host can distinguish "PLC not ready" from "PLC dead".
     // SYS/AUX paths above already ran and are unaffected.
-    WHILE GVL.minfo_buf_ridx.size() > 0 DO
+    WHILE GVL.minfo_buf_ridx.Size() > 0 DO
         // Re-parse each slot's header to get CommandId for the echo.
-        MessageBufferPointer := ADR(GVL.minfo_buf[GVL.minfo_buf_ridx.getTail()][0]);
+        MessageBufferPointer := ADR(GVL.minfo_buf[GVL.minfo_buf_ridx.GetTail()][0]);
         MessageUnpackerFb.Init(ADR(MessageBufferPointer[1]), MessageBufferPointer[0]);
         CommandId := TO_DINT(MessageUnpackerFb.TryReadINT64('id', -1));
 
@@ -19,8 +19,8 @@ IF NOT AxisGroupReady THEN
         // UpdateMotionProgress for the SPSC race rationale). NAK still
         // gets emitted when there's space; under sustained backpressure
         // the UI will see drop-counter climb and reconcile via timeout.
-        IF (GVL.reMP_info_ridx.space() > 0) THEN
-            ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.getHead()]);
+        IF (GVL.reMP_info_ridx.Space() > 0) THEN
+            ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
             MsgPakInfoClear(ResponsePacketPointer^);
             ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 3;
             ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
@@ -30,13 +30,13 @@ IF NOT AxisGroupReady THEN
             ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
             ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := FALSE);
             MsgPakInfoWrapup(ResponsePacketPointer^);
-            GVL.reMP_info_ridx.pushHead();
+            GVL.reMP_info_ridx.PushHead();
         ELSE
             GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
             GVL.ReMpDropCount_Reply := GVL.ReMpDropCount_Reply + 1;
         END_IF;
 
-        GVL.minfo_buf_ridx.consumeTail();
+        GVL.minfo_buf_ridx.ConsumeTail();
         GVL.GroupNotReadyNakCount := GVL.GroupNotReadyNakCount + 1;
     END_WHILE;
 
