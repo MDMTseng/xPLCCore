@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { COMCtrlObj } from '../types';
 import { CalibPage } from './CalibPage';
 import { MiscControlsPage } from './MiscControlsPage';
@@ -25,6 +25,14 @@ export const ControlPage: React.FC<{
   const [plcReady, setPlcReady] = useState(false);
   const [lastReconcile, setLastReconcile] = useState<{reason: string; at: number; snapshot: any} | null>(null);
 
+  // Ref so the reconciler effect (registered once on mount) always
+  // reads the CURRENT tab without needing to re-bind its event
+  // listeners. Without this, a non-Ready ST_CHG from the FSM walk
+  // kicked any tab back to Welcome -- including the Recovery demo
+  // tab, which exists specifically to operate in non-Ready states.
+  const tabRef = useRef(tab);
+  useEffect(() => { tabRef.current = tab; }, [tab]);
+
   // A4 reconciliation: two event sources feed the same reconcile function.
   //   `plc:machine-state` - full snapshot on reconnect (includes coord_set).
   //   `plc:event`          - PLC push; ST_CHG events arrive mid-session, but
@@ -33,7 +41,19 @@ export const ControlPage: React.FC<{
   //                          regardless of coord. Ready transitions we leave
   //                          alone -- a later reconnect / explicit snapshot
   //                          handles the coord-set gate.
+  //
+  // Tab-aware: only force a reroute when the CURRENT tab requires Ready
+  // (Calib / Operation). Welcome and Recovery are designed to be usable
+  // outside Ready, so a non-Ready transition leaves them in place. The
+  // lastReconcile state still updates so banners / debug views see the
+  // reason; only the setTab call is conditional.
   useEffect(() => {
+    const TAB_REQUIRES_READY: Record<string, boolean> = {
+      Welcome: false,
+      Calib: true,
+      Operation: true,
+      Recovery: false,
+    };
     const reconcile = (source: string, payload: any, hasCoord: boolean) => {
       if (!payload) return;
       const st = String(payload.st_str ?? '');
@@ -42,9 +62,15 @@ export const ControlPage: React.FC<{
       else if (st !== 'Ready') reason = 'plc_not_ready';
       else if (hasCoord && payload.coord_set !== true) reason = 'coord_not_configured';
       if (reason) {
-        setTab('Welcome');
+        const currentTab = tabRef.current;
+        const needsReady = TAB_REQUIRES_READY[currentTab] ?? false;
+        if (needsReady) {
+          setTab('Welcome');
+          console.log(`[A4/${source}] ${currentTab} requires Ready -> forced to Welcome:`, reason, payload);
+        } else {
+          console.log(`[A4/${source}] ${currentTab} tolerates non-Ready (${reason}); staying put.`);
+        }
         setLastReconcile({ reason, at: Date.now(), snapshot: payload });
-        console.log(`[A4/${source}] ControlPage forced to Welcome:`, reason, payload);
       } else {
         setLastReconcile({ reason: 'ok', at: Date.now(), snapshot: payload });
       }
