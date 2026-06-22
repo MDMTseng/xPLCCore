@@ -1,0 +1,11 @@
+# pre-push: run the headless check (tsc + vitest) before letting code
+# leave the workstation. Catches the "I just broke the build" class of
+# regression that GitHub Actions also runs, but locally so a failed push
+# isn't a wasted CI round-trip.
+#
+# To skip in a one-off (e.g. pushing WIP to a personal branch):
+#   git push --no-verify
+#
+# Live-PLC tests (codesys_scripts/tests/, demo_recovery_flow.py) are
+# intentionally NOT in this hook -- they need real hardware + UI.
+npm run check

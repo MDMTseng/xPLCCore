@@ -13,7 +13,10 @@
   "sideEffects": false,
   "scripts": {
     "build": "vite build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test",
+    "prepare": "husky"
   },
   "peerDependencies": {
     "react": ">=17 || >=18",
@@ -24,6 +27,7 @@
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^5.0.0",
+    "husky": "^9.1.7",
     "typescript": "^5.9.2",
     "vite": "^7.1.2",
     "vite-plugin-css-injected-by-js": "^3.5.2",

@@ -228,6 +228,25 @@ The package is published as an ESM + CJS library (see
 [`package.json`](package.json) `main`/`module`/`types`). It is consumed
 by the host Electron application, which is out of scope for this repo.
 
+## Test / CI
+
+```bash
+npm run typecheck   # tsc --noEmit
+npm test            # vitest run -- orchestrator/resume.test.ts (17 cases)
+npm run check       # both of the above; same script as pre-push + CI
+```
+
+`npm install` provisions a husky `pre-push` hook (`.husky/pre-push`)
+that runs `npm run check` before any push leaves the workstation.
+Skip with `git push --no-verify` for WIP branches.
+
+GitHub Actions runs the same headless checks on every push + PR
+(`.github/workflows/ci.yml`). Live-PLC regression
+(`codesys_scripts/tests/test_plc_*`, `demo_recovery_flow.py`,
+`probe_*.py`) needs real hardware + a UI in the foreground and is run
+manually before merging anything that touches the PLC dispatcher,
+`orchestrator/resume.ts`, or the W1 safety contract.
+
 ---
 
 ## Conventions

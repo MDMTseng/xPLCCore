@@ -1,0 +1,56 @@
+# Tier-1 headless CI. Runs on every push + PR.
+#
+# Catches the "did I break compilation / static contracts" class of
+# regression. Does NOT cover the live-PLC tests in
+# codesys_scripts/tests/ -- those need real hardware + the CODESYS
+# scripting daemon + a UI in the foreground, which doesn't fit in a
+# GitHub Actions sandbox. Run those manually before merging anything
+# touching the PLC dispatcher / orchestrator/resume.ts / W1 contract.
+#
+# Stages (all on ubuntu-latest):
+#   1. install npm deps with cache
+#   2. tsc --noEmit          -- TypeScript compile (no JS output)
+#   3. vitest run            -- pure-function unit tests
+#   4. python -m py_compile  -- syntax-check every .py under codesys_scripts/
+#
+# Local equivalent: `npm run check` (wired into .husky/pre-push).
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  headless:
+    name: tsc + vitest + py syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Python syntax check
+        # Compile every .py under codesys_scripts/ (excluding _archive/
+        # which is intentionally orphaned). py_compile is the cheapest
+        # way to catch a syntax error before it bites a daemon job.
+        run: |
+          find codesys_scripts -name '*.py' -not -path '*/_archive/*' -print0 \
+            | xargs -0 -n1 python -m py_compile
