@@ -194,11 +194,6 @@ PROGRAM AxisGroupSM
         BlockTimeoutMs: LINT := 0;
 
         // Push-notification (server-initiated event) packet pointer.
-        // Used by the state-change detector to emit ST_CHG events into the
-        // reMP reply-ring so the UI learns about FSM transitions without
-        // polling GA_EV. Event packets carry `kind='event'` and no `id`.
-        EventPacketPointer: POINTER TO MsgPakInfo;
-
         // Edge-detect state for COORD_SET and MOVE_DONE push events.
         // Both emit into the same reMP reply-ring as ST_CHG, same
         // `kind='event'` envelope, so the UI can consume them through

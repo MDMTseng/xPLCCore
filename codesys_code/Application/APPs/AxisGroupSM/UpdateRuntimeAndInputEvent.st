@@ -73,26 +73,8 @@ END_IF;
 // Producer-only on reMP_info_ridx -- never ConsumeTail here. No drop
 // counter bump: ring-full just means "try again next scan", not loss.
 IF (PendingStChgFromState >= 0) THEN
-    IF (GVL.reMP_info_ridx.Space() <= 0) THEN
-        // Audit-fix: bound the wait. Drop after PENDING_RETRY_MAX_SCANS
-        // so a permanently-stuck ring doesn't swallow every subsequent
-        // ST_CHG edge silently. Newest-wins means the latched "from"
-        // would otherwise just keep getting overwritten while never
-        // landing.
-        PendingStChgRetryScans := PendingStChgRetryScans + 1;
-        IF PendingStChgRetryScans >= PENDING_RETRY_MAX_SCANS THEN
-            PendingStChgFromState := -1;
-            PendingStChgRetryScans := 0;
-            GVL.PendingStChgDropCount := GVL.PendingStChgDropCount + 1;
-        END_IF;
-    ELSE
-        // Retry-style: caller already probed Space() above; manual
-        // GetHead/Clear here (TryAcquireReplySlot would re-probe and
-        // bump ReMpDropCount on per-scan failures, which is wrong for
-        // retry semantics -- only the final give-up above counts).
+    IF ProbeReplySlot() THEN
         StateString := TO_STRING(AxisGroupManagerFb._eState);
-        ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
-        MsgPakInfoClear(ResponsePacketPointer^);
         PackKvStr(ADR('kind'), ADR('event'));
         PackKvStr(ADR('name'), ADR('ST_CHG'));
         PackKvDint(ADR('st'), AxisGroupManagerFb._eState);
@@ -103,6 +85,18 @@ IF (PendingStChgFromState >= 0) THEN
         GVL.StateChangeEventCount := GVL.StateChangeEventCount + 1;
         PendingStChgFromState := -1;
         PendingStChgRetryScans := 0;
+    ELSE
+        // Bound the retry. Drop after PENDING_RETRY_MAX_SCANS so a
+        // permanently-stuck ring doesn't swallow every subsequent
+        // ST_CHG edge silently. Newest-wins means the latched "from"
+        // would otherwise just keep getting overwritten while never
+        // landing.
+        PendingStChgRetryScans := PendingStChgRetryScans + 1;
+        IF PendingStChgRetryScans >= PENDING_RETRY_MAX_SCANS THEN
+            PendingStChgFromState := -1;
+            PendingStChgRetryScans := 0;
+            GVL.PendingStChgDropCount := GVL.PendingStChgDropCount + 1;
+        END_IF;
     END_IF;
 END_IF;
 

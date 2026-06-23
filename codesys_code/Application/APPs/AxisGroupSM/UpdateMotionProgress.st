@@ -64,14 +64,10 @@ PrevMotionBufferSizeForEvent := MotionBufferSize;
 // Retry pump: try until the ring has space. Producer-only on
 // reMP_info_ridx -- never ConsumeTail here.
 IF PendingMoveDoneId <> 0 THEN
-    // Retry-style emit: keep manual Space() probe so per-scan failure
-    // doesn't bump ReMpDropCount (which would count the same packet
-    // hundreds of times before PENDING_RETRY_MAX_SCANS gives up).
-    // TryAcquireReplySlot doesn't fit this pattern; only the final
-    // give-up below bumps the class-specific PendingMoveDoneDropCount.
-    IF (GVL.reMP_info_ridx.Space() > 0) THEN
-        ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
-        MsgPakInfoClear(ResponsePacketPointer^);
+    // Retry-style emit: use ProbeReplySlot (no per-scan drop-counter
+    // bump). Only the final give-up below bumps the class-specific
+    // PendingMoveDoneDropCount once.
+    IF ProbeReplySlot() THEN
         PackKvStr(ADR('kind'), ADR('event'));
         PackKvStr(ADR('name'), ADR('MOVE_DONE'));
         PackKvLint(ADR('movement_id'), TO_LINT(PendingMoveDoneId));

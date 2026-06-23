@@ -77,24 +77,15 @@ SysDrainIter := 0;
             SysDrainIter := SysDrainIter + 1;
 
         ELSIF (PacketType = 'SYS') THEN
-            // reMP overflow: drop-newest. Producer must NOT ConsumeTail
-            // (Comm task is sole consumer; two consumers race on _tail).
-            // The SYS handler block below has many branches that all pack
-            // into ResponsePacketPointer^; route to GVL.reMP_info_scratch
-            // when full so the inline pack code stays unchanged. The
-            // PushHead at the bottom of this branch is gated on
-            // SlotAvailable.
-            IF (GVL.reMP_info_ridx.Space() > 0) THEN
-                SlotAvailable := TRUE;
-                ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
-            ELSE
-                SlotAvailable := FALSE;
-                GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
-                GVL.ReMpDropCount_Reply := GVL.ReMpDropCount_Reply + 1;
-                ResponsePacketPointer := ADR(GVL.reMP_info_scratch);
-            END_IF;
-
-            MsgPakInfoClear(ResponsePacketPointer^);
+            // SYS reply lifecycle: TryAcquireReplySlotOrScratch reserves
+            // a real slot when possible OR routes into GVL.reMP_info_scratch
+            // when the ring is full (so the long ELSIF dispatch chain
+            // below can pack unconditionally). CommitReplySlotOrScratch
+            // at the bottom appends the id+ack tail, runs Wrapup, and
+            // either PushHeads the real slot OR bumps the drop counter
+            // on the scratch path -- gated on SlotAvailable that
+            // TryAcquireReplySlotOrScratch sets.
+            TryAcquireReplySlotOrScratch(ADR(GVL.ReMpDropCount_Reply));
 
             IF (CommandType = 'GA_EV') THEN
                 ShouldReturn := TRUE;
@@ -564,21 +555,7 @@ SysDrainIter := 0;
             GVL.minfo_buf_ridx.ConsumeTail();
 
             IF ShouldReturn = TRUE THEN // return ack/nak with id
-                PackKvDint(ADR('id'), CommandId);
-
-                PackKvBool(ADR('ack'), CommandAck);
-
-                MsgPakInfoWrapup(ResponsePacketPointer^);
-                // Drop-newest: only commit if the real ring slot was reserved.
-                // If SlotAvailable=FALSE we packed into the scratch slot and
-                // must NOT PushHead (would corrupt the slot a consumer is
-                // currently reading). See GVL.reMP_info_scratch note.
-                IF SlotAvailable THEN
-                    GVL.reMP_info_ridx.PushHead();
-                ELSE
-                    GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
-                    GVL.ReMpDropCount_Reply := GVL.ReMpDropCount_Reply + 1;
-                END_IF;
+                CommitReplySlotOrScratch(CommandId, CommandAck, ADR(GVL.ReMpDropCount_Reply));
             END_IF;
             SysDrainIter := SysDrainIter + 1;
 
