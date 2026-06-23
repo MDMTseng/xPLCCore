@@ -53,11 +53,6 @@ STRUCT
 	ActionType : FlyEventActType;
 
 	PinGrp : INT; (* Byte index in the digital output array. *)
-	ResetDelayMs : INT; (* Delay (ms) before the auto-appended pin-reset stage.
-	                       ProcessMotionPacket expands non-zero values into a
-	                       follow-up IoStage that toggles the pin mask off,
-	                       so hosts can specify a one-shot pulse with a single
-	                       stage + reset_ms instead of two explicit stages. *)
 	IoStageCount : INT; (* Number of sequential IO stages configured. *)
 	IoStageIndex : INT; (* Next stage index to execute. *)
 	IoStageDelayCountdown : DINT; (* Countdown before the next stage fires. *)

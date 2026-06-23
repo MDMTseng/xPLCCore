@@ -87,10 +87,11 @@ def test_m4_large_motion_id_offset_acks(fsm_ready, offset):
     these ACK cleanly. We can't introspect the resolved target id from the
     wire, but a successful ACK + sane ev_buf_space is enough to prove the
     parser path didn't choke."""
+    from tests._raw_plc import m4_pulse_seq
     _seed_motion()
     reply = tms.harness_send(
         {"type": "M", "cmd": "M4",
-         "pin": 1, "state": 1, "reset_ms": 50,
+         "pin_op_seq": m4_pulse_seq(1, 1, reset_ms=50),
          "motion_id_offset": offset, "motion_progress": 1.0,
          "event_id": 7000 + (offset & 0xFFFF), "ttl_ms": 5000},
         timeout=3.0,

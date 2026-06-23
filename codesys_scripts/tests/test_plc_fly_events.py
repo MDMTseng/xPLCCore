@@ -15,6 +15,7 @@ from tests._raw_plc import (
     send_pack,
     drain_until_id,
     bring_fsm_to_ready,
+    m4_pulse_seq,
 )
 from tests.test_plc_holes_e2e import _read_symbols
 
@@ -51,8 +52,8 @@ def test_distance_trigger_fires_inside_boundary(raw_plc_socket):
               ["AxisGroupSM.IoTriggerCount"])
 
     # td=1e9 -> ball covers the whole workspace -> tin=1 (inside) fires
-    # immediately. pin/state with reset_ms=50 generates two stages
-    # (set + auto-reset), so IoTriggerCount must climb by exactly 2.
+    # immediately. The 2-stage pin_op_seq (set, then auto-reset 50ms later)
+    # makes IoTriggerCount climb by exactly 2.
     m4 = {
         "type": "M", "cmd": "M4", "id": 70010,
         "motion_id": 0,
@@ -60,7 +61,7 @@ def test_distance_trigger_fires_inside_boundary(raw_plc_socket):
         "tx": 0.0, "ty": 0.0, "tz": 0.0,
         "td": 1.0e9,
         "tin": 1,
-        "pin": 0x4000, "state": 0x4000, "reset_ms": 50,
+        "pin_op_seq": m4_pulse_seq(0x4000, 0x4000, reset_ms=50),
         "ttl_ms": 2000, "event_id": 12345,
     }
     send_pack(s, m4)
@@ -104,7 +105,7 @@ def test_distance_trigger_outside_boundary_does_not_fire(raw_plc_socket):
         "tx": 0.0, "ty": 0.0, "tz": 0.0,
         "td": 0.001,
         "tin": 1,
-        "pin": 0x4000, "state": 0x4000, "reset_ms": 0,
+        "pin_op_seq": m4_pulse_seq(0x4000, 0x4000, reset_ms=0),
         "ttl_ms": 200,
         "event_id": 67890,
     }

@@ -19,6 +19,23 @@ PLC_HOST, PLC_PORT = "192.168.1.70", 8125
 _send_lock = threading.Lock()
 
 
+def m4_pulse_seq(pin: int, state: int, reset_ms: int = 0):
+    """Build a `pin_op_seq` for the legacy `{pin, state, reset_ms}` shape.
+
+    Pre-2026-06-23 the PLC expanded `{pin, state, reset_ms}` into a 2-stage
+    internal IO sequence (set, then auto-reset after reset_ms). That
+    expander now lives host-side; this helper mirrors the same shape so
+    tests using the legacy shorthand keep producing equivalent wire packets.
+
+      reset_ms <= 0  -> 1 stage:  [0, pin, state]
+      reset_ms >  0  -> 2 stages: [0, pin, state, reset_ms, pin, (~state) & pin]
+    """
+    if reset_ms <= 0:
+        return [0, pin, state]
+    state_off = (~state) & pin
+    return [0, pin, state, reset_ms, pin, state_off]
+
+
 def ui_set_tcp(connect: bool):
     action = "connect_tcp" if connect else "disconnect_tcp"
     payload = '{"host":"192.168.1.70","port":8125}' if connect else "{}"

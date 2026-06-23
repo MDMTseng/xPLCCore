@@ -23,6 +23,7 @@ from tests._raw_plc import (
     drain_all,
     bring_fsm_to_ready,
     ui_set_tcp,
+    m4_pulse_seq,
 )
 
 HERE = Path(__file__).resolve().parent
@@ -230,9 +231,11 @@ def test_4hr_mixed_fuzz(raw_plc_socket):
                         # IoStageCount>0 gate drops pin=0 packets without
                         # ack, which still tests the parser but not the
                         # ring/registration path).
-                        "pin": rng.choice([0x1, 0x100, 0x4000, 0x8001]),
-                        "state": rng.choice([0, 0x1, 0x100, 0x4000, 0x8001]),
-                        "reset_ms": rng.choice([0, 50, 200]),
+                        "pin_op_seq": m4_pulse_seq(
+                            rng.choice([0x1, 0x100, 0x4000, 0x8001]),
+                            rng.choice([0, 0x1, 0x100, 0x4000, 0x8001]),
+                            reset_ms=rng.choice([0, 50, 200]),
+                        ),
                         # Short TTL so slots don't pile up indefinitely.
                         "ttl_ms": rng.randint(50, 1500),
                         "event_id": cid,
@@ -243,9 +246,11 @@ def test_4hr_mixed_fuzz(raw_plc_socket):
                         "motion_id": 0,
                         "trig": 20,
                         "motion_progress": 1.0,
-                        "pin": rng.choice([0x1, 0x4000]),
-                        "state": rng.choice([0, 0x1, 0x4000]),
-                        "reset_ms": rng.choice([0, 50]),
+                        "pin_op_seq": m4_pulse_seq(
+                            rng.choice([0x1, 0x4000]),
+                            rng.choice([0, 0x1, 0x4000]),
+                            reset_ms=rng.choice([0, 50]),
+                        ),
                         "ttl_ms": rng.randint(100, 800),
                         "event_id": cid,
                     }

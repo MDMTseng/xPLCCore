@@ -53,12 +53,15 @@ def _seed_motion():
 
 
 def test_m4_simple_pulse_acks(fsm_ready):
-    """M4 simple-pulse form: pin + state + reset_ms. PLC parses pin/state
-    into a FlyEvent struct and queues it; reply carries ev_buf_space."""
+    """M4 simple-pulse form via the post-2026-06-23 wire shape
+    (pin_op_seq). Host-side helper m4_pulse_seq builds the same 2-stage
+    sequence that the legacy `{pin, state, reset_ms}` form used to expand
+    into inside the PLC."""
+    from tests._raw_plc import m4_pulse_seq
     _seed_motion()
     reply = tms.harness_send(
         {"type": "M", "cmd": "M4",
-         "pin": 1, "state": 1, "reset_ms": 50,
+         "pin_op_seq": m4_pulse_seq(1, 1, reset_ms=50),
          "motion_id_offset": 0, "motion_progress": 1.0,
          "event_id": 1001, "ttl_ms": 5000},
         timeout=3.0,

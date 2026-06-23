@@ -302,7 +302,11 @@
 
 					FlyEventTempData.PinGrp := 0;
 
-					FlyEventTempData.ResetDelayMs := TO_INT(MessageUnpackerFb.TryReadINT64('reset_ms', 0));
+					// 2026-06-23: legacy 'reset_ms' wire field removed. Hosts now
+					// pass the equivalent 2-stage sequence via pin_op_seq (handled
+					// below). lib/protocol.ts cmd.M4 keeps the `reset_ms:N` host
+					// API alive by expanding to pin_op_seq client-side, so TS call
+					// sites don't change; python tests use tests/_raw_plc.m4_pulse_seq.
 
 					FlyEventTtlRaw := MessageUnpackerFb.TryReadINT64('ttl_ms', -1);
 					IF (FlyEventTtlRaw < 0) OR (FlyEventTtlRaw > 2147483647) THEN
@@ -421,35 +425,12 @@
 
 
 
-					StagePinMaskTemp := MessageUnpackerFb.TryReadUINT64('pin', 0);
-
-					IF (StagePinMaskTemp <> 0 AND FlyEventTempData.IoStageCount < FlyEventStageLimit) THEN
-
-						StagePinStateTemp := MessageUnpackerFb.TryReadUINT64('state', 0);
-
-						StageDelayTemp := 0;
-
-						FlyEventTempData.IoStageDelay[FlyEventTempData.IoStageCount] := StageDelayTemp;
-
-						FlyEventTempData.IoStagePinMask[FlyEventTempData.IoStageCount] := StagePinMaskTemp;
-
-						FlyEventTempData.IoStagePinState[FlyEventTempData.IoStageCount] := StagePinStateTemp;
-
-						FlyEventTempData.IoStageCount := FlyEventTempData.IoStageCount + 1;
-
-						IF (FlyEventTempData.ResetDelayMs > 0 AND FlyEventTempData.IoStageCount < FlyEventStageLimit) THEN
-
-							FlyEventTempData.IoStageDelay[FlyEventTempData.IoStageCount] := FlyEventTempData.ResetDelayMs;
-
-							FlyEventTempData.IoStagePinMask[FlyEventTempData.IoStageCount] := FlyEventTempData.IoStagePinMask[FlyEventTempData.IoStageCount - 1];
-
-							FlyEventTempData.IoStagePinState[FlyEventTempData.IoStageCount] := ((NOT StagePinStateTemp) AND StagePinMaskTemp);
-
-							FlyEventTempData.IoStageCount := FlyEventTempData.IoStageCount + 1;
-
-						END_IF;
-
-					END_IF;
+					// 2026-06-23: legacy `{pin, state, reset_ms}` single-pulse shape
+					// removed. This block previously auto-appended one stage from
+					// `pin` + `state` plus an optional reset stage from `ResetDelayMs`.
+					// Both moved client-side (lib/protocol.ts expandM4ResetMs +
+					// tests/_raw_plc.m4_pulse_seq) so the PLC has a single canonical
+					// input: pin_op_seq.
 
 					// Registration gate: progress trigger needs a real target movement id;
 					// distance + pulse triggers don't (they gate on Cartesian pose /

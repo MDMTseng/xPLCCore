@@ -6,9 +6,12 @@ TYPE FlyEventActType :
 (
 	NOP := 0,
 	PIN_OPERATION := 1,
-	(* Pin-reset is now expanded into a follow-up stage in ProcessMotionPacket.st
-	   (see ResetDelayMs handling). Kept the enum gap (no value 2001) so
-	   wire-format consumers don't get an unexpected re-purposed code. *)
+	(* Pin-reset used to be a distinct action code 2001. Replaced first
+	   by an auto-appended IoStage built from `ResetDelayMs` (now also
+	   removed), and finally by callers supplying the reset stage
+	   directly in pin_op_seq. The 2001 gap is left for wire-format
+	   stability so older consumers don't get an unexpected re-purposed
+	   code. *)
 
 
 	ACK_SRC_ID := 2002,

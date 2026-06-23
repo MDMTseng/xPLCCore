@@ -277,6 +277,48 @@ export interface Coord1ErrorEvent extends PushEvent {
   pcs_x: number; pcs_y: number; pcs_z: number;
 }
 
+// `{pin, state, reset_ms}` is sugar for a 2-stage pin_op_seq:
+//   stage 0 (delay=0):       pin <- state
+//   stage 1 (delay=reset_ms): pin <- NOT state (auto-reset)
+// PLC dropped its built-in expander 2026-06-23; the conversion happens
+// here so existing call sites keep their `reset_ms: 50` shorthand. If
+// the caller already supplied `pin_op_seq`, both contributions concat
+// (pin_op_seq first, then the pin/state/reset_ms tail) -- matching the
+// pre-fix PLC behavior.
+export function expandM4ResetMs(a: M4Args): M4Args {
+  const reset = a.reset_ms ?? 0;
+  if (!a.pin || reset <= 0) {
+    // No reset shorthand to expand. PLC's pin_op_seq + {pin,state} append
+    // path is replaced by an explicit single-stage append below when only
+    // pin/state was given (PLC no longer does that for us either).
+    if (a.pin && !a.pin_op_seq) {
+      const seq = [0, a.pin, a.state ?? 0];
+      const { pin: _p, state: _s, reset_ms: _r, ...rest } = a;
+      return { ...rest, pin_op_seq: seq };
+    }
+    if (reset > 0) {
+      // pin missing but reset_ms set — drop reset_ms (it had no effect
+      // even pre-fix; the expander gated on pin > 0).
+      const { reset_ms: _r, ...rest } = a;
+      return rest;
+    }
+    return a;
+  }
+  const state = a.state ?? 0;
+  // Reset-stage state mirrors the PLC pre-fix formula:
+  //   IoStagePinState[reset] := (NOT state) AND mask
+  // Mask-AND keeps bits outside `pin` zero so the wire packet matches
+  // exactly what the old in-PLC expander would have built. The PLC
+  // apply formula AND-masks again on use, so unmasked NOT would still
+  // work; matching here keeps test fixtures and packet captures stable.
+  const stateOff = (~state) & a.pin;
+  const tail = [0, a.pin, state, reset, a.pin, stateOff];
+  const existing = Array.isArray(a.pin_op_seq) ? (a.pin_op_seq as number[]) : [];
+  const seq = existing.length ? [...existing, ...tail] : tail;
+  const { pin: _p, state: _s, reset_ms: _r, ...rest } = a;
+  return { ...rest, pin_op_seq: seq };
+}
+
 // Strip undefined keys so the wire packet doesn't carry phantom fields.
 function compact<T extends object>(o: T): T {
   const out: any = {};
@@ -297,7 +339,7 @@ export const cmd = {
   // Motion — most motion commands reply with an ack/nack envelope.
   G1: (a: G1Args = {}) => env<G1Reply>({ type: 'M', cmd: 'G1', ...compact(a) }),
   G4: (P: number) => env<AckReply>({ type: 'M', cmd: 'G4', P }),
-  M4: (a: M4Args) => env<M4Reply>({ type: 'M', cmd: 'M4', ...compact(a) }),
+  M4: (a: M4Args) => env<M4Reply>({ type: 'M', cmd: 'M4', ...compact(expandM4ResetMs(a)) }),
   // Convenience builder for the FlyEvent COORD1_BIND variant.
   // trig=130 (PulseTrigger), action='coord1_bind', scale defaults to
   // [100, 0, 0] (X-only conveyor); exit_pulse_offset is the pick window
