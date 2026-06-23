@@ -1,67 +1,46 @@
 (* =========== IMPLEMENTATION =========== *)
+// 2026-06-23 cleanup: trigger-arm + TTL boilerplate factored into
+// ArmFiredTrigger() / TickTtl() helpers; pFly aliases the current slot
+// once per iteration so the body reads `pFly^.X` instead of
+// `FlyEventBuffer[Index].X` 20-odd times.
 TriggerActive := FALSE;
 FlyEventAvailableCount := 0;
 
 FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
+    pFly := ADR(FlyEventBuffer[Index]);
     TriggerActive := FALSE;
     TriggerErrorCode := 0;
 
-    CASE FlyEventBuffer[Index].TriggerType OF
+    CASE pFly^.TriggerType OF
         FlyEventTriggerType.DistanceTrigger:
             // Trigger by Cartesian distance from a fixed WCS point. Uses
             // squared distance to avoid SQRT on every scan. ReadPosition is
             // refreshed by UpdateAxisGroupState earlier in the same scan
             // (AxisGroupSM.st:346) so it's the actual TCP pose for this tick.
-            DistDx := ReadPosition.c.x - FlyEventBuffer[Index].TargetPos_X;
-            DistDy := ReadPosition.c.y - FlyEventBuffer[Index].TargetPos_Y;
-            DistDz := ReadPosition.c.z - FlyEventBuffer[Index].TargetPos_Z;
+            DistDx := ReadPosition.c.x - pFly^.TargetPos_X;
+            DistDy := ReadPosition.c.y - pFly^.TargetPos_Y;
+            DistDz := ReadPosition.c.z - pFly^.TargetPos_Z;
             DistSq := DistDx*DistDx + DistDy*DistDy + DistDz*DistDz;
-            DistThresholdSq := FlyEventBuffer[Index].TargetDistance * FlyEventBuffer[Index].TargetDistance;
+            DistThresholdSq := pFly^.TargetDistance * pFly^.TargetDistance;
             // TriggerInBoundary=TRUE: fire on entering the ball (dist <= radius).
             // TriggerInBoundary=FALSE: fire on leaving the ball (dist >= radius).
-            IF (FlyEventBuffer[Index].TriggerInBoundary AND DistSq <= DistThresholdSq)
-               OR (NOT FlyEventBuffer[Index].TriggerInBoundary AND DistSq >= DistThresholdSq) THEN
+            IF (pFly^.TriggerInBoundary AND DistSq <= DistThresholdSq)
+               OR (NOT pFly^.TriggerInBoundary AND DistSq >= DistThresholdSq) THEN
+                TriggerActive := ArmFiredTrigger(pFly);
+            ELSIF TickTtl(pFly) THEN
                 TriggerActive := TRUE;
-                IF (FlyEventBuffer[Index].IoStageCount > 0) THEN
-                    FlyEventBuffer[Index].IoStageIndex := 0;
-                    FlyEventBuffer[Index].IoStageDelayCountdown := FlyEventBuffer[Index].IoStageDelay[0];
-                    FlyEventBuffer[Index].TriggerType := FlyEventTriggerType.SequenceDelayWait;
-                    IF (FlyEventBuffer[Index].IoStageDelayCountdown > 0) THEN
-                        TriggerActive := FALSE;
-                    END_IF;
-                END_IF;
-            ELSE
-                IF (FlyEventBuffer[Index].TimeToLiveMs > 0) THEN
-                    FlyEventBuffer[Index].TimeToLiveMs := FlyEventBuffer[Index].TimeToLiveMs - BusPeriod;
-                    IF (FlyEventBuffer[Index].TimeToLiveMs <= 0) THEN
-                        TriggerActive := TRUE;
-                        TriggerErrorCode := TRIGGER_TIMEOUT_ERR;
-                    END_IF;
-                END_IF;
+                TriggerErrorCode := TRIGGER_TIMEOUT_ERR;
             END_IF;
 
         FlyEventTriggerType.MovmentProgressTrigger:
             IF (
-                CurrentMovementId > FlyEventBuffer[Index].TargetMovementId OR
-                (CurrentMovementId = FlyEventBuffer[Index].TargetMovementId AND CurrentMovementIdProgress >= FlyEventBuffer[Index].TargetMovementProgress)
+                CurrentMovementId > pFly^.TargetMovementId OR
+                (CurrentMovementId = pFly^.TargetMovementId AND CurrentMovementIdProgress >= pFly^.TargetMovementProgress)
             ) THEN
+                TriggerActive := ArmFiredTrigger(pFly);
+            ELSIF TickTtl(pFly) THEN
                 TriggerActive := TRUE;
-                IF (FlyEventBuffer[Index].IoStageCount > 0) THEN
-                    FlyEventBuffer[Index].IoStageIndex := 0;
-                    FlyEventBuffer[Index].IoStageDelayCountdown := FlyEventBuffer[Index].IoStageDelay[0];
-                    FlyEventBuffer[Index].TriggerType := FlyEventTriggerType.SequenceDelayWait;
-                    IF (FlyEventBuffer[Index].IoStageDelayCountdown > 0) THEN
-                        TriggerActive := FALSE;
-                    END_IF;
-                END_IF;
-            ELSE
-                IF (FlyEventBuffer[Index].TimeToLiveMs > 0) THEN
-                    FlyEventBuffer[Index].TimeToLiveMs := FlyEventBuffer[Index].TimeToLiveMs - BusPeriod;
-                    IF (FlyEventBuffer[Index].TimeToLiveMs <= 0) THEN
-                        TriggerActive := TRUE;
-                        TriggerErrorCode := TRIGGER_TIMEOUT_ERR;
-                    END_IF;
-                END_IF;
+                TriggerErrorCode := TRIGGER_TIMEOUT_ERR;
             END_IF;
 
         FlyEventTriggerType.PulseTrigger:
@@ -71,30 +50,17 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
             // event with target <= current pulse, so producers must
             // re-issue M4s after a pulse-counter reset. TTL decay matches
             // DistanceTrigger / MovmentProgressTrigger semantics.
-            IF (GVL.ConveyorPulseRaw >= FlyEventBuffer[Index].TargetPulseValue) THEN
+            IF (GVL.ConveyorPulseRaw >= pFly^.TargetPulseValue) THEN
+                TriggerActive := ArmFiredTrigger(pFly);
+            ELSIF TickTtl(pFly) THEN
                 TriggerActive := TRUE;
-                IF (FlyEventBuffer[Index].IoStageCount > 0) THEN
-                    FlyEventBuffer[Index].IoStageIndex := 0;
-                    FlyEventBuffer[Index].IoStageDelayCountdown := FlyEventBuffer[Index].IoStageDelay[0];
-                    FlyEventBuffer[Index].TriggerType := FlyEventTriggerType.SequenceDelayWait;
-                    IF (FlyEventBuffer[Index].IoStageDelayCountdown > 0) THEN
-                        TriggerActive := FALSE;
-                    END_IF;
-                END_IF;
-            ELSE
-                IF (FlyEventBuffer[Index].TimeToLiveMs > 0) THEN
-                    FlyEventBuffer[Index].TimeToLiveMs := FlyEventBuffer[Index].TimeToLiveMs - BusPeriod;
-                    IF (FlyEventBuffer[Index].TimeToLiveMs <= 0) THEN
-                        TriggerActive := TRUE;
-                        TriggerErrorCode := TRIGGER_TIMEOUT_ERR;
-                    END_IF;
-                END_IF;
+                TriggerErrorCode := TRIGGER_TIMEOUT_ERR;
             END_IF;
 
         FlyEventTriggerType.SequenceDelayWait:
-            IF (FlyEventBuffer[Index].IoStageIndex < FlyEventBuffer[Index].IoStageCount) THEN
-                FlyEventBuffer[Index].IoStageDelayCountdown := FlyEventBuffer[Index].IoStageDelayCountdown - BusPeriod;
-                IF (FlyEventBuffer[Index].IoStageDelayCountdown <= 0) THEN
+            IF (pFly^.IoStageIndex < pFly^.IoStageCount) THEN
+                pFly^.IoStageDelayCountdown := pFly^.IoStageDelayCountdown - BusPeriod;
+                IF (pFly^.IoStageDelayCountdown <= 0) THEN
                     TriggerActive := TRUE;
                 END_IF;
             END_IF;
@@ -122,11 +88,11 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
             ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TriggerErrorCode);
 
             ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('src_id'));
-            ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := FlyEventBuffer[Index].SourceCommandId);
+            ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := pFly^.SourceCommandId);
 
 
             ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('event_id'));
-            ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := TO_LINT(FlyEventBuffer[Index].EventId));
+            ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := TO_LINT(pFly^.EventId));
 
             MsgPakInfoWrapup(ResponsePacketPointer^);
             GVL.reMP_info_ridx.PushHead();
@@ -136,22 +102,22 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
         END_IF;
 
 
-        FlyEventBuffer[Index].ActionType := FlyEventActType.NOP;
-        FlyEventBuffer[Index].TriggerType := FlyEventTriggerType.NOP;
+        pFly^.ActionType := FlyEventActType.NOP;
+        pFly^.TriggerType := FlyEventTriggerType.NOP;
     ELSE
-        CASE FlyEventBuffer[Index].ActionType OF
+        CASE pFly^.ActionType OF
             FlyEventActType.PIN_OPERATION:
                 // Defensive bounds: guard against IoStageIndex >= IoStageCount
                 // (post-increment lookup races) and against IoStageCount that
                 // somehow exceeded FlyEventStageLimit (struct corruption).
                 // Out-of-range deref of the fixed-size stage arrays would be
                 // a hard crash; clamp to no-op instead.
-                IF (FlyEventBuffer[Index].IoStageCount > 0
-                    AND FlyEventBuffer[Index].IoStageIndex >= 0
-                    AND FlyEventBuffer[Index].IoStageIndex < FlyEventBuffer[Index].IoStageCount
-                    AND FlyEventBuffer[Index].IoStageIndex < FlyEventStageLimit) THEN
-                    MotionOutputPin := FlyEventBuffer[Index].IoStagePinMask[FlyEventBuffer[Index].IoStageIndex];
-                    StagePinState := FlyEventBuffer[Index].IoStagePinState[FlyEventBuffer[Index].IoStageIndex];
+                IF (pFly^.IoStageCount > 0
+                    AND pFly^.IoStageIndex >= 0
+                    AND pFly^.IoStageIndex < pFly^.IoStageCount
+                    AND pFly^.IoStageIndex < FlyEventStageLimit) THEN
+                    MotionOutputPin := pFly^.IoStagePinMask[pFly^.IoStageIndex];
+                    StagePinState := pFly^.IoStagePinState[pFly^.IoStageIndex];
                 ELSE
                     MotionOutputPin := 0;
                     StagePinState := 0;
@@ -163,14 +129,14 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
                     ((StagePinState) AND (MotionOutputPin));
                 DigitalOutputBits := TmpDigitalOutputBits;
 
-                FlyEventBuffer[Index].IoStageIndex := FlyEventBuffer[Index].IoStageIndex + 1;
-                IF (FlyEventBuffer[Index].IoStageIndex < FlyEventBuffer[Index].IoStageCount
-                    AND FlyEventBuffer[Index].IoStageIndex < FlyEventStageLimit) THEN
-                    FlyEventBuffer[Index].IoStageDelayCountdown := FlyEventBuffer[Index].IoStageDelay[FlyEventBuffer[Index].IoStageIndex];
-                    FlyEventBuffer[Index].TriggerType := FlyEventTriggerType.SequenceDelayWait;
+                pFly^.IoStageIndex := pFly^.IoStageIndex + 1;
+                IF (pFly^.IoStageIndex < pFly^.IoStageCount
+                    AND pFly^.IoStageIndex < FlyEventStageLimit) THEN
+                    pFly^.IoStageDelayCountdown := pFly^.IoStageDelay[pFly^.IoStageIndex];
+                    pFly^.TriggerType := FlyEventTriggerType.SequenceDelayWait;
                 ELSE
-                    FlyEventBuffer[Index].ActionType := FlyEventActType.NOP;
-                    FlyEventBuffer[Index].TriggerType := FlyEventTriggerType.NOP;
+                    pFly^.ActionType := FlyEventActType.NOP;
+                    pFly^.TriggerType := FlyEventTriggerType.NOP;
                 END_IF;
 
                 IoTriggerCount := IoTriggerCount + 1;
@@ -199,16 +165,16 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
                     GVL.Coord1ErrAtPcsZ      := Pcs1KernelTransform.Z;
                     GVL.Coord1ErrRefPulse    := 0;  // bind never happened, no ref
                     GVL.Coord1ErrExitPulse   := GVL.Coord1ExitPulse;
-                    GVL.Coord1BindEventId    := FlyEventBuffer[Index].EventId;
+                    GVL.Coord1BindEventId    := pFly^.EventId;
                     InputEvent := E_RobotEvent.EV_ERROR;
-                ELSIF FlyEventBuffer[Index].BindScaleX = 0.0
-                      OR FlyEventBuffer[Index].BindScaleY <> 0.0
-                      OR FlyEventBuffer[Index].BindScaleZ <> 0.0 THEN
+                ELSIF pFly^.BindScaleX = 0.0
+                      OR pFly^.BindScaleY <> 0.0
+                      OR pFly^.BindScaleZ <> 0.0 THEN
                     // Reject malformed bind -- same SM error path but with
                     // different latched event context for the host.
                     GVL.Coord1ErrPending     := TRUE;
                     GVL.Coord1ErrAtPulse     := GVL.ConveyorPulseRaw;
-                    GVL.Coord1BindEventId    := FlyEventBuffer[Index].EventId;
+                    GVL.Coord1BindEventId    := pFly^.EventId;
                     InputEvent := E_RobotEvent.EV_ERROR;
                 ELSE
                     // Trigger fire pulse used as ref_pulse so the bind is
@@ -216,32 +182,32 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
                     // scheduled it for. PulseTrigger fires the same scan
                     // ConveyorPulseRaw first crosses TargetPulseValue, so
                     // current GVL.ConveyorPulseRaw is the right anchor.
-                    Coord1PulseToMm := 1.0 / FlyEventBuffer[Index].BindScaleX;
-                    Coord1BeltOriginRef.X := FlyEventBuffer[Index].BindRefXyzX
+                    Coord1PulseToMm := 1.0 / pFly^.BindScaleX;
+                    Coord1BeltOriginRef.X := pFly^.BindRefXyzX
                                              - TO_LREAL(GVL.ConveyorPulseRaw) * Coord1PulseToMm;
-                    Coord1BeltOriginRef.Y := FlyEventBuffer[Index].BindRefXyzY;
-                    Coord1BeltOriginRef.Z := FlyEventBuffer[Index].BindRefXyzZ;
+                    Coord1BeltOriginRef.Y := pFly^.BindRefXyzY;
+                    Coord1BeltOriginRef.Z := pFly^.BindRefXyzZ;
                     Coord1BeltOriginRef.A := 0.0;
                     Coord1BeltOriginRef.B := 0.0;
                     Coord1BeltOriginRef.C := 0.0;
                     GVL.Coord1RefPulse   := GVL.ConveyorPulseRaw;
-                    GVL.Coord1RefXyz[0]  := FlyEventBuffer[Index].BindRefXyzX;
-                    GVL.Coord1RefXyz[1]  := FlyEventBuffer[Index].BindRefXyzY;
-                    GVL.Coord1RefXyz[2]  := FlyEventBuffer[Index].BindRefXyzZ;
-                    GVL.Coord1Scale[0]   := FlyEventBuffer[Index].BindScaleX;
+                    GVL.Coord1RefXyz[0]  := pFly^.BindRefXyzX;
+                    GVL.Coord1RefXyz[1]  := pFly^.BindRefXyzY;
+                    GVL.Coord1RefXyz[2]  := pFly^.BindRefXyzZ;
+                    GVL.Coord1Scale[0]   := pFly^.BindScaleX;
                     GVL.Coord1Scale[1]   := 0.0;
                     GVL.Coord1Scale[2]   := 0.0;
                     GVL.Coord1ExitPulse  := GVL.ConveyorPulseRaw
-                                           + FlyEventBuffer[Index].BindExitPulseOffset;
-                    GVL.Coord1BindEventId := FlyEventBuffer[Index].EventId;
+                                           + pFly^.BindExitPulseOffset;
+                    GVL.Coord1BindEventId := pFly^.EventId;
                     GVL.Coord1CamMode    := GVL.COORD1_MODE_LINEAR;
                     GVL.Coord1CamCount   := 0;
                     GVL.Coord1Bound      := TRUE;
                     GVL.Coord1FlyBindActiveCount := GVL.Coord1FlyBindActiveCount + 1;
                 END_IF;
                 GVL.Coord1FlyBindCount := GVL.Coord1FlyBindCount + 1;
-                FlyEventBuffer[Index].ActionType := FlyEventActType.NOP;
-                FlyEventBuffer[Index].TriggerType := FlyEventTriggerType.NOP;
+                pFly^.ActionType := FlyEventActType.NOP;
+                pFly^.TriggerType := FlyEventTriggerType.NOP;
 
             FlyEventActType.ACK_SRC_ID://send ack with source command id
                 // Drop-newest on overflow (SPSC race rationale in
@@ -256,12 +222,12 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
 
 
                     ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('event_id'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := TO_LINT(FlyEventBuffer[Index].EventId));
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := TO_LINT(pFly^.EventId));
 
 
 
                     ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('id'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := FlyEventBuffer[Index].SourceCommandId);
+                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := pFly^.SourceCommandId);
 
                     ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
                     ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := TRUE);
@@ -273,8 +239,8 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
                     GVL.ReMpDropCount_Reply := GVL.ReMpDropCount_Reply + 1;
                 END_IF;
 
-                FlyEventBuffer[Index].ActionType := FlyEventActType.NOP;
-                FlyEventBuffer[Index].TriggerType := FlyEventTriggerType.NOP;
+                pFly^.ActionType := FlyEventActType.NOP;
+                pFly^.TriggerType := FlyEventTriggerType.NOP;
 
         END_CASE;
     END_IF;

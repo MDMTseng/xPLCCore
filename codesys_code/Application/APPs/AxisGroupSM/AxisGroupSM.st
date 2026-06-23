@@ -126,6 +126,11 @@ PROGRAM AxisGroupSM
 
         FlyEventBuffer: ARRAY [0..FlyEventBufferSize-1] OF FlyEventData; // event queue for motion-triggered IO
         FlyEventAvailableCount: INT;
+        // Iteration scratch: pointer into FlyEventBuffer[Index] inside
+        // ProcessFlyEventsAndIo's FOR loop. Replaces ~60 repeated
+        // `FlyEventBuffer[Index].` derefs per scan -- compiler may already
+        // CSE these but the source becomes much cleaner.
+        pFly : POINTER TO FlyEventData;
 
         // TaskInstructionBuffer: ARRAY [0..TaskInstructionBufferSize-1] OF TaskInstructionData; 
         // TaskInstructionBuffer_ridx:FB_RingBufferIndex(TaskInstructionBufferSize);

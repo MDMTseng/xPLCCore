@@ -53,11 +53,20 @@ STRUCT
 	ActionType : FlyEventActType;
 
 	PinGrp : INT; (* Byte index in the digital output array. *)
-	ResetDelayMs : INT; (* Delay (ms) before the reset stage fires. *)
+	ResetDelayMs : INT; (* Delay (ms) before the auto-appended pin-reset stage.
+	                       ProcessMotionPacket expands non-zero values into a
+	                       follow-up IoStage that toggles the pin mask off,
+	                       so hosts can specify a one-shot pulse with a single
+	                       stage + reset_ms instead of two explicit stages. *)
 	IoStageCount : INT; (* Number of sequential IO stages configured. *)
 	IoStageIndex : INT; (* Next stage index to execute. *)
 	IoStageDelayCountdown : DINT; (* Countdown before the next stage fires. *)
-	IoStageDelay : ARRAY [0..8] OF DINT; (* Delay (ms) for each stage before it fires. *)
+	(* IoStage* arrays sized 0..8 (= 9 slots). MUST stay in sync with
+	   AxisGroupSM.FlyEventStageLimit (currently 9). The bounds check in
+	   ProcessFlyEventsAndIo.st guards `IoStageIndex < FlyEventStageLimit`;
+	   shrinking these arrays without lowering the const is a runtime
+	   out-of-range crash. *)
+	IoStageDelay : ARRAY [0..8] OF DINT; (* Delay (ms) per stage before fire. *)
 	IoStagePinMask : ARRAY [0..8] OF ULINT; (* Pin mask per stage. *)
 	IoStagePinState : ARRAY [0..8] OF ULINT; (* Desired pin state per stage. *)
 END_STRUCT
