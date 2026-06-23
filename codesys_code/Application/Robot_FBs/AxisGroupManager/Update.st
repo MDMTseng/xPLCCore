@@ -81,18 +81,9 @@ CASE _eState OF
             IF(SMC_GroupPower_0.Status AND fbPowerReel.Status) THEN
                 Transition(E_RobotEvent.EV_OK);
             ELSIF(SMC_GroupPower_0.Error OR fbPowerReel.Error) THEN
-                IF SMC_GroupPower_0.Error THEN
-                    GVL.LastErrorSource := 'Powering:SMC_GroupPower';
-                    GVL.LastErrorID := TO_DWORD(SMC_GroupPower_0.ErrorID);
-                ELSE
-                    GVL.LastErrorSource := 'Powering:fbPowerReel';
-                    GVL.LastErrorID := TO_DWORD(fbPowerReel.ErrorID);
-                END_IF
-                Transition(E_RobotEvent.EV_ERROR);
+                TripPowerError(ADR('Powering'));
             ELSIF watchdogPowering.Q THEN
-                GVL.LastErrorSource := 'Powering:timeout';
-                GVL.LastErrorID := 0;
-                Transition(E_RobotEvent.EV_ERROR);
+                TripTimeout(ADR('Powering'));
             END_IF
         END_IF
 
@@ -105,14 +96,7 @@ CASE _eState OF
             GroupPower_Flag := TRUE;
             bReelPowerReq   := TRUE;
             IF(SMC_GroupPower_0.Error OR fbPowerReel.Error) THEN
-                IF SMC_GroupPower_0.Error THEN
-                    GVL.LastErrorSource := 'Powered:SMC_GroupPower';
-                    GVL.LastErrorID := TO_DWORD(SMC_GroupPower_0.ErrorID);
-                ELSE
-                    GVL.LastErrorSource := 'Powered:fbPowerReel';
-                    GVL.LastErrorID := TO_DWORD(fbPowerReel.ErrorID);
-                END_IF
-                Transition(E_RobotEvent.EV_ERROR);
+                TripPowerError(ADR('Powered'));
             END_IF
         END_IF
 
@@ -124,7 +108,9 @@ CASE _eState OF
             enable_fb(AxisGroup:=_agAxisGroup, Execute:=TRUE);
             watchdogGroupEnabling(IN := TRUE, PT := WATCHDOG_GROUP_ENABLE_PT);
 
-            // Single motor is already enabled via MC_Power in previous state
+            // Single motor is already enabled via MC_Power in previous state.
+            // enable_fb.Error is its own source -- TripPowerError doesn't fit
+            // (not a power FB); stamp inline. Watchdog uses the shared helper.
             IF(enable_fb.Done) THEN
                 Transition(E_RobotEvent.EV_OK);
             ELSIF(enable_fb.Error) THEN
@@ -132,9 +118,7 @@ CASE _eState OF
                 GVL.LastErrorID := TO_DWORD(enable_fb.ErrorID);
                 Transition(E_RobotEvent.EV_ERROR);
             ELSIF watchdogGroupEnabling.Q THEN
-                GVL.LastErrorSource := 'GroupEnabling:timeout';
-                GVL.LastErrorID := 0;
-                Transition(E_RobotEvent.EV_ERROR);
+                TripTimeout(ADR('GroupEnabling'));
             END_IF
         END_IF
 
@@ -147,21 +131,14 @@ CASE _eState OF
             GroupPower_Flag := TRUE;
             bReelPowerReq   := TRUE;
             IF(SMC_GroupPower_0.Error OR fbPowerReel.Error) THEN
-                IF SMC_GroupPower_0.Error THEN
-                    GVL.LastErrorSource := 'GroupEnabled:SMC_GroupPower';
-                    GVL.LastErrorID := TO_DWORD(SMC_GroupPower_0.ErrorID);
-                ELSE
-                    GVL.LastErrorSource := 'GroupEnabled:fbPowerReel';
-                    GVL.LastErrorID := TO_DWORD(fbPowerReel.ErrorID);
-                END_IF
-                Transition(E_RobotEvent.EV_ERROR);
+                TripPowerError(ADR('GroupEnabled'));
             END_IF
         END_IF
 
     E_RobotState.Homing:
         IF(uidx=-1)THEN
             homing_fb(bExecute:=FALSE);
-            stateCD:=100;
+            HomingDoneDebounceCD := 100;
             watchdogHoming(IN := FALSE, PT := WATCHDOG_HOMING_PT);
         ELSIF(uidx=0)THEN
             GroupPower_Flag := TRUE;
@@ -169,8 +146,8 @@ CASE _eState OF
             homing_fb(bExecute:=TRUE);
             watchdogHoming(IN := TRUE, PT := WATCHDOG_HOMING_PT);
             IF(homing_fb.bDone) THEN
-                stateCD:=stateCD-1;
-                IF(stateCD=0)THEN
+                HomingDoneDebounceCD := HomingDoneDebounceCD - 1;
+                IF(HomingDoneDebounceCD = 0)THEN
                     Transition(E_RobotEvent.EV_OK);
                 END_IF
             ELSIF(homing_fb.bError)THEN
@@ -178,11 +155,9 @@ CASE _eState OF
                 GVL.LastErrorID := 0;
                 Transition(E_RobotEvent.EV_ERROR);
             ELSIF watchdogHoming.Q THEN
-                GVL.LastErrorSource := 'Homing:timeout';
-                GVL.LastErrorID := 0;
-                Transition(E_RobotEvent.EV_ERROR);
+                TripTimeout(ADR('Homing'));
             ELSE
-                stateCD:=100;
+                HomingDoneDebounceCD := 100;
             END_IF
         ELSIF(uidx=1)THEN
             homing_fb(bExecute:=FALSE);
@@ -197,27 +172,21 @@ CASE _eState OF
             // ErrorStop once axes return to group control. Without a reset
             // pulse here, the very first motion packet after homing hits
             // the GroupErrorStop gate in AxisGroupSM.ProcessMotionPacket
-            // and is NAKed. Hold Execute=TRUE for stateCD scans then drop.
+            // and is NAKed. Hold Execute=TRUE for ReadyResetHoldCD scans
+            // then drop.
             SMC_GroupReset(AxisGroup:=_agAxisGroup, Execute:=FALSE);
-            stateCD := 50;
+            ReadyResetHoldCD := 50;
         ELSIF(uidx=0)THEN
             GroupPower_Flag := TRUE;
             bReelPowerReq   := TRUE;
-            IF stateCD > 0 THEN
+            IF ReadyResetHoldCD > 0 THEN
                 SMC_GroupReset(AxisGroup:=_agAxisGroup, Execute:=TRUE);
-                stateCD := stateCD - 1;
+                ReadyResetHoldCD := ReadyResetHoldCD - 1;
             ELSE
                 SMC_GroupReset(AxisGroup:=_agAxisGroup, Execute:=FALSE);
             END_IF
             IF(SMC_GroupPower_0.Error OR fbPowerReel.Error) THEN
-                IF SMC_GroupPower_0.Error THEN
-                    GVL.LastErrorSource := 'Ready:SMC_GroupPower';
-                    GVL.LastErrorID := TO_DWORD(SMC_GroupPower_0.ErrorID);
-                ELSE
-                    GVL.LastErrorSource := 'Ready:fbPowerReel';
-                    GVL.LastErrorID := TO_DWORD(fbPowerReel.ErrorID);
-                END_IF
-                Transition(E_RobotEvent.EV_ERROR);
+                TripPowerError(ADR('Ready'));
             END_IF
         END_IF
         

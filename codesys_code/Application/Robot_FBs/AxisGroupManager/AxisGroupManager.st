@@ -9,52 +9,32 @@ VAR
     _preState : E_RobotState := E_RobotState.NULL;
     _eState : E_RobotState := E_RobotState.NULL;
     _nxtState : E_RobotState := E_RobotState.NULL;
-	
-    _eCurrentEvent : E_RobotEvent := E_RobotEvent.EV_NONE; // Holds the event to be processed
 
     // --- Axis Configuration ---
     _agAxisGroup : REFERENCE TO AXIS_GROUP_REF_SM3; // Internal reference to the axis group
     _axReel      : REFERENCE TO AXIS_REF_SM3;       // Internal reference to the single (reel) axis
-   
-    // --- Status & Error Info ---
-    _bIsHomed : BOOL;
-    _bIsInError : BOOL;
-    _dwErrorID : DWORD;
-    _bReadyForOperation : BOOL;
+
     // Error latch lives in GVL (GVL.LastErrorSource / GVL.LastErrorID) so
     // that both this FB (internal writes from Update) and external
     // supervisors (AxisGroupSM) can populate it without needing method/
     // property plumbing.
 
     // --- Motion Control Function Blocks ---
-    _fbPower : MC_Power;
-    _fbGroupEnable : MC_GroupEnable;
-    _fbGroupReset : MC_GroupReset;
-    _fbGroupDisable : MC_GroupDisable;
-    _fbHome : MC_Home;
-	
-	
-	
-	fbPowerReel   : MC_Power;
+    fbPowerReel   : MC_Power;
     fbResetReel   : MC_Reset;
     bReelPowerReq : BOOL; // Flag to request power for the reel motor
-	SMC_GroupPower_0:SM3_Robotics.SMC_GroupPower;
-	GroupPower_Flag:BOOL:=FALSE;
-	//SMC_GroupReset_0:SM3_Robotics.MC_GroupReset;
-	SMC_GroupDisable:SM3_Robotics.MC_GroupDisable;
-	
-	SMC_GroupReset:SM3_Robotics.MC_GroupReset;
-	
-	enable_fb:SM3_Robotics.MC_GroupEnable;
-	
-	homing_fb:FB_Homing;
-	
-	
-	MoveLinearAbsolute_0: SM3_Robotics.MC_MoveLinearAbsolute;
-	motionPoseRunPass:INT;
-	motionPoseIdx:INT;
+    SMC_GroupPower_0:SM3_Robotics.SMC_GroupPower;
+    GroupPower_Flag:BOOL:=FALSE;
+    SMC_GroupDisable:SM3_Robotics.MC_GroupDisable;
+    SMC_GroupReset:SM3_Robotics.MC_GroupReset;
+    enable_fb:SM3_Robotics.MC_GroupEnable;
+    homing_fb:FB_Homing;
 
-	stateCD:INT;
+    // State-local countdown timers (replaced the single `stateCD` shared
+    // between Homing-done debounce and Ready-entry reset hold -- having
+    // one variable for two unrelated purposes was a foot-gun).
+    HomingDoneDebounceCD : INT; // homing_fb.bDone debounce in Homing
+    ReadyResetHoldCD     : INT; // SMC_GroupReset hold scans on Ready entry
 
 	// State-entry watchdogs. Reset on entry (IN:=FALSE in uidx=-1), driven
 	// IN:=TRUE during the state's update. If .Q latches before the state
