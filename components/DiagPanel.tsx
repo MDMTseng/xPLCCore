@@ -1,7 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { cmd, validateReply } from '../lib/protocol';
 
-type DiagReply = Record<string, number> & { ack?: boolean };
+// Numeric counters retain the existing { value, Δ-since-last-poll } row
+// pattern. server_active (bool) and bind_addr (string) get a separate
+// header strip above the table since they're stateful, not cumulative.
+type DiagReply = Record<string, number | boolean | string> & { ack?: boolean };
 
 const COUNTER_KEYS: Array<{ key: string; label: string; warnIfNonZero?: boolean }> = [
   { key: 'sm_scans',             label: 'AxisGroupSM scans' },
@@ -9,6 +12,12 @@ const COUNTER_KEYS: Array<{ key: string; label: string; warnIfNonZero?: boolean 
   { key: 'st_chg_event_count',   label: 'ST_CHG events pushed' },
   { key: 'ping_max_gap_ms',      label: 'PING max gap (ms)', warnIfNonZero: false },
   { key: 'last_ui_ping_ms',      label: 'last UI ping (PLC ms)' },
+  // TCP listen-health (2026-06-23). client_connect_count is purely
+  // informational; server_long_idle_count is informational by default
+  // (fires once on every PLC restart before any client connects), but
+  // sustained growth alongside ui_ping_count=0 means nobody's reaching us.
+  { key: 'client_connect_count',   label: 'TCP client connects (rising-edge)' },
+  { key: 'server_long_idle_count', label: 'TCP active-no-client windows (30s)' },
   { key: 'remp_drop',            label: 'reply-ring drops', warnIfNonZero: true },
   { key: 'overlen_drop',         label: 'overlen-packet drops', warnIfNonZero: true },
   { key: 'send_stall_drop',      label: 'send-stall drops', warnIfNonZero: true },
@@ -19,6 +28,7 @@ const COUNTER_KEYS: Array<{ key: string; label: string; warnIfNonZero?: boolean 
   { key: 'idle_reset',           label: 'TCP idle resets', warnIfNonZero: true },
   { key: 'read_err_reset',       label: 'TCP read-error resets', warnIfNonZero: true },
   { key: 'parser_err_reset',     label: 'TCP parser-error resets', warnIfNonZero: true },
+  { key: 'write_err_reset',      label: 'TCP write-error resets', warnIfNonZero: true },
   { key: 'ui_hb_stale_count',    label: 'UI heartbeat stale events', warnIfNonZero: true },
 ];
 
@@ -76,8 +86,11 @@ export const DiagPanel: React.FC<{
     }
   }, [sendTcpMsgPack, fetchDiag]);
 
-  const fmt = (v: number | undefined): string =>
-    v === undefined ? '—' : v.toLocaleString();
+  const fmt = (v: unknown): string => {
+    if (v === undefined || v === null) return '—';
+    if (typeof v === 'number') return v.toLocaleString();
+    return String(v);
+  };
 
   const delta = (key: string): number | null => {
     if (!latest || !prev) return null;
@@ -85,6 +98,11 @@ export const DiagPanel: React.FC<{
     const b = prev[key];
     if (typeof a !== 'number' || typeof b !== 'number') return null;
     return a - b;
+  };
+
+  const numericValue = (key: string): number | undefined => {
+    const v = latest?.[key];
+    return typeof v === 'number' ? v : undefined;
   };
 
   return (
@@ -131,6 +149,45 @@ export const DiagPanel: React.FC<{
         {lastError && <span style={{ color: '#b91c1c', marginLeft: 8 }}>err: {lastError}</span>}
       </div>
 
+      {latest && (latest.server_active !== undefined || latest.bind_addr !== undefined) && (
+        <div
+          style={{
+            display: 'flex',
+            gap: 12,
+            alignItems: 'center',
+            fontSize: 11,
+            color: '#374151',
+            padding: '4px 8px',
+            marginBottom: 6,
+            background: '#f8fafc',
+            borderRadius: 6,
+            border: '1px solid #e2e8f0',
+          }}
+        >
+          <span>
+            bind:&nbsp;
+            <code style={{ background: '#fff', padding: '0 4px', borderRadius: 3 }}>
+              {String(latest.bind_addr ?? '?')}
+            </code>
+          </span>
+          <span style={{ color: latest.server_active ? '#15803d' : '#b91c1c', fontWeight: 600 }}>
+            server: {latest.server_active ? 'active' : 'down'}
+          </span>
+          {/* Configuration-drift hint: bind looks healthy but nobody's
+              actually connected -- usually firewall, wrong IP on the
+              caller side, or a runtime network misconfig. */}
+          {latest.server_active &&
+            typeof latest.client_connect_count === 'number' &&
+            latest.client_connect_count === 0 &&
+            typeof latest.server_long_idle_count === 'number' &&
+            latest.server_long_idle_count > 0 && (
+              <span style={{ color: '#b45309' }}>
+                ⚠ bind up, no client has connected since boot
+              </span>
+            )}
+        </div>
+      )}
+
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
         <thead>
           <tr style={{ background: '#f3f4f6' }}>
@@ -141,7 +198,7 @@ export const DiagPanel: React.FC<{
         </thead>
         <tbody>
           {COUNTER_KEYS.map(({ key, label, warnIfNonZero }) => {
-            const v = latest?.[key];
+            const v = numericValue(key);
             const d = delta(key);
             const isWarn = warnIfNonZero && typeof v === 'number' && v > 0;
             return (
@@ -162,6 +219,7 @@ export const DiagPanel: React.FC<{
       <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 6 }}>
         Δ shows change since previous successful poll. Red counters mean the PLC has logged at least one drop / NAK / reset since boot or last clear.
         "ping_max_gap_ms" is the worst PING-to-PING gap observed on the PLC clock — high values mean the UI heartbeat stalled at some point.
+        "TCP client connects" rises on every TCP rising edge; sustained 0 with growing "active-no-client windows" means the bind is up but nobody's reaching us (firewall / wrong IP / runtime misconfig).
       </div>
     </div>
   );

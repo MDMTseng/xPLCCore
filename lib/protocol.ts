@@ -244,11 +244,23 @@ export interface DiagSnapshot {
   idle_reset: number;
   read_err_reset: number;
   parser_err_reset: number;
+  write_err_reset: number;
   ui_ping_count: number;
   ui_hb_stale_count: number;
   ping_max_gap_ms: number;
   last_ui_ping_ms: number;
   st_chg_event_count: number;
+  // TCP listen-health (added 2026-06-23). client_connect_count rises on
+  // every TCP rising edge -- non-zero means somebody reached the bind;
+  // 0 with growing server_long_idle_count means bind is up but nobody's
+  // connecting (firewall / wrong IP on caller side / runtime network
+  // misconfig). server_active mirrors NBS.TCP_Server's itfServer !=
+  // NULL, bind_addr echoes the configured bind IP so an operator can
+  // verify "PLC thinks it's bound to X" without an IDE.
+  client_connect_count: number;
+  server_long_idle_count: number;
+  server_active: boolean;
+  bind_addr: string;
 }
 
 export interface PushEvent {
@@ -414,8 +426,10 @@ export const REQUIRED_KEYS = {
     'runtime_ms', 'sm_scans', 'remp_drop', 'overlen_drop', 'send_stall_drop',
     'group_not_ready_nak', 'missing_type_nak', 'coord_not_cfg_nak',
     'proto_mismatch_nak', 'idle_reset', 'read_err_reset', 'parser_err_reset',
+    'write_err_reset',
     'ui_ping_count', 'ui_hb_stale_count', 'ping_max_gap_ms',
     'last_ui_ping_ms', 'st_chg_event_count',
+    'client_connect_count', 'server_long_idle_count', 'server_active', 'bind_addr',
   ],
   GaEvReply: ['st', 'st_str', 'err_src', 'err_id'],
 } as const;
