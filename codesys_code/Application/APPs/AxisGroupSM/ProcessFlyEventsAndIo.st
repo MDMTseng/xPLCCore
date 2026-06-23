@@ -79,22 +79,11 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
         // rationale). The action-clear below still runs even if the error
         // event was dropped -- the FlyEvent itself is one-shot, not the
         // notification.
-        IF (GVL.reMP_info_ridx.Space() > 0) THEN
-            ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
-            MsgPakInfoClear(ResponsePacketPointer^);
-
+        IF TryAcquireReplySlot(ADR(GVL.ReMpDropCount_TriggerEvent)) THEN
             PackKvDint(ADR('error_code'), TriggerErrorCode);
-
-            PackKvDint(ADR('src_id'), pFly^.SourceCommandId);
-
-
-            PackKvLint(ADR('event_id'), TO_LINT(pFly^.EventId));
-
-            MsgPakInfoWrapup(ResponsePacketPointer^);
-            GVL.reMP_info_ridx.PushHead();
-        ELSE
-            GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
-            GVL.ReMpDropCount_TriggerEvent := GVL.ReMpDropCount_TriggerEvent + 1;
+            PackKvDint(ADR('src_id'),     pFly^.SourceCommandId);
+            PackKvLint(ADR('event_id'),   TO_LINT(pFly^.EventId));
+            CommitReplySlotEvent();
         END_IF;
 
 
@@ -209,26 +198,9 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
                 // Drop-newest on overflow (SPSC race rationale in
                 // UpdateMotionProgress). FlyEvent state is cleared either way
                 // so we don't loop on the same one-shot.
-                IF (GVL.reMP_info_ridx.Space() > 0) THEN
-                    ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
-                    MsgPakInfoClear(ResponsePacketPointer^);
-
-
-
-
+                IF TryAcquireReplySlot(ADR(GVL.ReMpDropCount_Reply)) THEN
                     PackKvLint(ADR('event_id'), TO_LINT(pFly^.EventId));
-
-
-
-                    PackKvDint(ADR('id'), pFly^.SourceCommandId);
-
-                    PackKvBool(ADR('ack'), TRUE);
-
-                    MsgPakInfoWrapup(ResponsePacketPointer^);
-                    GVL.reMP_info_ridx.PushHead();
-                ELSE
-                    GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
-                    GVL.ReMpDropCount_Reply := GVL.ReMpDropCount_Reply + 1;
+                    CommitReplySlotAck(pFly^.SourceCommandId, TRUE);
                 END_IF;
 
                 pFly^.ActionType := FlyEventActType.NOP;

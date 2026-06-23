@@ -19,17 +19,9 @@ IF NOT AxisGroupReady THEN
         // UpdateMotionProgress for the SPSC race rationale). NAK still
         // gets emitted when there's space; under sustained backpressure
         // the UI will see drop-counter climb and reconcile via timeout.
-        IF (GVL.reMP_info_ridx.Space() > 0) THEN
-            ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
-            MsgPakInfoClear(ResponsePacketPointer^);
+        IF TryAcquireReplySlot(ADR(GVL.ReMpDropCount_Reply)) THEN
             PackKvStr(ADR('err'), ADR('group_not_ready'));
-            PackKvDint(ADR('id'), CommandId);
-            PackKvBool(ADR('ack'), FALSE);
-            MsgPakInfoWrapup(ResponsePacketPointer^);
-            GVL.reMP_info_ridx.PushHead();
-        ELSE
-            GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
-            GVL.ReMpDropCount_Reply := GVL.ReMpDropCount_Reply + 1;
+            CommitReplySlotAck(CommandId, FALSE);
         END_IF;
 
         GVL.minfo_buf_ridx.ConsumeTail();

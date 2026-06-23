@@ -86,24 +86,20 @@ IF (PendingStChgFromState >= 0) THEN
             GVL.PendingStChgDropCount := GVL.PendingStChgDropCount + 1;
         END_IF;
     ELSE
+        // Retry-style: caller already probed Space() above; manual
+        // GetHead/Clear here (TryAcquireReplySlot would re-probe and
+        // bump ReMpDropCount on per-scan failures, which is wrong for
+        // retry semantics -- only the final give-up above counts).
         StateString := TO_STRING(AxisGroupManagerFb._eState);
-        EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
-        MsgPakInfoClear(EventPacketPointer^);
-        EventPacketPointer^.ele_count := 6;
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('event'));
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('name'));
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('ST_CHG'));
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('st'));
-        EventPacketPointer^.whead := MessagePackerFb.PackDINT(pStart := EventPacketPointer^.whead, diValue := AxisGroupManagerFb._eState);
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('st_str'));
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR(StateString));
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('from'));
-        EventPacketPointer^.whead := MessagePackerFb.PackDINT(pStart := EventPacketPointer^.whead, diValue := PendingStChgFromState);
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('runtime_ms'));
-        EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
-        MsgPakInfoWrapup(EventPacketPointer^);
-        GVL.reMP_info_ridx.PushHead();
+        ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
+        MsgPakInfoClear(ResponsePacketPointer^);
+        PackKvStr(ADR('kind'), ADR('event'));
+        PackKvStr(ADR('name'), ADR('ST_CHG'));
+        PackKvDint(ADR('st'), AxisGroupManagerFb._eState);
+        PackKvStr(ADR('st_str'), ADR(StateString));
+        PackKvDint(ADR('from'), PendingStChgFromState);
+        PackKvLint(ADR('runtime_ms'), RuntimeMs);
+        CommitReplySlotEvent();
         GVL.StateChangeEventCount := GVL.StateChangeEventCount + 1;
         PendingStChgFromState := -1;
         PendingStChgRetryScans := 0;
@@ -120,23 +116,12 @@ END_IF;
 // `value` carrying the new gate state.
 IF (GVL.CoordSystemConfigured <> PrevCoordSet) THEN
     // Drop-newest on overflow (see UpdateMotionProgress for rationale).
-    IF (GVL.reMP_info_ridx.Space() > 0) THEN
-        EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
-        MsgPakInfoClear(EventPacketPointer^);
-        EventPacketPointer^.ele_count := 4;
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('event'));
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('name'));
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('COORD_SET'));
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('value'));
-        EventPacketPointer^.whead := MessagePackerFb.PackBool(pStart := EventPacketPointer^.whead, bValue := GVL.CoordSystemConfigured);
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('runtime_ms'));
-        EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
-        MsgPakInfoWrapup(EventPacketPointer^);
-        GVL.reMP_info_ridx.PushHead();
-    ELSE
-        GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
-        GVL.ReMpDropCount_CoordSet := GVL.ReMpDropCount_CoordSet + 1;
+    IF TryAcquireReplySlot(ADR(GVL.ReMpDropCount_CoordSet)) THEN
+        PackKvStr(ADR('kind'), ADR('event'));
+        PackKvStr(ADR('name'), ADR('COORD_SET'));
+        PackKvBool(ADR('value'), GVL.CoordSystemConfigured);
+        PackKvLint(ADR('runtime_ms'), RuntimeMs);
+        CommitReplySlotEvent();
     END_IF;
 END_IF;
 PrevCoordSet := GVL.CoordSystemConfigured;
@@ -148,29 +133,16 @@ PrevCoordSet := GVL.CoordSystemConfigured;
 // Drop-newest on overflow: ring full means the UI has bigger problems
 // than a missing heartbeat tick; ReMpDropCount grows and the seq jumps.
 IF (LastHeartbeatMs = 0) OR (RuntimeMs - LastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) THEN
-    IF (GVL.reMP_info_ridx.Space() > 0) THEN
-        EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
-        MsgPakInfoClear(EventPacketPointer^);
-        EventPacketPointer^.ele_count := 6;
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('event'));
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('name'));
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('HEARTBEAT'));
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('runtime_ms'));
-        EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('remp_drop_count'));
-        EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := TO_LINT(GVL.ReMpDropCount));
+    IF TryAcquireReplySlot(ADR(GVL.ReMpDropCount_Heartbeat)) THEN
+        PackKvStr(ADR('kind'), ADR('event'));
+        PackKvStr(ADR('name'), ADR('HEARTBEAT'));
+        PackKvLint(ADR('runtime_ms'), RuntimeMs);
+        PackKvLint(ADR('remp_drop_count'), TO_LINT(GVL.ReMpDropCount));
         // Per-type drop breakdown so DiagPanel can tell "lost replies" (real
         // problem) from "lost heartbeat tick" (cosmetic) without polling.
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('drops_reply'));
-        EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := TO_LINT(GVL.ReMpDropCount_Reply));
-        EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('drops_events'));
-        EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := TO_LINT(GVL.ReMpDropCount_StChg + GVL.ReMpDropCount_CoordSet + GVL.ReMpDropCount_Heartbeat + GVL.ReMpDropCount_TriggerEvent));
-        MsgPakInfoWrapup(EventPacketPointer^);
-        GVL.reMP_info_ridx.PushHead();
-    ELSE
-        GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
-        GVL.ReMpDropCount_Heartbeat := GVL.ReMpDropCount_Heartbeat + 1;
+        PackKvLint(ADR('drops_reply'),  TO_LINT(GVL.ReMpDropCount_Reply));
+        PackKvLint(ADR('drops_events'), TO_LINT(GVL.ReMpDropCount_StChg + GVL.ReMpDropCount_CoordSet + GVL.ReMpDropCount_Heartbeat + GVL.ReMpDropCount_TriggerEvent));
+        CommitReplySlotEvent();
     END_IF;
     LastHeartbeatMs := RuntimeMs;
 END_IF;

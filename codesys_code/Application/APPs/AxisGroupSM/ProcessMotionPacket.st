@@ -640,13 +640,9 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
 
             PackKvDint(ADR('raw'), TO_DINT(DigitalInputBits_Curr));
 
-            // 'fc' outer KV: key + 16-elem DINT array. +1 once for the outer
-            // pair; array elements are sub-content (no PackKv -> no bump).
-            ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
-            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('fc'));
-            ResponsePacketPointer^.whead := MessagePackerFb.PackArrayHeader(pStart := ResponsePacketPointer^.whead, uiCount := 16);
+            PackKvArray(ADR('fc'), 16);
             FOR StageLoopIdx := 0 TO 15 DO
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(DigitalInputFlipCounts[StageLoopIdx]));
+                PackElemDint(TO_DINT(DigitalInputFlipCounts[StageLoopIdx]));
             END_FOR;
 
             ShouldReturn := TRUE;

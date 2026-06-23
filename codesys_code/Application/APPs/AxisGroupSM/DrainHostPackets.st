@@ -61,19 +61,10 @@ SysDrainIter := 0;
             // Drop-newest on overflow (see UpdateMotionProgress). The
             // minfo_buf ConsumeTail and counter still run so a full reply
             // ring doesn't infinitely re-NAK the same packet.
-            IF (GVL.reMP_info_ridx.Space() > 0) THEN
-                ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
-                MsgPakInfoClear(ResponsePacketPointer^);
-                ResponsePacketPointer^.ele_count := 0;
+            IF TryAcquireReplySlot(ADR(GVL.ReMpDropCount_Reply)) THEN
                 PackKvStr(ADR('err'), ADR('protocol_version_mismatch'));
                 PackKvLint(ADR('err_got'), ProtocolVersionGot);
-                PackKvDint(ADR('id'), CommandId);
-                PackKvBool(ADR('ack'), FALSE);
-                MsgPakInfoWrapup(ResponsePacketPointer^);
-                GVL.reMP_info_ridx.PushHead();
-            ELSE
-                GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
-                GVL.ReMpDropCount_Reply := GVL.ReMpDropCount_Reply + 1;
+                CommitReplySlotAck(CommandId, FALSE);
             END_IF;
 
             GVL.minfo_buf_ridx.ConsumeTail();
@@ -200,30 +191,21 @@ SysDrainIter := 0;
                 // uiDriveInterfaceError per axis, latched cyclically into
                 // GVL.LastAxesErrorIDs). Same axis ordering as axes_err_mask
                 // bits 0..3. UINT zero-extends cleanly into DINT for wire.
-                // Outer KV pair: 'axes_err_id' + 4-elem DINT array. +1 once.
-                ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('axes_err_id'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackArrayHeader(pStart := ResponsePacketPointer^.whead, uiCount := 4);
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := UINT_TO_DINT(GVL.LastAxesErrorIDs[0]));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := UINT_TO_DINT(GVL.LastAxesErrorIDs[1]));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := UINT_TO_DINT(GVL.LastAxesErrorIDs[2]));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := UINT_TO_DINT(GVL.LastAxesErrorIDs[3]));
+                PackKvArray(ADR('axes_err_id'), 4);
+                PackElemDint(UINT_TO_DINT(GVL.LastAxesErrorIDs[0]));
+                PackElemDint(UINT_TO_DINT(GVL.LastAxesErrorIDs[1]));
+                PackElemDint(UINT_TO_DINT(GVL.LastAxesErrorIDs[2]));
+                PackElemDint(UINT_TO_DINT(GVL.LastAxesErrorIDs[3]));
                 // axes_labels : self-describing axis order, same indexing as
                 // axes_err_id / axes_err_mask bits 0..3. UI consumes this
                 // instead of hardcoding labels, collapsing the four-site
                 // axes_err_id ordering coupling (PLC pack / GVL / mask bits /
                 // UI labels) down to a single source of truth on the PLC.
-                // Outer KV pair: 'axes_labels' + 4-elem string array.
-                // ele_count + 1 manually since PackKv helpers can't be used
-                // for raw key+container patterns (and inner array elements
-                // are sub-content that doesn't bump outer ele_count).
-                ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('axes_labels'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackArrayHeader(pStart := ResponsePacketPointer^.whead, uiCount := 4);
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('EAxis0 (arm1)'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('EAxis1 (arm2)'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('EAxis2 (arm3)'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('reelpullmotor'));
+                PackKvArray(ADR('axes_labels'), 4);
+                PackElemStr(ADR('EAxis0 (arm1)'));
+                PackElemStr(ADR('EAxis1 (arm2)'));
+                PackElemStr(ADR('EAxis2 (arm3)'));
+                PackElemStr(ADR('reelpullmotor'));
                 // reel_pos : reelpullmotor.fActPosition (REAL, axis-scaled
                 // user units -- mm under current GenericDSP402 scaling).
                 // Driven by decisions_2026-06-22.md §4 (1): renderer uses
@@ -240,29 +222,14 @@ SysDrainIter := 0;
                 // (renderer also reads BootEpochCount separately?) to detect
                 // staleness. See decisions_2026-06-22.md §4 (2) + B.6.
                 // 7 nested keys.
-                //
-                // Outer KV pair: 'scratchpad' + 7-key map. ele_count + 1 once
-                // for the outer pair; inner content is raw Pack calls (must
-                // NOT use PackKv helpers because their +1 would falsely bump
-                // the OUTER map's ele_count -- there's only one shared
-                // ResponsePacketPointer^.ele_count).
-                ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('scratchpad'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackMapHeader(pStart := ResponsePacketPointer^.whead, uiCount := 7);
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('schema_version'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.ScratchpadV1.SchemaVersion));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('plan_id'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := UDINT_TO_DINT(GVL.ScratchpadV1.PlanId));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('plan_index'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := UDINT_TO_DINT(GVL.ScratchpadV1.PlanIndex));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('intent_kind'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.ScratchpadV1.IntentKind));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('intent_movement_id'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := UDINT_TO_DINT(GVL.ScratchpadV1.IntentMovementId));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('last_vision_pulse'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := UDINT_TO_DINT(GVL.ScratchpadV1.LastVisionPulse));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('boot_epoch'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := UDINT_TO_DINT(GVL.ScratchpadV1.BootEpoch));
+                PackKvMap(ADR('scratchpad'), 7);
+                PackPairDint(ADR('schema_version'),     TO_DINT(GVL.ScratchpadV1.SchemaVersion));
+                PackPairDint(ADR('plan_id'),            UDINT_TO_DINT(GVL.ScratchpadV1.PlanId));
+                PackPairDint(ADR('plan_index'),         UDINT_TO_DINT(GVL.ScratchpadV1.PlanIndex));
+                PackPairDint(ADR('intent_kind'),        TO_DINT(GVL.ScratchpadV1.IntentKind));
+                PackPairDint(ADR('intent_movement_id'), UDINT_TO_DINT(GVL.ScratchpadV1.IntentMovementId));
+                PackPairDint(ADR('last_vision_pulse'),  UDINT_TO_DINT(GVL.ScratchpadV1.LastVisionPulse));
+                PackPairDint(ADR('boot_epoch'),         UDINT_TO_DINT(GVL.ScratchpadV1.BootEpoch));
                 // boot_epoch_now : current GVL.BootEpochCount, top-level peer
                 // of scratchpad. Renderer compares scratchpad.boot_epoch
                 // (captured at last write) against this; mismatch -> PLC
@@ -624,19 +591,10 @@ SysDrainIter := 0;
             // SYS packets queued behind it can drain in this same loop.
             // Drop-newest: skip the NAK entirely if the reply ring is full
             // rather than overwrite a slot the Comm-task consumer is reading.
-            IF (GVL.reMP_info_ridx.Space() > 0) THEN
-                ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
-                MsgPakInfoClear(ResponsePacketPointer^);
-                ResponsePacketPointer^.ele_count := 0;
+            IF TryAcquireReplySlot(ADR(GVL.ReMpDropCount_Reply)) THEN
                 PackKvStr(ADR('err'), ADR('missing_type_field'));
                 PackKvStr(ADR('err_got_type'), ADR(PacketType));
-                PackKvDint(ADR('id'), CommandId);
-                PackKvBool(ADR('ack'), FALSE);
-                MsgPakInfoWrapup(ResponsePacketPointer^);
-                GVL.reMP_info_ridx.PushHead();
-            ELSE
-                GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
-                GVL.ReMpDropCount_Reply := GVL.ReMpDropCount_Reply + 1;
+                CommitReplySlotAck(CommandId, FALSE);
             END_IF;
 
             GVL.minfo_buf_ridx.ConsumeTail();
@@ -654,17 +612,9 @@ SysDrainIter := 0;
             // ProcessMotionPacket handle the tail.
             IF NOT AxisGroupReady THEN
                 // Drop-newest: skip the NAK entirely if the reply ring is full.
-                IF (GVL.reMP_info_ridx.Space() > 0) THEN
-                    ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
-                    MsgPakInfoClear(ResponsePacketPointer^);
+                IF TryAcquireReplySlot(ADR(GVL.ReMpDropCount_Reply)) THEN
                     PackKvStr(ADR('err'), ADR('group_not_ready'));
-                    PackKvDint(ADR('id'), CommandId);
-                    PackKvBool(ADR('ack'), FALSE);
-                    MsgPakInfoWrapup(ResponsePacketPointer^);
-                    GVL.reMP_info_ridx.PushHead();
-                ELSE
-                    GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
-                    GVL.ReMpDropCount_Reply := GVL.ReMpDropCount_Reply + 1;
+                    CommitReplySlotAck(CommandId, FALSE);
                 END_IF;
 
                 GVL.minfo_buf_ridx.ConsumeTail();

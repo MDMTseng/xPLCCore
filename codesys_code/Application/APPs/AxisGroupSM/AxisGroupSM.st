@@ -665,55 +665,34 @@ PROGRAM AxisGroupSM
     // sequence and start the next cycle clean. Drop-newest on ring
     // overflow per the SPSC rationale documented in UpdateMotionProgress.
     IF GVL.Coord1ErrPending THEN
-        IF (GVL.reMP_info_ridx.Space() > 0) THEN
-            EventPacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
-            MsgPakInfoClear(EventPacketPointer^);
-            EventPacketPointer^.ele_count := 15;
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('kind'));
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('event'));
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('name'));
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('COORD1_ERROR'));
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('event_id'));
-            EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := TO_LINT(GVL.Coord1BindEventId));
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('ref_pulse'));
-            EventPacketPointer^.whead := MessagePackerFb.PackDINT(pStart := EventPacketPointer^.whead, diValue := GVL.Coord1ErrRefPulse);
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('exit_pulse'));
-            EventPacketPointer^.whead := MessagePackerFb.PackDINT(pStart := EventPacketPointer^.whead, diValue := GVL.Coord1ErrExitPulse);
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('pulse_at_err'));
-            EventPacketPointer^.whead := MessagePackerFb.PackDINT(pStart := EventPacketPointer^.whead, diValue := GVL.Coord1ErrAtPulse);
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('movement_id'));
-            EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := TO_LINT(GVL.Coord1ErrAtMovementId));
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('mv_progress'));
-            EventPacketPointer^.whead := MessagePackerFb.PackREAL(pStart := EventPacketPointer^.whead, rValue := GVL.Coord1ErrAtProgress);
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('arm_x'));
-            EventPacketPointer^.whead := MessagePackerFb.PackREAL(pStart := EventPacketPointer^.whead, rValue := TO_REAL(GVL.Coord1ErrAtArmX));
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('arm_y'));
-            EventPacketPointer^.whead := MessagePackerFb.PackREAL(pStart := EventPacketPointer^.whead, rValue := TO_REAL(GVL.Coord1ErrAtArmY));
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('arm_z'));
-            EventPacketPointer^.whead := MessagePackerFb.PackREAL(pStart := EventPacketPointer^.whead, rValue := TO_REAL(GVL.Coord1ErrAtArmZ));
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('pcs_x'));
-            EventPacketPointer^.whead := MessagePackerFb.PackREAL(pStart := EventPacketPointer^.whead, rValue := TO_REAL(GVL.Coord1ErrAtPcsX));
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('pcs_y'));
-            EventPacketPointer^.whead := MessagePackerFb.PackREAL(pStart := EventPacketPointer^.whead, rValue := TO_REAL(GVL.Coord1ErrAtPcsY));
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('pcs_z'));
-            EventPacketPointer^.whead := MessagePackerFb.PackREAL(pStart := EventPacketPointer^.whead, rValue := TO_REAL(GVL.Coord1ErrAtPcsZ));
-            EventPacketPointer^.whead := MessagePackerFb.PackString(pStart := EventPacketPointer^.whead, psValue := ADR('runtime_ms'));
-            EventPacketPointer^.whead := MessagePackerFb.PackLINT(pStart := EventPacketPointer^.whead, liValue := RuntimeMs);
-            MsgPakInfoWrapup(EventPacketPointer^);
-            GVL.reMP_info_ridx.PushHead();
+        IF TryAcquireReplySlot(0) THEN
+            PackKvStr(ADR('kind'), ADR('event'));
+            PackKvStr(ADR('name'), ADR('COORD1_ERROR'));
+            PackKvLint(ADR('event_id'), TO_LINT(GVL.Coord1BindEventId));
+            PackKvDint(ADR('ref_pulse'), GVL.Coord1ErrRefPulse);
+            PackKvDint(ADR('exit_pulse'), GVL.Coord1ErrExitPulse);
+            PackKvDint(ADR('pulse_at_err'), GVL.Coord1ErrAtPulse);
+            PackKvLint(ADR('movement_id'), TO_LINT(GVL.Coord1ErrAtMovementId));
+            PackKvReal(ADR('mv_progress'), GVL.Coord1ErrAtProgress);
+            PackKvReal(ADR('arm_x'), TO_REAL(GVL.Coord1ErrAtArmX));
+            PackKvReal(ADR('arm_y'), TO_REAL(GVL.Coord1ErrAtArmY));
+            PackKvReal(ADR('arm_z'), TO_REAL(GVL.Coord1ErrAtArmZ));
+            PackKvReal(ADR('pcs_x'), TO_REAL(GVL.Coord1ErrAtPcsX));
+            PackKvReal(ADR('pcs_y'), TO_REAL(GVL.Coord1ErrAtPcsY));
+            PackKvReal(ADR('pcs_z'), TO_REAL(GVL.Coord1ErrAtPcsZ));
+            PackKvLint(ADR('runtime_ms'), RuntimeMs);
+            CommitReplySlotEvent();
             GVL.Coord1ErrPending := FALSE;
             GVL.Coord1ErrCount   := GVL.Coord1ErrCount + 1;
             // Auto-release tracking so the next cycle starts clean.
             GVL.Coord1Bound      := FALSE;
             GVL.Coord1ExitPulse  := -1;
-        ELSE
-            GVL.ReMpDropCount := GVL.ReMpDropCount + 1;
-            // No dedicated drop counter -- this should be rare; the ring
-            // would have to be saturated by ST_CHG / move_done / heartbeat
-            // events the operator hasn't read. The host still sees
-            // state=Error from the supervisor; only the diagnostic
-            // payload is lost.
         END_IF;
+        // No dedicated class counter -- TryAcquireReplySlot already bumps
+        // GVL.ReMpDropCount on full-ring failure. The COORD1_ERROR push
+        // would have to be queued behind a backlog of ST_CHG / move_done /
+        // heartbeat to drop; host still sees state=Error via the
+        // supervisor, only the diagnostic payload is lost.
     END_IF;
 
 
