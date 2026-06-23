@@ -11,7 +11,13 @@ END_VAR
 // builder pattern puts msgpack composition where it logically lives
 // (the packer) and AxisGroupSM keeps only the slot-lifecycle / FSM
 // concerns.
+IF bSlotOverflowed THEN PackKvStr := FALSE; RETURN; END_IF
 pSlot^.whead := PackString(pStart := pSlot^.whead, psValue := psKey);
 pSlot^.whead := PackString(pStart := pSlot^.whead, psValue := psVal);
 pSlot^.ele_count := pSlot^.ele_count + 1;
-PackKvStr := TRUE;
+IF (pSlot^.whead - pSlot^.buf) > TO_DINT(pSlot^.buf_capacity) THEN
+    bSlotOverflowed := TRUE;
+    PackKvStr := FALSE;
+ELSE
+    PackKvStr := TRUE;
+END_IF

@@ -10,4 +10,7 @@ END_VAR
 // TryAcquireReplySlotOrScratch); retry-style sites that hand-roll
 // slot acquisition must call this themselves.
 pSlot := pBindSlot;
+// Clear the overflow latch for the new slot. Each acquire starts fresh
+// -- old overflow state from a previous slot must not carry forward.
+bSlotOverflowed := FALSE;
 BindSlot := TRUE;
