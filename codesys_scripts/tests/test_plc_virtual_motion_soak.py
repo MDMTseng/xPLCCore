@@ -1,31 +1,36 @@
-# 5-minute virtual-motion + FlyEvent stress soak. Cold-resets the PLC,
-# brings the FSM to Ready in virtual mode, then drives TWO producers in
-# parallel:
-#   - G1 stream (~5/s, Delta-reachable Cartesian targets) -> exercises
-#     motion buffer fill/drain + kinematic execution path
-#   - M4 fly-event stream (~5/s, random TTL + trig 20/120) -> exercises
-#     the 10-slot FlyEvent ring lifecycle: register, expire on TTL,
-#     trigger on motion progress, recycle slots
+# Virtual-motion + FlyEvent SATURATION test. Cold-resets the PLC, brings
+# FSM to Ready in virtual mode, then runs a synchronous producer loop:
+# send G1/M4 -> wait for ack -> next. No inter-packet sleep. Both
+# buffers self-saturate via natural backpressure:
+#   - PLC's ProcessMotionPacket only accepts a G1 when
+#     MotionBufferSize < MOTION_BUFFER_THRESHOLD (12). At threshold, the
+#     packet sits in the host->PLC minfo_buf ring until the motion FB
+#     drains a slot, then the reply lands -- so the synchronous loop
+#     naturally paces itself to "buffer-full minus 1".
+#   - FlyEvent ring (10 slots) fills when M4s attach to long-TTL G1
+#     movement_ids; same natural pacing applies.
 #
 # Asserts:
-#   - GroupErrorStop never trips (group_error_stop_trips stays 0)
-#   - FSM stays in Ready throughout
-#   - motion_buffer_size oscillates (queue fills and drains, doesn't peg)
-#   - FlyEventAvailableCount never sticks at 0 (no slot leak mid-flight)
-#   - FlyEventAvailableCount recovers to >= 8/10 after cooldown
-#   - no_reply rate < 5%
+#   - GroupErrorStop never trips
+#   - FSM stays Ready throughout
+#   - motion_buffer_size reaches MOTION_BUFFER_THRESHOLD (proves real
+#     saturation, not just transient queueing)
+#   - FlyEventAvailableCount drops to <=2/10 at some point (ring really
+#     pressured, not just exercised)
+#   - Both buffers recover after cooldown (no slot leaks)
+#   - no_reply rate is low (sync send-wait keeps the socket clean)
 #
 # Smoke (60s): MOTION_SOAK_SHORT=1
-#
-# Distinct from test_plc_4hr_fuzz which sends 0 G1 -- this is the
-# motion-execution + fly-event-under-motion counterpart.
+# Default duration: 5 min (covers many fill/drain cycles)
 import os
 import random
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
+import msgpack
 import pytest
 
 import socket
@@ -44,29 +49,30 @@ from tests._raw_plc import (
 HERE = Path(__file__).resolve().parent
 SHORT = os.environ.get("MOTION_SOAK_SHORT") == "1"
 DURATION_S = 60.0 if SHORT else 300.0
-# Rate + per-move geometry tuned so move duration < inter-arrival, i.e.
-# the buffer drains faster than it fills. At F=300, a ~10mm move on
-# Delta workspace takes ~33ms; at 5 G1/s the inter-arrival is 200ms,
-# leaving headroom so PrevCompletedMovementId actually advances.
-# Bumping the rate or move size tests the back-pressure path
-# (MOTION_BUFFER_THRESHOLD = 12) instead -- separate scenario.
-TARGET_G1_RATE = 5.0
-# Move geometry tuned so motion_buffer transiently fills (queue depth
-# visible at checkpoint reads). F=80 + 25mm-class moves = ~300ms per
-# move; at 5 G1/s the buffer averages 1-2 in flight, peaks at 4-5
-# during bursts. Smaller moves drain too fast (buf=0 every read),
-# larger moves saturate MOTION_BUFFER_THRESHOLD=12 -- this hits the
-# sweet spot for visibility without back-pressure NAKs.
-G1_F = 80.0
+# Move geometry chosen so each G1 takes ~400ms on virtual axes (F=60
+# + 25mm-class). Slow enough that 12-deep buffer takes ~5s to drain
+# fully -- a producer in synchronous send-wait will see motion buffer
+# pinned near MOTION_BUFFER_THRESHOLD almost the whole soak. The
+# keepalive thread covers the per-ack wait against IDLE_TIMEOUT (7s)
+# so we can safely let single-ack waits run >1s.
+G1_F = 60.0
 G1_RANGE_XY = 25.0
 G1_Z_MIN, G1_Z_MAX = -130.0, -70.0
-# Fly events: roughly match G1 cadence so the FlyEvent ring sees real
-# pressure. 10 slots total; with avg TTL ~500ms and 5 M4/s = 2.5 in
-# flight on average. Bursts can push higher, exercising the wrap.
-TARGET_M4_RATE = 5.0
-M4_TTL_MIN_MS = 100
-M4_TTL_MAX_MS = 800
-CHECKPOINT_S = 10.0 if SHORT else 30.0
+# M4 TTL > queue-drain time so fly events outlive multiple G1
+# completions and pile up in the 10-slot ring. With ~400ms per move
+# and ~12 in queue, 5s TTL covers a full queue cycle.
+M4_TTL_MIN_MS = 3000
+M4_TTL_MAX_MS = 5000
+# Round-robin: 2 M4 per G1 (K=3). Pushes the FlyEvent ring harder than
+# 1:1 since M4 acks are near-instant while G1 acks are queue-bound.
+PRODUCER_ROUND = 3
+# Per-packet ack timeout: must exceed worst-case "wait for a motion
+# slot to free" which is ~G1_duration when buffer is at threshold.
+# 6s leaves headroom; the per-ack wait does NOT need to be under
+# IDLE_TIMEOUT because the keepalive thread is sending PINGs every
+# 800ms in the background.
+ACK_TIMEOUT_S = 6.0
+CHECKPOINT_S = 5.0 if SHORT else 15.0
 
 
 def _force_virtual():
@@ -145,6 +151,30 @@ def _snap_arm_pos(s):
     return (r.get("arm_x"), r.get("arm_y"), r.get("arm_z"))
 
 
+def _start_keepalive(s, stop_event):
+    """Background PING every 800ms so the PLC's TCP IDLE_TIMEOUT (7s)
+    doesn't trip during long ack-waits when buffers are saturated.
+    Mirrors the raw_plc_socket fixture's pattern -- not used here
+    because the cold reset closes that fixture's socket."""
+    from tests._raw_plc import _send_lock
+    def loop():
+        i = 0
+        while not stop_event.is_set():
+            i += 1
+            try:
+                with _send_lock:
+                    s.sendall(msgpack.packb(
+                        {"type": "SYS", "cmd": "PING", "id": 50000 + (i % 1000)},
+                        use_bin_type=True,
+                    ))
+            except OSError:
+                return
+            stop_event.wait(0.8)
+    th = threading.Thread(target=loop, daemon=True)
+    th.start()
+    return th
+
+
 def test_virtual_motion_soak():
     """Drive virtual axes with a continuous G1 stream for DURATION_S and
     assert motion-path invariants. Validates the corrected understanding
@@ -164,11 +194,16 @@ def test_virtual_motion_soak():
     s.settimeout(3.0)
     s.connect((PLC_HOST, PLC_PORT))
 
+    keepalive_stop = threading.Event()
+    keepalive_th = None
     try:
         if not bring_fsm_to_ready(s):
             pytest.skip("could not bring FSM to Ready after cold reset")
+        keepalive_th = _start_keepalive(s, keepalive_stop)
         _run_soak(s)
     finally:
+        keepalive_stop.set()
+        if keepalive_th: keepalive_th.join(timeout=1.5)
         try: s.close()
         except OSError: pass
         time.sleep(0.3)
@@ -187,8 +222,8 @@ def _run_soak(s):
 
     pre_diag = _snap_diag(s)
     trips_baseline = pre_diag.get("group_error_stop_trips", 0)
-    print(f"\n[motion-soak] DURATION={DURATION_S}s target_rate={TARGET_G1_RATE}/s "
-          f"baseline trips={trips_baseline}")
+    print(f"\n[motion-soak] DURATION={DURATION_S}s SATURATION-mode "
+          f"(sync send-wait-ack, no pacing) baseline trips={trips_baseline}")
 
     rng = random.Random(0xC0DE)
     pkt_id = 200_000
@@ -197,12 +232,6 @@ def _run_soak(s):
     no_reply = 0
     start = time.time()
     next_checkpoint = start + CHECKPOINT_S
-    # G1 + M4 interleaved on the same target rate; total pkt cadence is
-    # G1_RATE + M4_RATE so the inter-pkt sleep is computed against the sum.
-    sleep_per_pkt = 1.0 / (TARGET_G1_RATE + TARGET_M4_RATE)
-    # Probability of G1 vs M4 weighted by rate so each producer averages
-    # at its configured rate independently.
-    p_g1 = TARGET_G1_RATE / (TARGET_G1_RATE + TARGET_M4_RATE)
     max_buf = 0
     min_fly_avail = 10
     arm_pos_history = []
@@ -210,15 +239,24 @@ def _run_soak(s):
     if last_arm: arm_pos_history.append(last_arm)
     # Recent G1 movement_ids -- M4 attaches to these so the fly events
     # actually enter the ring waiting for trigger conditions instead of
-    # being orphan/instant-expire. Keep small so it tracks "still in
-    # flight or just finished" -- a long history would attach to
-    # already-completed G1s, defeating the test.
+    # being orphan/instant-expire.
     recent_mvids = []
+    # Synchronous saturation: send packet, wait for ack, send next. No
+    # inter-packet sleep. Alternate G1/M4 round-robin (every Nth pkt is
+    # M4 per PRODUCER_M4_EVERY). The PLC's MOTION_BUFFER_THRESHOLD (12)
+    # gate makes the next G1 ack-delay until a slot frees, so the loop
+    # self-paces against whichever buffer is fullest.
+    pkt_round = 0
 
     end_time = start + DURATION_S
     while time.time() < end_time:
         pkt_id += 1
-        if rng.random() < p_g1:
+        pkt_round += 1
+        # Force G1 until we have at least one movement_id captured.
+        # An M4 with motion_id=0 + long TTL just hangs in minfo_buf until
+        # timeout -- no point sending it before any G1 has been ack'd.
+        is_m4 = (pkt_round % PRODUCER_ROUND != 0) and bool(recent_mvids)
+        if not is_m4:
             # G1: Delta-reachable Cartesian, small XY box, Z always negative.
             pkt = {
                 "type": "M", "cmd": "G1", "id": pkt_id,
@@ -267,10 +305,10 @@ def _run_soak(s):
             kind = "m4"
 
         send_pack(s, pkt)
-        # M4 needs a slightly longer reply window under combined load
-        # (motion FB busy executing keeps SYS drain slower); 1.5s matches
-        # the 4hr fuzz timeout.
-        r = drain_until_id(s, pkt_id, 1.5 if kind == "m4" else 1.0)
+        # Long ack timeout: when motion buffer or fly ring is saturated,
+        # the PLC parks the packet in minfo_buf until a slot frees, so
+        # ack-delay can be O(seconds). See ACK_TIMEOUT_S comment.
+        r = drain_until_id(s, pkt_id, ACK_TIMEOUT_S)
         if r is None:
             no_reply += 1
         elif r.get("ack"):
@@ -279,15 +317,16 @@ def _run_soak(s):
                 mvid = r.get("movement_id")
                 if mvid:
                     recent_mvids.append(mvid)
-                    # Keep a short window so attached M4s target moves
-                    # still in flight or just-finished (TTL gives the M4
-                    # a chance to fire either way).
-                    if len(recent_mvids) > 8:
+                    # Keep recent_mvids short -- attached M4s should
+                    # target in-flight or just-finished moves, not
+                    # ancient ones from minutes ago.
+                    if len(recent_mvids) > 12:
                         recent_mvids.pop(0)
-            else: m4_acks += 1
+            else:
+                m4_acks += 1
         if kind == "g1": g1_sent += 1
         else: m4_sent += 1
-        time.sleep(sleep_per_pkt)
+        # No inter-packet sleep -- the ack-wait is the natural pacing.
 
         # Checkpoint
         now = time.time()
@@ -379,9 +418,13 @@ def _run_soak(s):
         f"no-reply rate {no_reply}/{total_sent} = "
         f"{100*no_reply/total_sent:.2f}% > 15%"
     )
-    assert max_buf > 0, (
-        f"motion buffer never accumulated -- moves may not have been "
-        f"queueing (max_buf={max_buf})"
+    # Saturation: motion buffer must have hit >=9 at some checkpoint
+    # (threshold is 12; sync send-wait caps the steady state at
+    # threshold-1=11; checkpoint sampling may miss the exact peak by
+    # ~1-2 -- so 9 is the empirical saturation floor).
+    assert max_buf >= 9, (
+        f"motion buffer never saturated -- max_buf={max_buf} of "
+        f"threshold 12; producer may not have been fast enough"
     )
     # After cooldown buffer must drain (proves moves complete).
     assert drained_at is not None, (
@@ -406,12 +449,13 @@ def _run_soak(s):
     )
     # Sanity: M4s actually got processed (not just NAK'd).
     assert m4_acks > 0, "no M4 fly-event ever acked -- registration path dead?"
-    # Ring actually got exercised: at least one moment during the soak
-    # had >=1 slot in use (avail < 10). If min stayed at 10 the M4s
-    # weren't entering the ring at all -- attach-to-mvid is broken or
-    # something cleaned them up too aggressively.
-    assert min_fly_avail < 10, (
-        f"FlyEvent ring never saw any slot in flight (min_avail=10) "
-        f"-- M4s aren't entering the ring; check attach motion_id "
-        f"plumbing"
+    # Saturation: FlyEvent ring must have hit <= 4 free slots (>=6 in
+    # flight). 10 is the hard ceiling but ring turnover under sync send
+    # naturally caps a bit lower; <=4 proves the ring was genuinely
+    # under pressure (vs the previous co-stress version which only got
+    # to 9/10 because M4s expired before ring filled).
+    assert min_fly_avail <= 4, (
+        f"FlyEvent ring never saturated: min_fly_avail={min_fly_avail}/10 "
+        f"-- M4s either NAK'd before ring entry or expired too quickly; "
+        f"check M4 TTL vs send rate"
     )
