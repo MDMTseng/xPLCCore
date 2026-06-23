@@ -1,0 +1,9 @@
+# Force LF for CODESYS Structured Text source files.
+# Without this, mixed CRLF/LF on disk meant every `import_all` would
+# re-apply the CRLF files (CODESYS internal stores whatever it was last
+# fed; subsequent disk reads on LF mismatched and re-applied). Pin to LF
+# so disk + CODESYS internal stay aligned.
+*.st text eol=lf
+
+# Python tooling -- LF on all platforms.
+*.py text eol=lf
