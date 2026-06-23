@@ -82,17 +82,13 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
         IF (GVL.reMP_info_ridx.Space() > 0) THEN
             ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
             MsgPakInfoClear(ResponsePacketPointer^);
-            ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 3;
 
-            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('error_code'));
-            ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TriggerErrorCode);
+            PackKvDint(ADR('error_code'), TriggerErrorCode);
 
-            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('src_id'));
-            ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := pFly^.SourceCommandId);
+            PackKvDint(ADR('src_id'), pFly^.SourceCommandId);
 
 
-            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('event_id'));
-            ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := TO_LINT(pFly^.EventId));
+            PackKvLint(ADR('event_id'), TO_LINT(pFly^.EventId));
 
             MsgPakInfoWrapup(ResponsePacketPointer^);
             GVL.reMP_info_ridx.PushHead();
@@ -218,19 +214,15 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
                     MsgPakInfoClear(ResponsePacketPointer^);
 
 
-                    ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count +3;//three elements: event_id, id, ack
 
 
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('event_id'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := TO_LINT(pFly^.EventId));
+                    PackKvLint(ADR('event_id'), TO_LINT(pFly^.EventId));
 
 
 
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('id'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := pFly^.SourceCommandId);
+                    PackKvDint(ADR('id'), pFly^.SourceCommandId);
 
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := TRUE);
+                    PackKvBool(ADR('ack'), TRUE);
 
                     MsgPakInfoWrapup(ResponsePacketPointer^);
                     GVL.reMP_info_ridx.PushHead();

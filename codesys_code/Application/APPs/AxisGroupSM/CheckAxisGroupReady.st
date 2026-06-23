@@ -22,13 +22,9 @@ IF NOT AxisGroupReady THEN
         IF (GVL.reMP_info_ridx.Space() > 0) THEN
             ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
             MsgPakInfoClear(ResponsePacketPointer^);
-            ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 3;
-            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
-            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('group_not_ready'));
-            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('id'));
-            ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := CommandId);
-            ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
-            ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := FALSE);
+            PackKvStr(ADR('err'), ADR('group_not_ready'));
+            PackKvDint(ADR('id'), CommandId);
+            PackKvBool(ADR('ack'), FALSE);
             MsgPakInfoWrapup(ResponsePacketPointer^);
             GVL.reMP_info_ridx.PushHead();
         ELSE

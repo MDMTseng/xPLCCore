@@ -64,15 +64,11 @@ SysDrainIter := 0;
             IF (GVL.reMP_info_ridx.Space() > 0) THEN
                 ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
                 MsgPakInfoClear(ResponsePacketPointer^);
-                ResponsePacketPointer^.ele_count := 4;
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('protocol_version_mismatch'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_got'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := ProtocolVersionGot);
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('id'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := CommandId);
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := FALSE);
+                ResponsePacketPointer^.ele_count := 0;
+                PackKvStr(ADR('err'), ADR('protocol_version_mismatch'));
+                PackKvLint(ADR('err_got'), ProtocolVersionGot);
+                PackKvDint(ADR('id'), CommandId);
+                PackKvBool(ADR('ack'), FALSE);
                 MsgPakInfoWrapup(ResponsePacketPointer^);
                 GVL.reMP_info_ridx.PushHead();
             ELSE
@@ -121,11 +117,9 @@ SysDrainIter := 0;
                 IF (GaEvRaw < 1) OR (GaEvRaw > 11) THEN
                     CommandAck := FALSE;
                     GVL.UnknownEventNakCount := GVL.UnknownEventNakCount + 1;
-                    ResponsePacketPointer^.ele_count := 2;
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := FALSE);
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('unknown_event'));
+                    ResponsePacketPointer^.ele_count := 0;
+                    PackKvBool(ADR('ack'), FALSE);
+                    PackKvStr(ADR('err'), ADR('unknown_event'));
                 ELSE
                     CommandAck := TRUE;
                     InputEvent := TO_UDINT(GaEvRaw);
@@ -133,23 +127,19 @@ SysDrainIter := 0;
                         eEvent := InputEvent
                     );
 
-                    ResponsePacketPointer^.ele_count := 4;
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('st'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := AxisGroupManagerFb._eState);
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('st_str'));
-                    StateString := TO_STRING(AxisGroupManagerFb._eState);
+                    ResponsePacketPointer^.ele_count := 0;
                     // NOTE: PrevAxisGroupState is intentionally NOT updated here.
                     // The ST_CHG push-event detector above at line ~255 owns that
                     // variable; pre-updating it would suppress the ST_CHG event
                     // for any transition triggered via SYS/GA_EV (verified live
                     // 2026-04-24: UnInited->Powering was silently swallowed).
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(StateString));
+                    StateString := TO_STRING(AxisGroupManagerFb._eState);
+                    PackKvDint(ADR('st'), AxisGroupManagerFb._eState);
+                    PackKvStr(ADR('st_str'), ADR(StateString));
                     // Error latch: empty string + 0 when no error has been recorded
                     // since the last EV_RESET -> UnInited cycle.
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_src'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(GVL.LastErrorSource));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_id'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.LastErrorID));
+                    PackKvStr(ADR('err_src'), ADR(GVL.LastErrorSource));
+                    PackKvDint(ADR('err_id'), TO_DINT(GVL.LastErrorID));
                 END_IF
             ELSIF (CommandType = 'PING') THEN
                 // A3: UI heartbeat. Stamp last-seen and bump counter; reply with runtime.
@@ -166,11 +156,9 @@ SysDrainIter := 0;
                 GVL.UiPingCount  := GVL.UiPingCount + 1;
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
-                ResponsePacketPointer^.ele_count := 2;
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('pong'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := TRUE);
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('runtime_ms'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := RuntimeMs);
+                ResponsePacketPointer^.ele_count := 0;
+                PackKvBool(ADR('pong'), TRUE);
+                PackKvLint(ADR('runtime_ms'), RuntimeMs);
             ELSIF (CommandType = 'GET_MACHINE_STATE') THEN
                 // A4: Full-snapshot read for UI reconnect. Doesn't change FSM.
                 ShouldReturn := TRUE;
@@ -189,25 +177,19 @@ SysDrainIter := 0;
                 // scratchpad + boot_epoch_now (§4 (2)) +
                 // last_completed_movement_id (§4 (2) intent reconcile,
                 // per implementation_review_2026-06-22.md §2).
-                ResponsePacketPointer^.ele_count := 16;
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('st'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := AxisGroupManagerFb._eState);
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('st_str'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(StateString));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_src'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(GVL.LastErrorSource));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_id'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.LastErrorID));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('motion_buffer_size'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := TO_LINT(MotionBufferSize));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('movement_id'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := TO_LINT(GroupReadPositionFb.MovementId));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('runtime_ms'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := RuntimeMs);
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('coord_set'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := GVL.CoordSystemConfigured);
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('axes_err_mask'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(AxesErrMask));
+                ResponsePacketPointer^.ele_count := 0;
+                PackKvDint(ADR('st'), AxisGroupManagerFb._eState);
+                PackKvStr(ADR('st_str'), ADR(StateString));
+                PackKvStr(ADR('err_src'), ADR(GVL.LastErrorSource));
+                PackKvDint(ADR('err_id'), TO_DINT(GVL.LastErrorID));
+                PackKvLint(ADR('motion_buffer_size'), TO_LINT(MotionBufferSize));
+                PackKvLint(ADR('movement_id'), TO_LINT(GroupReadPositionFb.MovementId));
+                PackKvLint(ADR('runtime_ms'), RuntimeMs);
+                PackKvBool(ADR('coord_set'), GVL.CoordSystemConfigured);
+                PackKvDint(ADR('axes_err_mask'), TO_DINT(AxesErrMask));
+                // 'axes_state' raw pack (multi-line OR-expression awkward
+                // for PackKvDint signature). +1 manually.
+                ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('axes_state'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue :=
                     TO_DINT(IoConfig_Globals.EAxis0.nAxisState)
@@ -218,6 +200,8 @@ SysDrainIter := 0;
                 // uiDriveInterfaceError per axis, latched cyclically into
                 // GVL.LastAxesErrorIDs). Same axis ordering as axes_err_mask
                 // bits 0..3. UINT zero-extends cleanly into DINT for wire.
+                // Outer KV pair: 'axes_err_id' + 4-elem DINT array. +1 once.
+                ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('axes_err_id'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackArrayHeader(pStart := ResponsePacketPointer^.whead, uiCount := 4);
                 ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := UINT_TO_DINT(GVL.LastAxesErrorIDs[0]));
@@ -229,6 +213,11 @@ SysDrainIter := 0;
                 // instead of hardcoding labels, collapsing the four-site
                 // axes_err_id ordering coupling (PLC pack / GVL / mask bits /
                 // UI labels) down to a single source of truth on the PLC.
+                // Outer KV pair: 'axes_labels' + 4-elem string array.
+                // ele_count + 1 manually since PackKv helpers can't be used
+                // for raw key+container patterns (and inner array elements
+                // are sub-content that doesn't bump outer ele_count).
+                ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('axes_labels'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackArrayHeader(pStart := ResponsePacketPointer^.whead, uiCount := 4);
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('EAxis0 (arm1)'));
@@ -244,14 +233,20 @@ SysDrainIter := 0;
                 // "pitch" semantics live entirely on the host.
                 // Retention across PLC restart scenarios verified by
                 // probe_reel_retain (STOP+START path conclusive).
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('reel_pos'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := reelpullmotor.fActPosition);
+                PackKvReal(ADR('reel_pos'), reelpullmotor.fActPosition);
                 // scratchpad : nested map carrying the host-owned resume
                 // cursor. PLC pipes the retained Scratchpad_v1 struct out
                 // verbatim; renderer compares boot_epoch vs GVL.BootEpochCount
                 // (renderer also reads BootEpochCount separately?) to detect
                 // staleness. See decisions_2026-06-22.md §4 (2) + B.6.
                 // 7 nested keys.
+                //
+                // Outer KV pair: 'scratchpad' + 7-key map. ele_count + 1 once
+                // for the outer pair; inner content is raw Pack calls (must
+                // NOT use PackKv helpers because their +1 would falsely bump
+                // the OUTER map's ele_count -- there's only one shared
+                // ResponsePacketPointer^.ele_count).
+                ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('scratchpad'));
                 ResponsePacketPointer^.whead := MessagePackerFb.PackMapHeader(pStart := ResponsePacketPointer^.whead, uiCount := 7);
                 ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('schema_version'));
@@ -272,8 +267,7 @@ SysDrainIter := 0;
                 // of scratchpad. Renderer compares scratchpad.boot_epoch
                 // (captured at last write) against this; mismatch -> PLC
                 // restarted since the write -> scratchpad stale.
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('boot_epoch_now'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := UDINT_TO_DINT(GVL.BootEpochCount));
+                PackKvDint(ADR('boot_epoch_now'), UDINT_TO_DINT(GVL.BootEpochCount));
                 // last_completed_movement_id : latched at the MOVE_DONE
                 // emit site (UpdateMotionProgress.st line 81 / 92), so it
                 // tracks "the last move that actually finished and drained
@@ -285,8 +279,7 @@ SysDrainIter := 0;
                 // -- otherwise a move that started but didn't finish is
                 // mis-reported as completed. See
                 // implementation_review_2026-06-22.md §2.
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('last_completed_movement_id'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := TO_LINT(PrevCompletedMovementId));
+                PackKvLint(ADR('last_completed_movement_id'), TO_LINT(PrevCompletedMovementId));
             ELSIF (CommandType = 'SCRATCHPAD_WRITE') THEN
                 // §4 (2) -- host write path. Take the host-controlled fields
                 // off the request and store them. PLC NEVER interprets any of
@@ -323,11 +316,9 @@ SysDrainIter := 0;
                     // contents survive untouched so the host can retry.
                     CommandAck := FALSE;
                     GVL.ScratchpadPartialNakCount := GVL.ScratchpadPartialNakCount + 1;
-                    ResponsePacketPointer^.ele_count := 2;
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := FALSE);
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('partial_scratchpad'));
+                    ResponsePacketPointer^.ele_count := 0;
+                    PackKvBool(ADR('ack'), FALSE);
+                    PackKvStr(ADR('err'), ADR('partial_scratchpad'));
                 ELSE
                     CommandAck := TRUE;
                     GVL.ScratchpadV1.PlanId           := TO_UDINT(ScratchpadPlanIdRaw);
@@ -337,9 +328,8 @@ SysDrainIter := 0;
                     GVL.ScratchpadV1.LastVisionPulse  := TO_UDINT(ScratchpadLastVisionPulseRaw);
                     GVL.ScratchpadV1.SchemaVersion := 1;
                     GVL.ScratchpadV1.BootEpoch := GVL.BootEpochCount;
-                    ResponsePacketPointer^.ele_count := 1;
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := TRUE);
+                    ResponsePacketPointer^.ele_count := 0;
+                    PackKvBool(ADR('ack'), TRUE);
                 END_IF
             ELSIF (CommandType = 'RESET_DBG_INFO') THEN
                 // SYS-side reset: clears comm-stability counters without
@@ -363,22 +353,18 @@ SysDrainIter := 0;
                 GVL.PrevPingRuntimeMs           := 0;
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
-                ResponsePacketPointer^.ele_count := 1;
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('reset'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := TRUE);
+                ResponsePacketPointer^.ele_count := 0;
+                PackKvBool(ADR('reset'), TRUE);
             ELSIF (CommandType = 'VERSION') THEN
                 // Build provenance: lets an external tool verify the running
                 // PLC matches a repo commit without IDE assistance. Stamped by
                 // codesys_scripts/jobs/stamp_build_info.py before import_all.
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
-                ResponsePacketPointer^.ele_count := 3;
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('git_sha'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(GVL.BUILD_GIT_SHA));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('build_ts_ms'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := GVL.BUILD_TS_MS);
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('runtime_ms'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := RuntimeMs);
+                ResponsePacketPointer^.ele_count := 0;
+                PackKvStr(ADR('git_sha'), ADR(GVL.BUILD_GIT_SHA));
+                PackKvLint(ADR('build_ts_ms'), GVL.BUILD_TS_MS);
+                PackKvLint(ADR('runtime_ms'), RuntimeMs);
             ELSIF (CommandType = 'GET_DIAG') THEN
                 // Generic comm/robustness counters dump. UI dashboard polls this
                 // (e.g. once per second) to chart drop/NAK/reset rates and the
@@ -394,61 +380,34 @@ SysDrainIter := 0;
                 //   self_reentry, pending_stchg_drop, pending_movedone_drop,
                 //   remp_drop_reply, remp_drop_trig, dupe_cmd,
                 //   io_cmd_count, io_trig_count, flyevent_avail
-                ResponsePacketPointer^.ele_count := 27;
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('remp_overflow_drop'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.ReMpOverflowDropCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('runtime_ms'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := RuntimeMs);
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('sm_scans'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.AxisGroupSMScans));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('remp_drop'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.ReMpDropCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('overlen_drop'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.OverlenDropCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('send_stall_drop'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.SendStallDropCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('group_not_ready_nak'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.GroupNotReadyNakCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('missing_type_nak'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.MissingTypeFieldNakCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('coord_not_cfg_nak'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.CoordNotConfiguredNakCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('proto_mismatch_nak'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.ProtocolVersionMismatchCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('idle_reset'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.IdleResetCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('read_err_reset'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.ReadErrorResetCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('parser_err_reset'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.ParserErrorResetCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ui_ping_count'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.UiPingCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ui_hb_stale_count'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.UiHeartbeatStaleCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ping_max_gap_ms'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.PingMaxGapMs));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('last_ui_ping_ms'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := GVL.LastUiPingMs);
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('st_chg_event_count'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.StateChangeEventCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('self_reentry'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.SelfReentryCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('pending_stchg_drop'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.PendingStChgDropCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('pending_movedone_drop'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.PendingMoveDoneDropCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('remp_drop_reply'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.ReMpDropCount_Reply));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('remp_drop_trig'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.ReMpDropCount_TriggerEvent));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('dupe_cmd'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.DupeCommandCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('io_cmd_count'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(IoCommandCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('io_trig_count'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(IoTriggerCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('flyevent_avail'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(FlyEventAvailableCount));
+                ResponsePacketPointer^.ele_count := 0;
+                PackKvDint(ADR('remp_overflow_drop'), TO_DINT(GVL.ReMpOverflowDropCount));
+                PackKvLint(ADR('runtime_ms'), RuntimeMs);
+                PackKvDint(ADR('sm_scans'), TO_DINT(GVL.AxisGroupSMScans));
+                PackKvDint(ADR('remp_drop'), TO_DINT(GVL.ReMpDropCount));
+                PackKvDint(ADR('overlen_drop'), TO_DINT(GVL.OverlenDropCount));
+                PackKvDint(ADR('send_stall_drop'), TO_DINT(GVL.SendStallDropCount));
+                PackKvDint(ADR('group_not_ready_nak'), TO_DINT(GVL.GroupNotReadyNakCount));
+                PackKvDint(ADR('missing_type_nak'), TO_DINT(GVL.MissingTypeFieldNakCount));
+                PackKvDint(ADR('coord_not_cfg_nak'), TO_DINT(GVL.CoordNotConfiguredNakCount));
+                PackKvDint(ADR('proto_mismatch_nak'), TO_DINT(GVL.ProtocolVersionMismatchCount));
+                PackKvDint(ADR('idle_reset'), TO_DINT(GVL.IdleResetCount));
+                PackKvDint(ADR('read_err_reset'), TO_DINT(GVL.ReadErrorResetCount));
+                PackKvDint(ADR('parser_err_reset'), TO_DINT(GVL.ParserErrorResetCount));
+                PackKvDint(ADR('ui_ping_count'), TO_DINT(GVL.UiPingCount));
+                PackKvDint(ADR('ui_hb_stale_count'), TO_DINT(GVL.UiHeartbeatStaleCount));
+                PackKvDint(ADR('ping_max_gap_ms'), TO_DINT(GVL.PingMaxGapMs));
+                PackKvLint(ADR('last_ui_ping_ms'), GVL.LastUiPingMs);
+                PackKvDint(ADR('st_chg_event_count'), TO_DINT(GVL.StateChangeEventCount));
+                PackKvDint(ADR('self_reentry'), TO_DINT(GVL.SelfReentryCount));
+                PackKvDint(ADR('pending_stchg_drop'), TO_DINT(GVL.PendingStChgDropCount));
+                PackKvDint(ADR('pending_movedone_drop'), TO_DINT(GVL.PendingMoveDoneDropCount));
+                PackKvDint(ADR('remp_drop_reply'), TO_DINT(GVL.ReMpDropCount_Reply));
+                PackKvDint(ADR('remp_drop_trig'), TO_DINT(GVL.ReMpDropCount_TriggerEvent));
+                PackKvDint(ADR('dupe_cmd'), TO_DINT(GVL.DupeCommandCount));
+                PackKvDint(ADR('io_cmd_count'), TO_DINT(IoCommandCount));
+                PackKvDint(ADR('io_trig_count'), TO_DINT(IoTriggerCount));
+                PackKvDint(ADR('flyevent_avail'), TO_DINT(FlyEventAvailableCount));
             ELSIF (CommandType = 'COORD1_BIND') THEN
                 // Bind the coord1 tracking frame to the conveyor encoder.
                 // Phase 4 step 2: PCS_1 is now driven by MC_TrackConveyorBelt
@@ -520,9 +479,8 @@ SysDrainIter := 0;
 
                 IF BindReject THEN
                     CommandAck := FALSE;
-                    ResponsePacketPointer^.ele_count := 1;
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(BindRejectReason));
+                    ResponsePacketPointer^.ele_count := 0;
+                    PackKvStr(ADR('err'), ADR(BindRejectReason));
                 ELSE
                     // Commit (Phase 4 step 2): set the calibration + belt
                     // origin first, then flip Coord1Bound TRUE -- the per-
@@ -543,11 +501,9 @@ SysDrainIter := 0;
                     GVL.Coord1Bound       := TRUE;
                     GVL.Coord1BindCount   := GVL.Coord1BindCount + 1;
                     CommandAck := TRUE;
-                    ResponsePacketPointer^.ele_count := 2;
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('mode'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('linear'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('n'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := 0);
+                    ResponsePacketPointer^.ele_count := 0;
+                    PackKvStr(ADR('mode'), ADR('linear'));
+                    PackKvDint(ADR('n'), 0);
                 END_IF
             ELSIF (CommandType = 'COORD1_UNBIND') THEN
                 // Phase 4 step 2: drop GVL.Coord1Bound so the per-scan tcb()
@@ -568,57 +524,38 @@ SysDrainIter := 0;
                 // sanity-check visibility only). Read-only.
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
-                ResponsePacketPointer^.ele_count := 30;
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('bound'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := GVL.Coord1Bound);
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('mode'));
+                ResponsePacketPointer^.ele_count := 0;
+                PackKvBool(ADR('bound'), GVL.Coord1Bound);
                 IF GVL.Coord1CamMode = GVL.COORD1_MODE_TABLE THEN
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('table'));
+                    PackKvStr(ADR('mode'), ADR('table'));
                 ELSE
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('linear'));
+                    PackKvStr(ADR('mode'), ADR('linear'));
                 END_IF
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('cam_n'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.Coord1CamCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('cam_first'));
+                PackKvDint(ADR('cam_n'), TO_DINT(GVL.Coord1CamCount));
                 IF GVL.Coord1CamCount > 0 THEN
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := GVL.Coord1CamMaster[0]);
+                    PackKvDint(ADR('cam_first'), GVL.Coord1CamMaster[0]);
                 ELSE
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := 0);
+                    PackKvDint(ADR('cam_first'), 0);
                 END_IF
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('cam_last'));
                 IF GVL.Coord1CamCount > 0 THEN
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := GVL.Coord1CamMaster[GVL.Coord1CamCount - 1]);
+                    PackKvDint(ADR('cam_last'), GVL.Coord1CamMaster[GVL.Coord1CamCount - 1]);
                 ELSE
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := 0);
+                    PackKvDint(ADR('cam_last'), 0);
                 END_IF
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('pulse_raw'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := GVL.ConveyorPulseRaw);
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ref_pulse'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := GVL.Coord1RefPulse);
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ref_x'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(GVL.Coord1RefXyz[0]));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ref_y'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(GVL.Coord1RefXyz[1]));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ref_z'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(GVL.Coord1RefXyz[2]));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('scale_x'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(GVL.Coord1Scale[0]));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('scale_y'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(GVL.Coord1Scale[1]));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('scale_z'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(GVL.Coord1Scale[2]));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('origin_x'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(GVL.Coord1OriginNow[0]));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('origin_y'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(GVL.Coord1OriginNow[1]));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('origin_z'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(GVL.Coord1OriginNow[2]));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('bind_count'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.Coord1BindCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('bind_busy_nak'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.Coord1BindBusyNakCount));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('bad_table_nak'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := TO_DINT(GVL.Coord1BadTableNakCount));
+                PackKvDint(ADR('pulse_raw'), GVL.ConveyorPulseRaw);
+                PackKvDint(ADR('ref_pulse'), GVL.Coord1RefPulse);
+                PackKvReal(ADR('ref_x'), TO_REAL(GVL.Coord1RefXyz[0]));
+                PackKvReal(ADR('ref_y'), TO_REAL(GVL.Coord1RefXyz[1]));
+                PackKvReal(ADR('ref_z'), TO_REAL(GVL.Coord1RefXyz[2]));
+                PackKvReal(ADR('scale_x'), TO_REAL(GVL.Coord1Scale[0]));
+                PackKvReal(ADR('scale_y'), TO_REAL(GVL.Coord1Scale[1]));
+                PackKvReal(ADR('scale_z'), TO_REAL(GVL.Coord1Scale[2]));
+                PackKvReal(ADR('origin_x'), TO_REAL(GVL.Coord1OriginNow[0]));
+                PackKvReal(ADR('origin_y'), TO_REAL(GVL.Coord1OriginNow[1]));
+                PackKvReal(ADR('origin_z'), TO_REAL(GVL.Coord1OriginNow[2]));
+                PackKvDint(ADR('bind_count'), TO_DINT(GVL.Coord1BindCount));
+                PackKvDint(ADR('bind_busy_nak'), TO_DINT(GVL.Coord1BindBusyNakCount));
+                PackKvDint(ADR('bad_table_nak'), TO_DINT(GVL.Coord1BadTableNakCount));
                 // Phase 4 step 2 kernel-side diagnostic. Two forms:
                 //   kernel_origin_*  = static ConveyorBeltOrigin (what
                 //                      MC_ReadCoordinateTransform reports;
@@ -630,55 +567,40 @@ SysDrainIter := 0;
                 //                      This is the LIVE WCS point that
                 //                      G1 frame=1 Position=(0,0,0) targets.
                 // Cross-check: prediction (origin_*) should equal live_kernel.
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('kernel_origin_x'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(Pcs1KernelTransform.X));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('kernel_origin_y'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(Pcs1KernelTransform.Y));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('kernel_origin_z'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(Pcs1KernelTransform.Z));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('live_kernel_origin_x'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(Pcs1KernelTransform.X + ConveyorEncoderAxis.fActPosition));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('live_kernel_origin_y'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(Pcs1KernelTransform.Y));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('live_kernel_origin_z'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(Pcs1KernelTransform.Z));
+                PackKvReal(ADR('kernel_origin_x'), TO_REAL(Pcs1KernelTransform.X));
+                PackKvReal(ADR('kernel_origin_y'), TO_REAL(Pcs1KernelTransform.Y));
+                PackKvReal(ADR('kernel_origin_z'), TO_REAL(Pcs1KernelTransform.Z));
+                PackKvReal(ADR('live_kernel_origin_x'), TO_REAL(Pcs1KernelTransform.X + ConveyorEncoderAxis.fActPosition));
+                PackKvReal(ADR('live_kernel_origin_y'), TO_REAL(Pcs1KernelTransform.Y));
+                PackKvReal(ADR('live_kernel_origin_z'), TO_REAL(Pcs1KernelTransform.Z));
                 // Live arm TCP position (WCS). Folded into GET_COORD1_DEBUG
                 // so the viz tool can sample arm motion via SYS path
                 // without being blocked by the motion FSM gate (which
                 // NAKs all type:M packets after a virtual-axis self-halt).
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('arm_x'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(ReadPosition.c.x));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('arm_y'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(ReadPosition.c.y));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('arm_z'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := TO_REAL(ReadPosition.c.z));
+                PackKvReal(ADR('arm_x'), TO_REAL(ReadPosition.c.x));
+                PackKvReal(ADR('arm_y'), TO_REAL(ReadPosition.c.y));
+                PackKvReal(ADR('arm_z'), TO_REAL(ReadPosition.c.z));
                 // Phase 4 step 2 probe: SM3 motion progress for the move
                 // currently in flight. With CoordSystem := PCS_1 on a
                 // belt-tracking move, this is the data point we need to
                 // answer "does progress 0->1 mean tracking 0->1".
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('mv_id'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackLINT(pStart := ResponsePacketPointer^.whead, liValue := TO_LINT(CurrentMovementId));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('mv_progress'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackREAL(pStart := ResponsePacketPointer^.whead, rValue := CurrentMovementIdProgress);
+                PackKvLint(ADR('mv_id'), TO_LINT(CurrentMovementId));
+                PackKvReal(ADR('mv_progress'), CurrentMovementIdProgress);
             ELSE
                 // Unknown SYS command -- emit NAK so the TS caller doesn't hang on timeout.
                 ShouldReturn := TRUE;
                 CommandAck := FALSE;
-                ResponsePacketPointer^.ele_count := 1;
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('unknown SYS cmd'));
+                ResponsePacketPointer^.ele_count := 0;
+                PackKvStr(ADR('err'), ADR('unknown SYS cmd'));
             END_IF;
 
             GVL.minfo_buf_ridx.ConsumeTail();
 
             IF ShouldReturn = TRUE THEN // return ack/nak with id
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('id'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := CommandId);
+                PackKvDint(ADR('id'), CommandId);
 
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := CommandAck);
+                PackKvBool(ADR('ack'), CommandAck);
 
-                ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 2;
                 MsgPakInfoWrapup(ResponsePacketPointer^);
                 // Drop-newest: only commit if the real ring slot was reserved.
                 // If SlotAvailable=FALSE we packed into the scratch slot and
@@ -705,15 +627,11 @@ SysDrainIter := 0;
             IF (GVL.reMP_info_ridx.Space() > 0) THEN
                 ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
                 MsgPakInfoClear(ResponsePacketPointer^);
-                ResponsePacketPointer^.ele_count := 4;
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('missing_type_field'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err_got_type'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR(PacketType));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('id'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := CommandId);
-                ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
-                ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := FALSE);
+                ResponsePacketPointer^.ele_count := 0;
+                PackKvStr(ADR('err'), ADR('missing_type_field'));
+                PackKvStr(ADR('err_got_type'), ADR(PacketType));
+                PackKvDint(ADR('id'), CommandId);
+                PackKvBool(ADR('ack'), FALSE);
                 MsgPakInfoWrapup(ResponsePacketPointer^);
                 GVL.reMP_info_ridx.PushHead();
             ELSE
@@ -739,13 +657,9 @@ SysDrainIter := 0;
                 IF (GVL.reMP_info_ridx.Space() > 0) THEN
                     ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
                     MsgPakInfoClear(ResponsePacketPointer^);
-                    ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 3;
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('err'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('group_not_ready'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('id'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackDINT(pStart := ResponsePacketPointer^.whead, diValue := CommandId);
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackString(pStart := ResponsePacketPointer^.whead, psValue := ADR('ack'));
-                    ResponsePacketPointer^.whead := MessagePackerFb.PackBool(pStart := ResponsePacketPointer^.whead, bValue := FALSE);
+                    PackKvStr(ADR('err'), ADR('group_not_ready'));
+                    PackKvDint(ADR('id'), CommandId);
+                    PackKvBool(ADR('ack'), FALSE);
                     MsgPakInfoWrapup(ResponsePacketPointer^);
                     GVL.reMP_info_ridx.PushHead();
                 ELSE
