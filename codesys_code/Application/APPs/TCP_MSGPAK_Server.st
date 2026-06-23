@@ -1,8 +1,21 @@
 PROGRAM TCP_MSGPAK_Server
 VAR
     // --- Server Configuration ---
+    //
+    // Bind to 0.0.0.0 (any interface). Pre-fix the server was bound to a
+    // specific machine IP (192.168.1.70); when the PLC ran on a host whose
+    // interfaces didn't include that IP, NBS silently failed to listen
+    // while still reporting xServerActive=TRUE -- the symptom was raw
+    // socket connect refused even though the FSM looked healthy and
+    // UiPingCount/AxisGroupSMScans kept climbing. 0.0.0.0 makes the bind
+    // succeed on whatever interface the host has, and the OS routes by
+    // destination IP from the client side. If a specific-IP bind is ever
+    // needed (e.g. firewall pinning), change the literal here -- it's
+    // exposed as a GET_DIAG field too (see DrainHostPackets.st).
+    //
+    // Port: 8125, single-client TCP. See memory ui_plc_single_client_arbitration.
     bEnableServer         : BOOL := TRUE;
-    ipServerAddress       : NBS.IPv4Address := (ipAddress:='192.168.1.70');
+    ipServerAddress       : NBS.IPv4Address := (ipAddress:='0.0.0.0');
     uiServerPort          : UINT := 8125;
 
     // --- The Server Function Block Instance ---

@@ -255,6 +255,20 @@ VAR_GLOBAL
 	   before the socket got reclaimed. Post-fix Send.st now raises
 	   xResetConnection immediately, symmetric with the Read-error path. *)
 	WriteErrorResetCount   : UDINT := 0;
+	(* TCP listen-health diagnostics.
+	   ClientConnectCount: bumped on every rising edge of CLIENT.xActive --
+	   answers "is the server actually accepting connections, or has the
+	   bind silently failed?". Pre-existing UiPingCount only counted PING
+	   packets, so a config-drift scenario where the bind was wrong looked
+	   identical to "client just hasn't pinged yet" (both 0).
+	   ServerLongIdleCount: bumped once per "active-but-no-client window
+	   of NO_CLIENT_TIMEOUT". Fires repeatedly only if a client briefly
+	   connects then drops between idle windows. A sustained value of 0
+	   while UiPingCount=0 means nobody's tried to connect; a growing
+	   ServerLongIdleCount while UiPingCount=0 means the bind is up but
+	   no one's reaching it (firewall, wrong IP, etc). *)
+	ClientConnectCount     : UDINT := 0;
+	ServerLongIdleCount    : UDINT := 0;
 	(* TX-side half-open detection: SendStallDropCount counts head-drops
 	   when xActive=TRUE but Send keeps failing. Pre-fix the ring would
 	   keep churning forever -- one head-drop every ~100ms -- and never

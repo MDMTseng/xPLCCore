@@ -29,18 +29,23 @@ VAR_OUTPUT
     // loses-the-reply (client never sees it, but ConsumeTail already ran)
     // or fails and bumps the stall counter for no reason.
     xResetting              : BOOL;
+    // TRUE while the underlying NBS.TCP_Server has a non-null itfServer
+    // (i.e. the listen-side is up). Surfaced so GET_DIAG can publish
+    // it as `server_active` for external bind-health diagnostics.
+    xServerActive           : BOOL;
 END_VAR
 
 VAR CONSTANT
     MAX_BUFFER_SIZE         : UDINT := 2048;
     IDLE_TIMEOUT            : TIME  := T#7S;   // Reset connection if no bytes received for this duration (handles cable unplug / silent crash). Sized > AxisGroupSM A3 supervisor (5s) so the FSM trips Error first; just after, this reclaims the socket so a new host can reconnect without waiting for a TCP keepalive.
+    NO_CLIENT_TIMEOUT       : TIME  := T#30S;  // Fires ServerLongIdleCount once per active-no-client window. Diagnostic for config-drift detection (bind IP wrong, firewall block); see GVL.ServerLongIdleCount comment.
 END_VAR
 
 VAR
     // --- Server and Connection Function Blocks ---
     fbServer                : NBS.TCP_Server;
     itfServer               : NBS.IServer;
-    xServerActive           : BOOL;
+    // xServerActive moved to VAR_OUTPUT above (caller / GET_DIAG read it).
     xEnableConnection       : BOOL;               // Controls the xEnable input of the TCP_Connection FB.
 
     // --- Data Buffers and Parsing ---
@@ -55,6 +60,8 @@ VAR
     xLastConnectionActive   : BOOL := FALSE;      // Holds CLIENT.xActive from the previous cycle.
     fbResetDelayTimer       : Standard.TON;       // Grace-period delay before tearing down the connection.
     fbIdleWatchdog          : Standard.TON;       // Fires if no bytes are received within IDLE_TIMEOUT (silent disconnect detection).
+    fbNoClientTimer         : Standard.TON;       // Fires once per active-but-no-client window; drives GVL.ServerLongIdleCount.
+    xLongIdleFired          : BOOL := FALSE;      // One-shot latch so fbNoClientTimer.Q only bumps the counter once per window; cleared when a client connects.
 
     iProcessedPacketLen     : DINT;               // Byte length of the packet currently exposed on outputs.
     iParseIdx               : DINT;               // Index of the next unparsed byte in the data buffer.
@@ -96,6 +103,25 @@ xServerActive := itfServer <> 0;
 // --- 3. Detect connection loss or error (triggers reset) ---
 IF (xLastConnectionActive AND NOT CLIENT.xActive) OR CLIENT.xError THEN
     xResetConnection := TRUE;
+END_IF
+
+// --- 3a. Rising-edge: new client connected. Bump the diagnostic counter
+// so external tools can tell "the bind is healthy and someone reached
+// us" from "the FSM looks healthy but nobody's actually connected".
+IF NOT xLastConnectionActive AND CLIENT.xActive THEN
+    GVL.ClientConnectCount := GVL.ClientConnectCount + 1;
+    xLongIdleFired := FALSE;
+END_IF
+
+// --- 3b. Long-idle detector: server bound + listening but no client for
+// NO_CLIENT_TIMEOUT. Bumps once per idle window (xLongIdleFired latches
+// after the first Q until a client connects). Sustained growth while
+// UiPingCount stays 0 means the bind is up but nobody can reach us
+// (firewall, wrong port, IP mismatch on the client side, etc).
+fbNoClientTimer(IN := xServerActive AND NOT CLIENT.xActive AND NOT xLongIdleFired, PT := NO_CLIENT_TIMEOUT);
+IF fbNoClientTimer.Q THEN
+    GVL.ServerLongIdleCount := GVL.ServerLongIdleCount + 1;
+    xLongIdleFired := TRUE;
 END_IF
 
 // External force-reset (TX-side half-open detection lives in the caller;
