@@ -249,6 +249,12 @@ VAR_GLOBAL
 	IdleResetCount         : UDINT := 0;
 	ReadErrorResetCount    : UDINT := 0;
 	ParserErrorResetCount  : UDINT := 0;
+	(* TX Write-error reset: NBS.CLIENT.Write returned non-NO_ERROR.
+	   Pre-fix the error was swallowed -- caller saw Send=FALSE and went
+	   down the TX_STALL_DROP_THRESHOLD escalation path, costing ~500ms
+	   before the socket got reclaimed. Post-fix Send.st now raises
+	   xResetConnection immediately, symmetric with the Read-error path. *)
+	WriteErrorResetCount   : UDINT := 0;
 	(* TX-side half-open detection: SendStallDropCount counts head-drops
 	   when xActive=TRUE but Send keeps failing. Pre-fix the ring would
 	   keep churning forever -- one head-drop every ~100ms -- and never

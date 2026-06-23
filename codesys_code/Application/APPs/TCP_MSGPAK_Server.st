@@ -92,44 +92,50 @@ TMP_PKT_IDX := fbMyServer.PKT_IDX;
 
 DBG_reMP_info_ridx_size:=GVL.reMP_info_ridx.Size();
 IF GVL.reMP_info_ridx.Size()>0 THEN
-	tmp_MsgPakInfo_ptr:=ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetTail()]);
-	// Only consume the slot if the TCP write succeeded. A failure here
-	// means the client went away between queueing and this cycle's write;
-	// leave the packet in the ring so it can retry next cycle once the
-	// connection re-establishes, or be flushed by the reset path if not.
-	IF fbMyServer.Send(BUFFER_PTR := tmp_MsgPakInfo_ptr^.buf, BUFFER_LEN := tmp_MsgPakInfo_ptr^.buf_size) THEN
-		GVL.reMP_info_ridx.ConsumeTail();
-		send_retry_count := 0;
-		// Successful Send proves the TX path is alive; clear the
-		// half-open escalation counter.
-		consecutive_stall_drops := 0;
-	ELSIF NOT fbMyServer.CLIENT.xActive THEN
-		// Connection is down -- retrying forever is pointless. Drop the
-		// backlog so we don't replay stale replies to a future client.
+	IF fbMyServer.xResetting OR NOT fbMyServer.CLIENT.xActive THEN
+		// Socket is dying (reset in flight) or already dead. Continuing
+		// to Send would either succeed-then-lose-the-reply (client gone,
+		// ConsumeTail already ran) or fail and pump the stall counter
+		// for no reason. Flush the backlog so we don't replay stale
+		// replies to whatever client connects next.
 		WHILE GVL.reMP_info_ridx.Size() > 0 DO
 			GVL.reMP_info_ridx.ConsumeTail();
 		END_WHILE;
 		send_retry_count := 0;
 		consecutive_stall_drops := 0;
 	ELSE
-		// xActive=TRUE but Send keeps failing -> TX stall / half-open.
-		// Drop the head packet after SEND_MAX_RETRIES cycles so the ring
-		// doesn't fill up behind a stuck packet. See doc/3-subsystems/ringbuf-bugs.md #7.
-		send_retry_count := send_retry_count + 1;
-		IF send_retry_count >= SEND_MAX_RETRIES THEN
+		tmp_MsgPakInfo_ptr:=ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetTail()]);
+		// Only consume the slot if the TCP write succeeded. A transient
+		// failure (xActive=TRUE, Send=FALSE) means TX-side backpressure;
+		// leave the packet so it retries next cycle or escalates below.
+		IF fbMyServer.Send(BUFFER_PTR := tmp_MsgPakInfo_ptr^.buf, BUFFER_LEN := tmp_MsgPakInfo_ptr^.buf_size) THEN
 			GVL.reMP_info_ridx.ConsumeTail();
-			GVL.SendStallDropCount := GVL.SendStallDropCount + 1;
 			send_retry_count := 0;
-			// TX-side half-open escalation. Each head-drop = ~100ms of
-			// stall. Once we accumulate TX_STALL_DROP_THRESHOLD in a
-			// row, the socket is genuinely dead from our side; raise
-			// xForceReset so the FB tears down the connection and a
-			// new client can reconnect. Without this we'd churn
-			// forever -- single-client slot stays held by a zombie.
-			consecutive_stall_drops := consecutive_stall_drops + 1;
-			IF consecutive_stall_drops >= TX_STALL_DROP_THRESHOLD THEN
-				tx_stall_force_reset := TRUE;
-				consecutive_stall_drops := 0;
+			// Successful Send proves the TX path is alive; clear the
+			// half-open escalation counter.
+			consecutive_stall_drops := 0;
+		ELSE
+			// xActive=TRUE but Send returned FALSE -> TX stall / half-open.
+			// (Hard Write errors now raise xResetConnection inside Send.st,
+			// so by next cycle xResetting will be TRUE and we'll hit the
+			// flush branch above; the stall escalation here only fires on
+			// pure backpressure where Write reported NO_ERROR but the
+			// socket isn't draining.) See doc/3-subsystems/ringbuf-bugs.md #7.
+			send_retry_count := send_retry_count + 1;
+			IF send_retry_count >= SEND_MAX_RETRIES THEN
+				GVL.reMP_info_ridx.ConsumeTail();
+				GVL.SendStallDropCount := GVL.SendStallDropCount + 1;
+				send_retry_count := 0;
+				// TX-side half-open escalation. Each head-drop = ~100ms of
+				// stall. Once we accumulate TX_STALL_DROP_THRESHOLD in a
+				// row, the socket is genuinely dead from our side; raise
+				// xForceReset so the FB tears down the connection and a
+				// new client can reconnect.
+				consecutive_stall_drops := consecutive_stall_drops + 1;
+				IF consecutive_stall_drops >= TX_STALL_DROP_THRESHOLD THEN
+					tx_stall_force_reset := TRUE;
+					consecutive_stall_drops := 0;
+				END_IF;
 			END_IF;
 		END_IF;
 	END_IF;

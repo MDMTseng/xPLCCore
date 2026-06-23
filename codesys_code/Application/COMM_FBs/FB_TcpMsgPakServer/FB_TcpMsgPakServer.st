@@ -22,6 +22,13 @@ VAR_OUTPUT
     PKT_IDX                 : UDINT;              // Increments each time a complete data packet is found. BUFFER_PTR and BUFFER_LEN are valid.
     BUFFER_PTR              : POINTER TO BYTE;    // Pointer to the start of the available data packet. 0 (NULL) if no data is available.
     BUFFER_LEN              : UDINT;              // Length of the available data packet in bytes. 0 if no data is available.
+    // Mirrors internal xResetConnection. Caller (TCP_MSGPAK_Server) reads
+    // this to suppress Send() during the 20ms grace period: once we've
+    // decided to reset, xActive may still be TRUE for a few cycles, and
+    // continuing to Write into an about-to-die socket either succeeds-then-
+    // loses-the-reply (client never sees it, but ConsumeTail already ran)
+    // or fails and bumps the stall counter for no reason.
+    xResetting              : BOOL;
 END_VAR
 
 VAR CONSTANT
@@ -152,62 +159,67 @@ IF iProcessedPacketLen > 0 THEN
     iProcessedPacketLen := 0;
 END_IF
 
-// --- 7. Read incoming data and parse for complete MessagePack packets ---
-IF PKT_ALLOW_NEXT THEN
-    // Read new data into the buffer if the connection is active and space is available.
-    IF CLIENT.xActive AND fbDataBuffer.GetSpace() > 0 THEN
-        eReadErrorID := CLIENT.Read(
-            fbDataBuffer.GetHead(),
-            fbDataBuffer.GetSpace(),
-            udiCount => udiBytesReceived
-        );
-        IF eReadErrorID <> NBS.ERROR.NO_ERROR THEN
-            IF NOT xResetConnection THEN
-                GVL.ReadErrorResetCount := GVL.ReadErrorResetCount + 1;
-            END_IF;
-            xResetConnection := TRUE;
-        ELSIF udiBytesReceived > 0 THEN
-            fbIdleWatchdog(IN := FALSE);  // Feed the watchdog — connection is alive.
-            DBG_recvCount := DBG_recvCount + udiBytesReceived;
-            fbDataBuffer.WriteLength(udiBytesReceived);
-        END_IF
-    END_IF
-
-    // Parse buffered bytes until a complete packet is found.
-    // 2026-06-23 code-review fix: was `< Size() - 1` which made a
-    // single trailing byte sit in the buffer for one extra scan
-    // (FOR bound is `TO Size()-1` so Size()=1 -> FOR 0 TO 0 still runs;
-    // the IF guard prevented entering the FOR at all). `< Size()` now.
-    IF iParseIdx < fbDataBuffer.Size() THEN
-        tmpParserPtr := fbDataBuffer.GetBuffer();
-        FOR iParseIdx := iParseIdx TO fbDataBuffer.Size() - 1 DO
-            pre_stack_size := fbMsgPakParser.ui_level_stack_size;
-            fbMsgPakParser(in_byte := tmpParserPtr[iParseIdx]);
-
-            IF fbMsgPakParser.e_error <> E_MsgPakLevelParser_ERROR.NONE THEN
-                IF NOT xResetConnection THEN
-                    GVL.ParserErrorResetCount := GVL.ParserErrorResetCount + 1;
-                END_IF;
-                xResetConnection := TRUE;
-                EXIT;
-            END_IF
-
-            // Parser returned to root level — a complete packet has been assembled.
-            IF pre_stack_size <> 0 AND fbMsgPakParser.ui_level_stack_size = 0 THEN
-                iProcessedPacketLen := iParseIdx + 1;
-                IF iProcessedPacketLen < 2 THEN
-                    xResetConnection := TRUE;
-                    EXIT;
-                END_IF
-                BUFFER_PTR := tmpParserPtr;
-                BUFFER_LEN := DINT_TO_UDINT(iProcessedPacketLen);
-                PKT_IDX    := PKT_IDX + 1;
-                iParseIdx  := iParseIdx + 1;
-                EXIT;
-            END_IF
-        END_FOR
+// --- 7a. Read incoming data UNCONDITIONALLY (decoupled from PKT_ALLOW_NEXT).
+// Pre-fix this read was gated by PKT_ALLOW_NEXT, so when the upstream ring
+// (minfo_buf, 6 slots) backed up the socket stopped being drained AND the
+// idle watchdog stopped getting fed -> IDLE_TIMEOUT(7s) tripped a spurious
+// reset even though the client was healthy and still sending. Post-fix the
+// socket drains into the 2KB fbDataBuffer regardless of upstream readiness,
+// so the watchdog keeps getting fed as long as bytes arrive. The OS TCP
+// receive buffer + 2KB app buffer give ~3-4s of headroom at 25pkt/s before
+// any backpressure-driven idle reset can fire.
+IF CLIENT.xActive AND fbDataBuffer.GetSpace() > 0 THEN
+    eReadErrorID := CLIENT.Read(
+        fbDataBuffer.GetHead(),
+        fbDataBuffer.GetSpace(),
+        udiCount => udiBytesReceived
+    );
+    IF eReadErrorID <> NBS.ERROR.NO_ERROR THEN
+        IF NOT xResetConnection THEN
+            GVL.ReadErrorResetCount := GVL.ReadErrorResetCount + 1;
+        END_IF;
+        xResetConnection := TRUE;
+    ELSIF udiBytesReceived > 0 THEN
+        fbIdleWatchdog(IN := FALSE);  // Feed the watchdog — connection is alive.
+        DBG_recvCount := DBG_recvCount + udiBytesReceived;
+        fbDataBuffer.WriteLength(udiBytesReceived);
     END_IF
 END_IF
 
-// --- 8. Update previous-cycle connection state ---
+// --- 7b. Parse buffered bytes (gated by PKT_ALLOW_NEXT so we only expose
+// a packet when the caller has ring headroom). Buffer keeps accumulating
+// across cycles while PKT_ALLOW_NEXT=FALSE -- this is the whole point of
+// the read/parse split above.
+IF PKT_ALLOW_NEXT AND iParseIdx < fbDataBuffer.Size() THEN
+    tmpParserPtr := fbDataBuffer.GetBuffer();
+    FOR iParseIdx := iParseIdx TO fbDataBuffer.Size() - 1 DO
+        pre_stack_size := fbMsgPakParser.ui_level_stack_size;
+        fbMsgPakParser(in_byte := tmpParserPtr[iParseIdx]);
+
+        IF fbMsgPakParser.e_error <> E_MsgPakLevelParser_ERROR.NONE THEN
+            IF NOT xResetConnection THEN
+                GVL.ParserErrorResetCount := GVL.ParserErrorResetCount + 1;
+            END_IF;
+            xResetConnection := TRUE;
+            EXIT;
+        END_IF
+
+        // Parser returned to root level — a complete packet has been assembled.
+        IF pre_stack_size <> 0 AND fbMsgPakParser.ui_level_stack_size = 0 THEN
+            iProcessedPacketLen := iParseIdx + 1;
+            IF iProcessedPacketLen < 2 THEN
+                xResetConnection := TRUE;
+                EXIT;
+            END_IF
+            BUFFER_PTR := tmpParserPtr;
+            BUFFER_LEN := DINT_TO_UDINT(iProcessedPacketLen);
+            PKT_IDX    := PKT_IDX + 1;
+            iParseIdx  := iParseIdx + 1;
+            EXIT;
+        END_IF
+    END_FOR
+END_IF
+
+// --- 8. Mirror internal reset flag to the caller and update prev-cycle state.
+xResetting := xResetConnection;
 xLastConnectionActive := CLIENT.xActive;
