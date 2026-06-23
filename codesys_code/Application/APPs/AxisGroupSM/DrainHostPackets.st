@@ -104,9 +104,17 @@ SysDrainIter := 0;
                     PackKvStr(ADR('err'), ADR('unknown_event'));
                 ELSE
                     CommandAck := TRUE;
-                    InputEvent := TO_UDINT(GaEvRaw);
+                    // 2026-06-23 edge-trigger fix: do NOT write InputEvent
+                    // here. Pre-fix, the assignment caused
+                    // UpdateRuntimeAndInputEvent next scan to see
+                    // PreviousInputEvent != InputEvent and re-fire the
+                    // same Transition -- EV_RESET / EV_ERROR via GA_EV
+                    // then triggered xForceReentry twice and SelfReentryCount
+                    // lied about the count. Pass GaEvRaw direct so the
+                    // edge-detect mechanism stays scoped to VisuEventControl
+                    // (its original owner) and TCP events bypass it cleanly.
                     AxisGroupManagerFb.TRANSITION(
-                        eEvent := InputEvent
+                        eEvent := TO_UDINT(GaEvRaw)
                     );
 
                     ResponsePacketPointer^.ele_count := 0;

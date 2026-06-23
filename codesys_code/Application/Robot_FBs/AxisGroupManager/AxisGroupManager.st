@@ -51,7 +51,10 @@ VAR
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
 
-// Cyclic driver: advances in-state logic every scan.
-// External callers post user events via Transition(eEvent);
-// EV_OK / EV_ERROR are posted from inside Update(0) when Done/Error flags latch.
-Update(0);
+// FB body is intentionally empty: nothing calls AxisGroupManagerFb() as
+// a procedure. The cyclic Update(0) tick is invoked explicitly via
+// `AxisGroupManagerFb.Update();` in UpdateAxisGroupState.st so the
+// caller stays in control of WHERE in the scan the FSM advances
+// (between TCP rx drain and motion dispatch). User events come in via
+// `AxisGroupManagerFb.Transition(eEvent);` from VisuEventControl edge
+// detect, DrainHostPackets GA_EV, and internal Update Trip helpers.
