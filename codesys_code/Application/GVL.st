@@ -174,6 +174,15 @@ VAR_GLOBAL
 	UI_HEARTBEAT_TIMEOUT_MS : LINT := 5000;
 	UiHeartbeatStaleCount   : UDINT := 0;
 
+	(* SoftMotion kinematic-group ErrorStop supervisor trips. Bumps each
+	   time the AxisGroupSM supervisor sees GroupReadStatusFb.GroupErrorStop
+	   rise while the FSM was in any non-Error/UnInited state. Useful to
+	   distinguish "FSM went to Error from a healthy state" (real fault)
+	   from "FSM was already in Error" (just stuck). Common cause is the
+	   well-known virtual-axis instant-complete fall-through; on real
+	   motors a non-zero value means a servo/bus fault tripped MC_GroupStop. *)
+	GroupErrorStopTripCount : UDINT := 0;
+
 	(* Post-homing coord-system gate.
 	   Clear on UnInited entry, set by SetCoord0 / SetCoord1 handlers.
 	   ProcessMotionPacket refuses G1 motion (NAK `err='coord_not_configured'`)

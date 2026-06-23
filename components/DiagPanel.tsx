@@ -30,6 +30,7 @@ const COUNTER_KEYS: Array<{ key: string; label: string; warnIfNonZero?: boolean 
   { key: 'parser_err_reset',     label: 'TCP parser-error resets', warnIfNonZero: true },
   { key: 'write_err_reset',      label: 'TCP write-error resets', warnIfNonZero: true },
   { key: 'ui_hb_stale_count',    label: 'UI heartbeat stale events', warnIfNonZero: true },
+  { key: 'group_error_stop_trips', label: 'SoftMotion GroupErrorStop trips', warnIfNonZero: true },
 ];
 
 export const DiagPanel: React.FC<{

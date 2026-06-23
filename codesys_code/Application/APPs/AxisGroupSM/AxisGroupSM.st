@@ -576,6 +576,21 @@ PROGRAM AxisGroupSM
             GVL.LastErrorSource := 'Supervisor:GroupReadStatus';
             GVL.LastErrorID := TO_DWORD(GroupReadStatusFb.ErrorID);
             AxisGroupManagerFb.Transition(E_RobotEvent.EV_ERROR);
+        ELSIF GroupReadStatusFb.GroupErrorStop THEN
+            // SoftMotion kinematic-group ErrorStop. Previously this was
+            // checked only in ProcessMotionPacket (silently NAK'd G1s with
+            // err='group_error_stop'), so a trip mid-flight left the FSM
+            // saying st=Ready while every motion packet was being rejected
+            // -- the host saw a healthy state with all moves silently
+            // failing. Surfacing here drives the FSM to Error so the host's
+            // status path matches reality. ErrorID is usually SMC_NO_ERROR
+            // on virtual-axis trips (the well-known "instant-complete"
+            // fall-through); diagnostic source string distinguishes it
+            // from .Error above.
+            GVL.LastErrorSource := 'Supervisor:GroupErrorStop';
+            GVL.LastErrorID := TO_DWORD(GroupReadStatusFb.ErrorID);
+            GVL.GroupErrorStopTripCount := GVL.GroupErrorStopTripCount + 1;
+            AxisGroupManagerFb.Transition(E_RobotEvent.EV_ERROR);
         ELSIF GroupReadPositionFb.Error THEN
             GVL.LastErrorSource := 'Supervisor:GroupReadPosition';
             GVL.LastErrorID := TO_DWORD(GroupReadPositionFb.ErrorID);

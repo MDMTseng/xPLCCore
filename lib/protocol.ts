@@ -247,6 +247,12 @@ export interface DiagSnapshot {
   write_err_reset: number;
   ui_ping_count: number;
   ui_hb_stale_count: number;
+  // SoftMotion GroupErrorStop supervisor trip counter. Bumped each time
+  // the AxisGroupSM supervisor sees GroupReadStatusFb.GroupErrorStop rise
+  // from a healthy FSM state and drives it to Error -- catches the
+  // "FSM lies that all is well while every G1 NAKs" case the supervisor
+  // previously missed.
+  group_error_stop_trips: number;
   ping_max_gap_ms: number;
   last_ui_ping_ms: number;
   st_chg_event_count: number;
@@ -428,7 +434,7 @@ export const REQUIRED_KEYS = {
     'proto_mismatch_nak', 'idle_reset', 'read_err_reset', 'parser_err_reset',
     'write_err_reset',
     'ui_ping_count', 'ui_hb_stale_count', 'ping_max_gap_ms',
-    'last_ui_ping_ms', 'st_chg_event_count',
+    'last_ui_ping_ms', 'st_chg_event_count', 'group_error_stop_trips',
     'client_connect_count', 'server_long_idle_count', 'server_active', 'bind_addr',
   ],
   GaEvReply: ['st', 'st_str', 'err_src', 'err_id'],
