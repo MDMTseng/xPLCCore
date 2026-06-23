@@ -48,7 +48,10 @@ from tests._raw_plc import (
 
 HERE = Path(__file__).resolve().parent
 SHORT = os.environ.get("MOTION_SOAK_SHORT") == "1"
-DURATION_S = 60.0 if SHORT else 300.0
+# 1hr default (60s smoke). The synchronous saturation pattern is dense
+# enough that 1hr ~= ~6000 G1 + ~12000 M4; long-haul confirms no slow
+# drift in trigger accounting (io_cmd_count, io_trig_count).
+DURATION_S = 60.0 if SHORT else 3600.0
 # Move geometry chosen so each G1 takes ~400ms on virtual axes (F=60
 # + 25mm-class). Slow enough that 12-deep buffer takes ~5s to drain
 # fully -- a producer in synchronous send-wait will see motion buffer
@@ -63,9 +66,15 @@ G1_Z_MIN, G1_Z_MAX = -130.0, -70.0
 # and ~12 in queue, 5s TTL covers a full queue cycle.
 M4_TTL_MIN_MS = 3000
 M4_TTL_MAX_MS = 5000
-# Round-robin: 2 M4 per G1 (K=3). Pushes the FlyEvent ring harder than
-# 1:1 since M4 acks are near-instant while G1 acks are queue-bound.
-PRODUCER_ROUND = 3
+# Round-robin slot mapping: 4 slots = G1 + 3 M4 variants (one of each
+# FlyEventTriggerType). Slot 0=G1, 1=trig20 (MovementProgress),
+# 2=trig120 (Distance), 3=trig130 (Pulse). 3 M4 per G1 keeps the
+# FlyEvent ring under heavy pressure.
+PRODUCER_ROUND = 4
+M4_TRIGS = [20, 120, 130]   # 0=G1, then one slot per trig kind
+# Conveyor synthetic-pulse step: pre-enabled so trig=130 PulseTrigger
+# can fire on its pulse_target. Step=10 gives 10,000 pulses/s at 1ms EC.
+CONVEYOR_STEP = 10
 # Per-packet ack timeout: must exceed worst-case "wait for a motion
 # slot to free" which is ~G1_duration when buffer is at threshold.
 # 6s leaves headroom; the per-ack wait does NOT need to be under
@@ -84,9 +93,11 @@ def _force_virtual():
 
 
 def _cold_reset_then_virtual():
-    """Cold reset to clear sticky SoftMotion state, then force virtual mode.
-    Mirrors the working clean-state pattern verified 2026-06-23."""
-    script = """\
+    """Cold reset to clear sticky SoftMotion state, then force virtual
+    mode AND enable the synthetic conveyor pulse generator so trig=130
+    PulseTrigger has something to fire on. Mirrors the working clean-
+    state pattern verified 2026-06-23."""
+    script = f"""\
 import time
 proj = projects.primary
 oapp = online.create_online_application(proj.active_application)
@@ -100,6 +111,8 @@ except Exception as ex:
     if "is run" not in str(ex): print("start err:", ex)
 time.sleep(1.5)
 oapp.set_prepared_value("GVL.bVirtualMotorsMode_Request", "TRUE")
+oapp.set_prepared_value("GVL.ConveyorPulseSyntheticEnable", "TRUE")
+oapp.set_prepared_value("GVL.ConveyorPulseSyntheticStep", "{CONVEYOR_STEP}")
 oapp.force_prepared_values()
 time.sleep(0.3)
 oapp.logout()
@@ -241,6 +254,15 @@ def _run_soak(s):
     # actually enter the ring waiting for trigger conditions instead of
     # being orphan/instant-expire.
     recent_mvids = []
+    # Conveyor pulse cache for trig=130 (PulseTrigger). Refreshed at
+    # each checkpoint -- exact freshness doesn't matter, the M4 picks a
+    # pulse_target ahead of this sampled value so trigger fires.
+    recent_pulse = 0
+    # Per-trig-kind send tally for the final report.
+    m4_kind_sent = {20: 0, 120: 0, 130: 0}
+    # Baseline IO counters; we'll diff against final + per-checkpoint.
+    pre_diag_io_cmd = pre_diag.get("io_cmd_count", 0)
+    pre_diag_io_trig = pre_diag.get("io_trig_count", 0)
     # Synchronous saturation: send packet, wait for ack, send next. No
     # inter-packet sleep. Alternate G1/M4 round-robin (every Nth pkt is
     # M4 per PRODUCER_M4_EVERY). The PLC's MOTION_BUFFER_THRESHOLD (12)
@@ -252,10 +274,12 @@ def _run_soak(s):
     while time.time() < end_time:
         pkt_id += 1
         pkt_round += 1
-        # Force G1 until we have at least one movement_id captured.
-        # An M4 with motion_id=0 + long TTL just hangs in minfo_buf until
-        # timeout -- no point sending it before any G1 has been ack'd.
-        is_m4 = (pkt_round % PRODUCER_ROUND != 0) and bool(recent_mvids)
+        # Round-robin slot 0 -> G1, slots 1..3 -> M4 trig 20/120/130.
+        # Force G1 until we have a movement_id captured (M4s attach to
+        # one); empty recent_mvids means any M4 sits orphan and just
+        # times out the ACK_TIMEOUT_S wait.
+        slot = pkt_round % PRODUCER_ROUND
+        is_m4 = (slot != 0) and bool(recent_mvids)
         if not is_m4:
             # G1: Delta-reachable Cartesian, small XY box, Z always negative.
             pkt = {
@@ -267,42 +291,51 @@ def _run_soak(s):
             }
             kind = "g1"
         else:
-            # M4: attach to a recent in-flight G1's movement_id so the
-            # fly event actually sits in the FlyEvent ring waiting for
-            # trigger condition (vs orphan motion_id=0 which fires/
-            # expires immediately and never pressures the ring).
-            attach_mvid = rng.choice(recent_mvids) if recent_mvids else 0
-            if rng.random() < 0.5:
-                pkt = {
-                    "type": "M", "cmd": "M4", "id": pkt_id,
-                    "motion_id": attach_mvid, "trig": 20,
-                    "motion_progress": rng.uniform(0.1, 0.9),
-                    "pin_op_seq": m4_pulse_seq(
-                        rng.choice([0x1, 0x4000]),
-                        rng.choice([0, 0x1, 0x4000]),
-                        reset_ms=rng.choice([0, 50]),
-                    ),
-                    "ttl_ms": rng.randint(M4_TTL_MIN_MS, M4_TTL_MAX_MS),
-                    "event_id": pkt_id,
-                }
-            else:
-                pkt = {
-                    "type": "M", "cmd": "M4", "id": pkt_id,
-                    "motion_id": attach_mvid, "trig": 120,
-                    "tx": rng.uniform(-50, 50),
-                    "ty": rng.uniform(-50, 50),
-                    "tz": rng.uniform(-150, -50),
-                    "td": rng.uniform(10, 1e4),
-                    "tin": rng.choice([0, 1]),
-                    "pin_op_seq": m4_pulse_seq(
-                        rng.choice([0x1, 0x100, 0x4000, 0x8001]),
-                        rng.choice([0, 0x1, 0x100, 0x4000, 0x8001]),
-                        reset_ms=rng.choice([0, 50, 200]),
-                    ),
-                    "ttl_ms": rng.randint(M4_TTL_MIN_MS, M4_TTL_MAX_MS),
-                    "event_id": pkt_id,
-                }
+            # M4 attaches to a recent G1's movement_id so the fly event
+            # actually sits in the FlyEvent ring waiting for trigger
+            # condition. trig kind round-robins through the three
+            # FlyEventTriggerType values.
+            attach_mvid = rng.choice(recent_mvids)
+            trig = M4_TRIGS[(slot - 1) % len(M4_TRIGS)]
+            base = {
+                "type": "M", "cmd": "M4", "id": pkt_id,
+                "motion_id": attach_mvid, "trig": trig,
+                "pin_op_seq": m4_pulse_seq(
+                    rng.choice([0x1, 0x100, 0x4000, 0x8001]),
+                    rng.choice([0, 0x1, 0x100, 0x4000, 0x8001]),
+                    reset_ms=rng.choice([0, 50, 200]),
+                ),
+                "ttl_ms": rng.randint(M4_TTL_MIN_MS, M4_TTL_MAX_MS),
+                "event_id": pkt_id,
+            }
+            if trig == 20:
+                # MovementProgressTrigger: fire when motion progress >=
+                # motion_progress. Use a low threshold so most fire well
+                # before TTL.
+                base["motion_progress"] = rng.uniform(0.1, 0.4)
+            elif trig == 120:
+                # DistanceTrigger: fire when arm distance to (tx,ty,tz)
+                # crosses td. Big radius + tin=1 (enter ball) so the
+                # ball is likely already enclosing the arm path, firing
+                # promptly. The exact in/out semantics are tested at
+                # protocol level elsewhere; here we just want triggers
+                # to fire so IoTriggerCount advances.
+                base["tx"] = 0.0
+                base["ty"] = 0.0
+                base["tz"] = rng.uniform(-110.0, -90.0)
+                base["td"] = 500.0     # big ball -> arm always inside
+                base["tin"] = 1
+            else:  # trig == 130, PulseTrigger
+                # Fire when ConveyorPulseRaw >= pulse_target. With the
+                # synthetic generator advancing CONVEYOR_STEP/scan
+                # (=10,000 pulses/s at 1ms EC), set target a few ticks
+                # ahead of "now" so the M4 enters ring, then fires
+                # within the TTL.
+                base["pulse_target"] = recent_pulse + rng.randint(
+                    1000, 5000)
+            pkt = base
             kind = "m4"
+            m4_kind_sent[trig] = m4_kind_sent.get(trig, 0) + 1
 
         send_pack(s, pkt)
         # Long ack timeout: when motion buffer or fly ring is saturated,
@@ -335,11 +368,18 @@ def _run_soak(s):
             diag = _snap_diag(s)
             buf = st.get("motion_buffer_size") or 0
             fly_avail = (diag or {}).get("flyevent_avail", -1)
+            io_cmd = (diag or {}).get("io_cmd_count", 0) - pre_diag_io_cmd
+            io_trig = (diag or {}).get("io_trig_count", 0) - pre_diag_io_trig
             if buf > max_buf: max_buf = buf
             if fly_avail >= 0 and fly_avail < min_fly_avail:
                 min_fly_avail = fly_avail
             arm = _snap_arm_pos(s)
             if arm: arm_pos_history.append(arm)
+            # Refresh conveyor pulse for future trig=130 packets. Cheap
+            # piggyback off the arm-pos probe (same GET_COORD1_DEBUG).
+            arm_full = _snap_with_retry(s, "GET_COORD1_DEBUG", timeout=2.0)
+            if arm_full and arm_full.get("pulse_raw") is not None:
+                recent_pulse = arm_full["pulse_raw"]
             elapsed = now - start
             arm_str = (f"arm=({arm[0]:.1f},{arm[1]:.1f},{arm[2]:.1f})"
                        if arm else "arm=?")
@@ -347,7 +387,8 @@ def _run_soak(s):
                   f"g1={g1_acks}/{g1_sent} m4={m4_acks}/{m4_sent} "
                   f"no_reply={no_reply} buf={buf}/max{max_buf} "
                   f"fly_avail={fly_avail}/min{min_fly_avail} "
-                  f"st={st.get('st')} {arm_str}")
+                  f"io_cmd={io_cmd} io_trig={io_trig} "
+                  f"pulse={recent_pulse} st={st.get('st')} {arm_str}")
 
             # Live invariant: FSM stays Ready (supervisor moves it to Error
             # if GroupErrorStop trips).
@@ -393,14 +434,19 @@ def _run_soak(s):
     elapsed = time.time() - start
     final_done = final_state.get("last_completed_movement_id") or 0
     final_fly_avail = (final_diag or {}).get("flyevent_avail", -1)
+    final_io_cmd = (final_diag or {}).get("io_cmd_count", 0) - pre_diag_io_cmd
+    final_io_trig = (final_diag or {}).get("io_trig_count", 0) - pre_diag_io_trig
     total_sent = g1_sent + m4_sent
     print(f"\n[motion-soak] DONE elapsed={elapsed:.1f}s "
-          f"g1={g1_acks}/{g1_sent} m4={m4_acks}/{m4_sent} "
+          f"g1={g1_acks}/{g1_sent} "
+          f"m4={m4_acks}/{m4_sent} (trig20={m4_kind_sent[20]} "
+          f"trig120={m4_kind_sent[120]} trig130={m4_kind_sent[130]}) "
           f"no_reply={no_reply} max_buf={max_buf} min_fly_avail={min_fly_avail} "
           f"drained_at={drained_at and (drained_at-start):.1f}s")
     print(f"[motion-soak] final st={final_state.get('st')} "
           f"last_completed_movement_id={final_done} "
           f"fly_avail={final_fly_avail}/10 "
+          f"io_cmd_count={final_io_cmd} io_trig_count={final_io_trig} "
           f"trips={final_diag.get('group_error_stop_trips')}")
 
     # Hard invariants
@@ -449,6 +495,25 @@ def _run_soak(s):
     )
     # Sanity: M4s actually got processed (not just NAK'd).
     assert m4_acks > 0, "no M4 fly-event ever acked -- registration path dead?"
+    # IO accounting: every acked M4 enters the FlyEvent ring (which bumps
+    # IoCommandCount). They should match 1:1 modulo INT signedness; allow
+    # a tiny slop (1) for the rare in-flight-at-end case where ack came
+    # back but the registration scan hadn't bumped the counter yet.
+    assert abs(final_io_cmd - m4_acks) <= 1, (
+        f"io_cmd_count {final_io_cmd} != m4_acks {m4_acks} "
+        f"(diff {final_io_cmd - m4_acks}); fly-event registration "
+        f"counter drifted"
+    )
+    # Triggers actually fired: each fired stage of a pin_op_seq bumps
+    # io_trig_count. Most M4s have 2 stages (set + reset_ms reset). At
+    # minimum we expect 30% of acked M4s' worth of stages -- a real
+    # regression where triggers stop firing (TTL expires too soon, or
+    # the trigger condition never matches) drops this to 0.
+    min_expected_trig = int(m4_acks * 0.3)
+    assert final_io_trig >= min_expected_trig, (
+        f"io_trig_count {final_io_trig} below expected {min_expected_trig} "
+        f"(30% of {m4_acks} acked M4s); triggers may not be firing"
+    )
     # Saturation: FlyEvent ring must have hit <= 4 free slots (>=6 in
     # flight). 10 is the hard ceiling but ring turnover under sync send
     # naturally caps a bit lower; <=4 proves the ring was genuinely
