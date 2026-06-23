@@ -68,10 +68,10 @@ IF PendingMoveDoneId <> 0 THEN
     // bump). Only the final give-up below bumps the class-specific
     // PendingMoveDoneDropCount once.
     IF ProbeReplySlot() THEN
-        PackKvStr(ADR('kind'), ADR('event'));
-        PackKvStr(ADR('name'), ADR('MOVE_DONE'));
-        PackKvLint(ADR('movement_id'), TO_LINT(PendingMoveDoneId));
-        PackKvLint(ADR('runtime_ms'), RuntimeMs);
+        MessagePackerFb.PackKvStr(ADR('kind'), ADR('event'));
+        MessagePackerFb.PackKvStr(ADR('name'), ADR('MOVE_DONE'));
+        MessagePackerFb.PackKvLint(ADR('movement_id'), TO_LINT(PendingMoveDoneId));
+        MessagePackerFb.PackKvLint(ADR('runtime_ms'), RuntimeMs);
         CommitReplySlotEvent();
         PrevCompletedMovementId := PendingMoveDoneId;
         PendingMoveDoneId := 0;

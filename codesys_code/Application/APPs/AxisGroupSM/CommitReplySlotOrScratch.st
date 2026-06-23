@@ -9,8 +9,8 @@ END_VAR
 // Appends id+ack KV tail and runs Wrapup either way. On the scratch
 // path (SlotAvailable=FALSE) does NOT PushHead and bumps the generic
 // + class-specific drop counters.
-PackKvDint(ADR('id'), diCmdId);
-PackKvBool(ADR('ack'), bAck);
+MessagePackerFb.PackKvDint(ADR('id'), diCmdId);
+MessagePackerFb.PackKvBool(ADR('ack'), bAck);
 MsgPakInfoWrapup(ResponsePacketPointer^);
 IF SlotAvailable THEN
     GVL.reMP_info_ridx.PushHead();

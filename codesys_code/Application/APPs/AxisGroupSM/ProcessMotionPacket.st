@@ -19,16 +19,17 @@
             ResponsePacketPointer := ADR(GVL.reMP_info_scratch);
         END_IF;
         MsgPakInfoClear(ResponsePacketPointer^);
+        MessagePackerFb.BindSlot(ResponsePacketPointer);  // builder pattern: pack helpers target this slot
 
         IF (GroupReadStatusFb.Error = TRUE OR GroupReadStatusFb.GroupErrorStop) THEN
             // Include an `err` string so the UI's NAK handler gets a readable
             // reason instead of the generic "nak (id=..., cmd=...)" fallback.
             IF (GroupReadStatusFb.GroupErrorStop) THEN
-                PackKvStr(ADR('err'), ADR('group_error_stop'));
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('group_error_stop'));
             ELSE
-                PackKvStr(ADR('err'), ADR('group_read_status_error'));
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('group_read_status_error'));
             END_IF;
-            PackKvLint(ADR('ERROR_CODE'), GroupReadStatusFb.ErrorID);
+            MessagePackerFb.PackKvLint(ADR('ERROR_CODE'), GroupReadStatusFb.ErrorID);
 
             ShouldReturn := TRUE;
             CommandAck := FALSE;
@@ -47,7 +48,7 @@
                 CommandAck := TRUE;
                 GVL.minfo_buf_ridx.ConsumeTail();
             ELSIF (BlockTimeoutMs > 0 AND (RuntimeMs - BlockStartMs) >= BlockTimeoutMs) THEN
-                PackKvStr(ADR('err'), ADR('block_timeout'));
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('block_timeout'));
                 ShouldReturn := TRUE;
                 CommandAck := FALSE;
                 GVL.minfo_buf_ridx.ConsumeTail();
@@ -69,7 +70,7 @@
                 CommandAck := TRUE;
                 GVL.minfo_buf_ridx.ConsumeTail();
             ELSIF (BlockTimeoutMs > 0 AND (RuntimeMs - BlockStartMs) >= BlockTimeoutMs) THEN
-                PackKvStr(ADR('err'), ADR('block_timeout'));
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('block_timeout'));
                 ShouldReturn := TRUE;
                 CommandAck := FALSE;
                 GVL.minfo_buf_ridx.ConsumeTail();
@@ -80,11 +81,11 @@
 
 
             IF DigitalInputPointer <> 0 THEN
-                PackKvDint(ADR('state'), DigitalInputPointer[0] OR SHL(TO_UDINT(DigitalInputPointer[1]), 8));
+                MessagePackerFb.PackKvDint(ADR('state'), DigitalInputPointer[0] OR SHL(TO_UDINT(DigitalInputPointer[1]), 8));
             ELSE
                 // DigitalInputPointer not wired (HECAT_1616 line in TrackDigitalInputFlips is commented out).
                 // Return 0 rather than dereferencing null.
-                PackKvDint(ADR('state'), 0);
+                MessagePackerFb.PackKvDint(ADR('state'), 0);
             END_IF;
 
             ShouldReturn := TRUE;
@@ -92,12 +93,12 @@
             GVL.minfo_buf_ridx.ConsumeTail();
         ELSIF (CommandType = 'READ_LATEST_CMD_LOCATION') THEN	
 
-            PackKvReal(ADR('X'), TO_REAL(MotionPose.c.X));
-            PackKvReal(ADR('Y'), TO_REAL(MotionPose.c.Y));
-            PackKvReal(ADR('Z'), TO_REAL(MotionPose.c.Z));
-            PackKvReal(ADR('A'), TO_REAL(MotionPose.c.A));
-            PackKvReal(ADR('B'), TO_REAL(MotionPose.c.B));
-            PackKvReal(ADR('C'), TO_REAL(MotionPose.c.C));
+            MessagePackerFb.PackKvReal(ADR('X'), TO_REAL(MotionPose.c.X));
+            MessagePackerFb.PackKvReal(ADR('Y'), TO_REAL(MotionPose.c.Y));
+            MessagePackerFb.PackKvReal(ADR('Z'), TO_REAL(MotionPose.c.Z));
+            MessagePackerFb.PackKvReal(ADR('A'), TO_REAL(MotionPose.c.A));
+            MessagePackerFb.PackKvReal(ADR('B'), TO_REAL(MotionPose.c.B));
+            MessagePackerFb.PackKvReal(ADR('C'), TO_REAL(MotionPose.c.C));
 
             ShouldReturn := TRUE;
             CommandAck := TRUE;
@@ -118,7 +119,7 @@
                 IF (GroupWaitFb.CommandAccepted) THEN
                     GVL.minfo_buf_ridx.ConsumeTail();
 
-                    PackKvLint(ADR('movement_id'), TO_LINT(GroupWaitFb.MovementId));
+                    MessagePackerFb.PackKvLint(ADR('movement_id'), TO_LINT(GroupWaitFb.MovementId));
 
                     ShouldReturn := TRUE;
                     CommandAck := TRUE;
@@ -138,7 +139,7 @@
             // shifts the WCS origin under the move and the arm darts.
             // Mirrors COORD1_BIND's own motion-in-flight guard.
             IF MotionBufferSize > 0 THEN
-                PackKvStr(ADR('err'), ADR('motion_in_flight'));
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('motion_in_flight'));
                 GVL.SetCoordBusyNakCount := GVL.SetCoordBusyNakCount + 1;
                 ShouldReturn := TRUE;
                 CommandAck := FALSE;
@@ -161,7 +162,7 @@
         ELSIF (CommandType = 'SetCoord1') THEN
             // Same guard as SetCoord0 -- see comment above.
             IF MotionBufferSize > 0 THEN
-                PackKvStr(ADR('err'), ADR('motion_in_flight'));
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('motion_in_flight'));
                 GVL.SetCoordBusyNakCount := GVL.SetCoordBusyNakCount + 1;
                 ShouldReturn := TRUE;
                 CommandAck := FALSE;
@@ -243,7 +244,7 @@
 				MotionTargetMovementId := TO_ULINT(MessageUnpackerFb.TryReadUINT64('motion_id', TO_ULINT(GroupReadStatusFb.LastAcceptedMovementId)));
 
 
-				PackKvLint(ADR('ev_buf_space'), TO_LINT(FlyEventAvailableCount));
+				MessagePackerFb.PackKvLint(ADR('ev_buf_space'), TO_LINT(FlyEventAvailableCount));
 
 
 
@@ -514,8 +515,8 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
             END_IF;
 
             IF (DupeMatchIdx >= 0) THEN
-                PackKvLint(ADR('movement_id'), TO_LINT(RecentCmdMoveIds[DupeMatchIdx]));
-                PackKvBool(ADR('dedup'), TRUE);
+                MessagePackerFb.PackKvLint(ADR('movement_id'), TO_LINT(RecentCmdMoveIds[DupeMatchIdx]));
+                MessagePackerFb.PackKvBool(ADR('dedup'), TRUE);
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
                 GVL.DupeCommandCount := GVL.DupeCommandCount + 1;
@@ -526,7 +527,7 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
             // UnInited entry. Prevents machine-coord crashes when the UI
             // (or a test script) skips the SetCoord call after homing.
             ELSIF (NOT GVL.CoordSystemConfigured) THEN
-                PackKvStr(ADR('err'), ADR('coord_not_configured'));
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('coord_not_configured'));
                 GVL.CoordNotConfiguredNakCount := GVL.CoordNotConfiguredNakCount + 1;
                 ShouldReturn := TRUE;
                 CommandAck := FALSE;
@@ -539,13 +540,13 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
             // subsequent omit-field G1s rely on.
             G1FrameTag := TO_INT(MessageUnpackerFb.TryReadINT64('frame', 0));
             IF (G1FrameTag <> 0 AND G1FrameTag <> 1) THEN
-                PackKvStr(ADR('err'), ADR('bad_frame'));
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('bad_frame'));
                 GVL.Coord1BadFrameNakCount := GVL.Coord1BadFrameNakCount + 1;
                 ShouldReturn := TRUE;
                 CommandAck := FALSE;
                 GVL.minfo_buf_ridx.ConsumeTail();
             ELSIF (G1FrameTag = 1 AND NOT GVL.Coord1Bound) THEN
-                PackKvStr(ADR('err'), ADR('coord1_not_bound'));
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('coord1_not_bound'));
                 GVL.Coord1NotBoundNakCount := GVL.Coord1NotBoundNakCount + 1;
                 ShouldReturn := TRUE;
                 CommandAck := FALSE;
@@ -615,7 +616,7 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
             IF (MoveLinearAbsoluteFb.CommandAccepted) THEN
                 GVL.minfo_buf_ridx.ConsumeTail();
 
-                PackKvLint(ADR('movement_id'), TO_LINT(MoveLinearAbsoluteFb.MovementId));
+                MessagePackerFb.PackKvLint(ADR('movement_id'), TO_LINT(MoveLinearAbsoluteFb.MovementId));
 
                 // PH#6: record this accepted G1 in the dedupe ring so a
                 // retransmit with the same CommandId hits the cache and
@@ -638,11 +639,11 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
 
         ELSIF (CommandType = 'getDigitalInputFlipCount') THEN
 
-            PackKvDint(ADR('raw'), TO_DINT(DigitalInputBits_Curr));
+            MessagePackerFb.PackKvDint(ADR('raw'), TO_DINT(DigitalInputBits_Curr));
 
-            PackKvArray(ADR('fc'), 16);
+            MessagePackerFb.PackKvArray(ADR('fc'), 16);
             FOR StageLoopIdx := 0 TO 15 DO
-                PackElemDint(TO_DINT(DigitalInputFlipCounts[StageLoopIdx]));
+                MessagePackerFb.PackElemDint(TO_DINT(DigitalInputFlipCounts[StageLoopIdx]));
             END_FOR;
 
             ShouldReturn := TRUE;
@@ -655,9 +656,9 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
         END_IF;
 
         IF ShouldReturn = TRUE AND CommandId <> 0 THEN
-            PackKvDint(ADR('id'), CommandId);
+            MessagePackerFb.PackKvDint(ADR('id'), CommandId);
 
-            PackKvBool(ADR('ack'), CommandAck);
+            MessagePackerFb.PackKvBool(ADR('ack'), CommandAck);
 
             MsgPakInfoWrapup(ResponsePacketPointer^);
             // Only commit the slot if we actually reserved one above.

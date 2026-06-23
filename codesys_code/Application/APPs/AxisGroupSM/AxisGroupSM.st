@@ -661,21 +661,21 @@ PROGRAM AxisGroupSM
     // overflow per the SPSC rationale documented in UpdateMotionProgress.
     IF GVL.Coord1ErrPending THEN
         IF TryAcquireReplySlot(0) THEN
-            PackKvStr(ADR('kind'), ADR('event'));
-            PackKvStr(ADR('name'), ADR('COORD1_ERROR'));
-            PackKvLint(ADR('event_id'), TO_LINT(GVL.Coord1BindEventId));
-            PackKvDint(ADR('ref_pulse'), GVL.Coord1ErrRefPulse);
-            PackKvDint(ADR('exit_pulse'), GVL.Coord1ErrExitPulse);
-            PackKvDint(ADR('pulse_at_err'), GVL.Coord1ErrAtPulse);
-            PackKvLint(ADR('movement_id'), TO_LINT(GVL.Coord1ErrAtMovementId));
-            PackKvReal(ADR('mv_progress'), GVL.Coord1ErrAtProgress);
-            PackKvReal(ADR('arm_x'), TO_REAL(GVL.Coord1ErrAtArmX));
-            PackKvReal(ADR('arm_y'), TO_REAL(GVL.Coord1ErrAtArmY));
-            PackKvReal(ADR('arm_z'), TO_REAL(GVL.Coord1ErrAtArmZ));
-            PackKvReal(ADR('pcs_x'), TO_REAL(GVL.Coord1ErrAtPcsX));
-            PackKvReal(ADR('pcs_y'), TO_REAL(GVL.Coord1ErrAtPcsY));
-            PackKvReal(ADR('pcs_z'), TO_REAL(GVL.Coord1ErrAtPcsZ));
-            PackKvLint(ADR('runtime_ms'), RuntimeMs);
+            MessagePackerFb.PackKvStr(ADR('kind'), ADR('event'));
+            MessagePackerFb.PackKvStr(ADR('name'), ADR('COORD1_ERROR'));
+            MessagePackerFb.PackKvLint(ADR('event_id'), TO_LINT(GVL.Coord1BindEventId));
+            MessagePackerFb.PackKvDint(ADR('ref_pulse'), GVL.Coord1ErrRefPulse);
+            MessagePackerFb.PackKvDint(ADR('exit_pulse'), GVL.Coord1ErrExitPulse);
+            MessagePackerFb.PackKvDint(ADR('pulse_at_err'), GVL.Coord1ErrAtPulse);
+            MessagePackerFb.PackKvLint(ADR('movement_id'), TO_LINT(GVL.Coord1ErrAtMovementId));
+            MessagePackerFb.PackKvReal(ADR('mv_progress'), GVL.Coord1ErrAtProgress);
+            MessagePackerFb.PackKvReal(ADR('arm_x'), TO_REAL(GVL.Coord1ErrAtArmX));
+            MessagePackerFb.PackKvReal(ADR('arm_y'), TO_REAL(GVL.Coord1ErrAtArmY));
+            MessagePackerFb.PackKvReal(ADR('arm_z'), TO_REAL(GVL.Coord1ErrAtArmZ));
+            MessagePackerFb.PackKvReal(ADR('pcs_x'), TO_REAL(GVL.Coord1ErrAtPcsX));
+            MessagePackerFb.PackKvReal(ADR('pcs_y'), TO_REAL(GVL.Coord1ErrAtPcsY));
+            MessagePackerFb.PackKvReal(ADR('pcs_z'), TO_REAL(GVL.Coord1ErrAtPcsZ));
+            MessagePackerFb.PackKvLint(ADR('runtime_ms'), RuntimeMs);
             CommitReplySlotEvent();
             GVL.Coord1ErrPending := FALSE;
             GVL.Coord1ErrCount   := GVL.Coord1ErrCount + 1;

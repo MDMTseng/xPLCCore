@@ -80,9 +80,9 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
         // event was dropped -- the FlyEvent itself is one-shot, not the
         // notification.
         IF TryAcquireReplySlot(ADR(GVL.ReMpDropCount_TriggerEvent)) THEN
-            PackKvDint(ADR('error_code'), TriggerErrorCode);
-            PackKvDint(ADR('src_id'),     pFly^.SourceCommandId);
-            PackKvLint(ADR('event_id'),   TO_LINT(pFly^.EventId));
+            MessagePackerFb.PackKvDint(ADR('error_code'), TriggerErrorCode);
+            MessagePackerFb.PackKvDint(ADR('src_id'),     pFly^.SourceCommandId);
+            MessagePackerFb.PackKvLint(ADR('event_id'),   TO_LINT(pFly^.EventId));
             CommitReplySlotEvent();
         END_IF;
 
@@ -199,7 +199,7 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
                 // UpdateMotionProgress). FlyEvent state is cleared either way
                 // so we don't loop on the same one-shot.
                 IF TryAcquireReplySlot(ADR(GVL.ReMpDropCount_Reply)) THEN
-                    PackKvLint(ADR('event_id'), TO_LINT(pFly^.EventId));
+                    MessagePackerFb.PackKvLint(ADR('event_id'), TO_LINT(pFly^.EventId));
                     CommitReplySlotAck(pFly^.SourceCommandId, TRUE);
                 END_IF;
 

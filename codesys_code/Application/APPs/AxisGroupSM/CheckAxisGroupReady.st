@@ -20,7 +20,7 @@ IF NOT AxisGroupReady THEN
         // gets emitted when there's space; under sustained backpressure
         // the UI will see drop-counter climb and reconcile via timeout.
         IF TryAcquireReplySlot(ADR(GVL.ReMpDropCount_Reply)) THEN
-            PackKvStr(ADR('err'), ADR('group_not_ready'));
+            MessagePackerFb.PackKvStr(ADR('err'), ADR('group_not_ready'));
             CommitReplySlotAck(CommandId, FALSE);
         END_IF;
 

@@ -22,6 +22,7 @@ END_VAR
 IF (GVL.reMP_info_ridx.Space() > 0) THEN
     ResponsePacketPointer := ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetHead()]);
     MsgPakInfoClear(ResponsePacketPointer^);
+    MessagePackerFb.BindSlot(ResponsePacketPointer);  // builder pattern: pack helpers target this slot
     TryAcquireReplySlot := TRUE;
 ELSE
     GVL.ReMpDropCount := GVL.ReMpDropCount + 1;

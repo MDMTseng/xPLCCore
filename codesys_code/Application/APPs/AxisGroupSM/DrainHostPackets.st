@@ -62,8 +62,8 @@ SysDrainIter := 0;
             // minfo_buf ConsumeTail and counter still run so a full reply
             // ring doesn't infinitely re-NAK the same packet.
             IF TryAcquireReplySlot(ADR(GVL.ReMpDropCount_Reply)) THEN
-                PackKvStr(ADR('err'), ADR('protocol_version_mismatch'));
-                PackKvLint(ADR('err_got'), ProtocolVersionGot);
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('protocol_version_mismatch'));
+                MessagePackerFb.PackKvLint(ADR('err_got'), ProtocolVersionGot);
                 CommitReplySlotAck(CommandId, FALSE);
             END_IF;
 
@@ -100,8 +100,8 @@ SysDrainIter := 0;
                     CommandAck := FALSE;
                     GVL.UnknownEventNakCount := GVL.UnknownEventNakCount + 1;
                     ResponsePacketPointer^.ele_count := 0;
-                    PackKvBool(ADR('ack'), FALSE);
-                    PackKvStr(ADR('err'), ADR('unknown_event'));
+                    MessagePackerFb.PackKvBool(ADR('ack'), FALSE);
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('unknown_event'));
                 ELSE
                     CommandAck := TRUE;
                     // 2026-06-23 edge-trigger fix: do NOT write InputEvent
@@ -124,12 +124,12 @@ SysDrainIter := 0;
                     // for any transition triggered via SYS/GA_EV (verified live
                     // 2026-04-24: UnInited->Powering was silently swallowed).
                     StateString := TO_STRING(AxisGroupManagerFb._eState);
-                    PackKvDint(ADR('st'), AxisGroupManagerFb._eState);
-                    PackKvStr(ADR('st_str'), ADR(StateString));
+                    MessagePackerFb.PackKvDint(ADR('st'), AxisGroupManagerFb._eState);
+                    MessagePackerFb.PackKvStr(ADR('st_str'), ADR(StateString));
                     // Error latch: empty string + 0 when no error has been recorded
                     // since the last EV_RESET -> UnInited cycle.
-                    PackKvStr(ADR('err_src'), ADR(GVL.LastErrorSource));
-                    PackKvDint(ADR('err_id'), TO_DINT(GVL.LastErrorID));
+                    MessagePackerFb.PackKvStr(ADR('err_src'), ADR(GVL.LastErrorSource));
+                    MessagePackerFb.PackKvDint(ADR('err_id'), TO_DINT(GVL.LastErrorID));
                 END_IF
             ELSIF (CommandType = 'PING') THEN
                 // A3: UI heartbeat. Stamp last-seen and bump counter; reply with runtime.
@@ -147,8 +147,8 @@ SysDrainIter := 0;
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
                 ResponsePacketPointer^.ele_count := 0;
-                PackKvBool(ADR('pong'), TRUE);
-                PackKvLint(ADR('runtime_ms'), RuntimeMs);
+                MessagePackerFb.PackKvBool(ADR('pong'), TRUE);
+                MessagePackerFb.PackKvLint(ADR('runtime_ms'), RuntimeMs);
             ELSIF (CommandType = 'GET_MACHINE_STATE') THEN
                 // A4: Full-snapshot read for UI reconnect. Doesn't change FSM.
                 ShouldReturn := TRUE;
@@ -168,15 +168,15 @@ SysDrainIter := 0;
                 // last_completed_movement_id (§4 (2) intent reconcile,
                 // per implementation_review_2026-06-22.md §2).
                 ResponsePacketPointer^.ele_count := 0;
-                PackKvDint(ADR('st'), AxisGroupManagerFb._eState);
-                PackKvStr(ADR('st_str'), ADR(StateString));
-                PackKvStr(ADR('err_src'), ADR(GVL.LastErrorSource));
-                PackKvDint(ADR('err_id'), TO_DINT(GVL.LastErrorID));
-                PackKvLint(ADR('motion_buffer_size'), TO_LINT(MotionBufferSize));
-                PackKvLint(ADR('movement_id'), TO_LINT(GroupReadPositionFb.MovementId));
-                PackKvLint(ADR('runtime_ms'), RuntimeMs);
-                PackKvBool(ADR('coord_set'), GVL.CoordSystemConfigured);
-                PackKvDint(ADR('axes_err_mask'), TO_DINT(AxesErrMask));
+                MessagePackerFb.PackKvDint(ADR('st'), AxisGroupManagerFb._eState);
+                MessagePackerFb.PackKvStr(ADR('st_str'), ADR(StateString));
+                MessagePackerFb.PackKvStr(ADR('err_src'), ADR(GVL.LastErrorSource));
+                MessagePackerFb.PackKvDint(ADR('err_id'), TO_DINT(GVL.LastErrorID));
+                MessagePackerFb.PackKvLint(ADR('motion_buffer_size'), TO_LINT(MotionBufferSize));
+                MessagePackerFb.PackKvLint(ADR('movement_id'), TO_LINT(GroupReadPositionFb.MovementId));
+                MessagePackerFb.PackKvLint(ADR('runtime_ms'), RuntimeMs);
+                MessagePackerFb.PackKvBool(ADR('coord_set'), GVL.CoordSystemConfigured);
+                MessagePackerFb.PackKvDint(ADR('axes_err_mask'), TO_DINT(AxesErrMask));
                 // 'axes_state' raw pack (multi-line OR-expression awkward
                 // for PackKvDint signature). +1 manually.
                 ResponsePacketPointer^.ele_count := ResponsePacketPointer^.ele_count + 1;
@@ -190,21 +190,21 @@ SysDrainIter := 0;
                 // uiDriveInterfaceError per axis, latched cyclically into
                 // GVL.LastAxesErrorIDs). Same axis ordering as axes_err_mask
                 // bits 0..3. UINT zero-extends cleanly into DINT for wire.
-                PackKvArray(ADR('axes_err_id'), 4);
-                PackElemDint(UINT_TO_DINT(GVL.LastAxesErrorIDs[0]));
-                PackElemDint(UINT_TO_DINT(GVL.LastAxesErrorIDs[1]));
-                PackElemDint(UINT_TO_DINT(GVL.LastAxesErrorIDs[2]));
-                PackElemDint(UINT_TO_DINT(GVL.LastAxesErrorIDs[3]));
+                MessagePackerFb.PackKvArray(ADR('axes_err_id'), 4);
+                MessagePackerFb.PackElemDint(UINT_TO_DINT(GVL.LastAxesErrorIDs[0]));
+                MessagePackerFb.PackElemDint(UINT_TO_DINT(GVL.LastAxesErrorIDs[1]));
+                MessagePackerFb.PackElemDint(UINT_TO_DINT(GVL.LastAxesErrorIDs[2]));
+                MessagePackerFb.PackElemDint(UINT_TO_DINT(GVL.LastAxesErrorIDs[3]));
                 // axes_labels : self-describing axis order, same indexing as
                 // axes_err_id / axes_err_mask bits 0..3. UI consumes this
                 // instead of hardcoding labels, collapsing the four-site
                 // axes_err_id ordering coupling (PLC pack / GVL / mask bits /
                 // UI labels) down to a single source of truth on the PLC.
-                PackKvArray(ADR('axes_labels'), 4);
-                PackElemStr(ADR('EAxis0 (arm1)'));
-                PackElemStr(ADR('EAxis1 (arm2)'));
-                PackElemStr(ADR('EAxis2 (arm3)'));
-                PackElemStr(ADR('reelpullmotor'));
+                MessagePackerFb.PackKvArray(ADR('axes_labels'), 4);
+                MessagePackerFb.PackElemStr(ADR('EAxis0 (arm1)'));
+                MessagePackerFb.PackElemStr(ADR('EAxis1 (arm2)'));
+                MessagePackerFb.PackElemStr(ADR('EAxis2 (arm3)'));
+                MessagePackerFb.PackElemStr(ADR('reelpullmotor'));
                 // reel_pos : reelpullmotor.fActPosition (REAL, axis-scaled
                 // user units -- mm under current GenericDSP402 scaling).
                 // Driven by decisions_2026-06-22.md §4 (1): renderer uses
@@ -214,26 +214,26 @@ SysDrainIter := 0;
                 // "pitch" semantics live entirely on the host.
                 // Retention across PLC restart scenarios verified by
                 // probe_reel_retain (STOP+START path conclusive).
-                PackKvReal(ADR('reel_pos'), reelpullmotor.fActPosition);
+                MessagePackerFb.PackKvReal(ADR('reel_pos'), reelpullmotor.fActPosition);
                 // scratchpad : nested map carrying the host-owned resume
                 // cursor. PLC pipes the retained Scratchpad_v1 struct out
                 // verbatim; renderer compares boot_epoch vs GVL.BootEpochCount
                 // (renderer also reads BootEpochCount separately?) to detect
                 // staleness. See decisions_2026-06-22.md §4 (2) + B.6.
                 // 7 nested keys.
-                PackKvMap(ADR('scratchpad'), 7);
-                PackPairDint(ADR('schema_version'),     TO_DINT(GVL.ScratchpadV1.SchemaVersion));
-                PackPairDint(ADR('plan_id'),            UDINT_TO_DINT(GVL.ScratchpadV1.PlanId));
-                PackPairDint(ADR('plan_index'),         UDINT_TO_DINT(GVL.ScratchpadV1.PlanIndex));
-                PackPairDint(ADR('intent_kind'),        TO_DINT(GVL.ScratchpadV1.IntentKind));
-                PackPairDint(ADR('intent_movement_id'), UDINT_TO_DINT(GVL.ScratchpadV1.IntentMovementId));
-                PackPairDint(ADR('last_vision_pulse'),  UDINT_TO_DINT(GVL.ScratchpadV1.LastVisionPulse));
-                PackPairDint(ADR('boot_epoch'),         UDINT_TO_DINT(GVL.ScratchpadV1.BootEpoch));
+                MessagePackerFb.PackKvMap(ADR('scratchpad'), 7);
+                MessagePackerFb.PackPairDint(ADR('schema_version'),     TO_DINT(GVL.ScratchpadV1.SchemaVersion));
+                MessagePackerFb.PackPairDint(ADR('plan_id'),            UDINT_TO_DINT(GVL.ScratchpadV1.PlanId));
+                MessagePackerFb.PackPairDint(ADR('plan_index'),         UDINT_TO_DINT(GVL.ScratchpadV1.PlanIndex));
+                MessagePackerFb.PackPairDint(ADR('intent_kind'),        TO_DINT(GVL.ScratchpadV1.IntentKind));
+                MessagePackerFb.PackPairDint(ADR('intent_movement_id'), UDINT_TO_DINT(GVL.ScratchpadV1.IntentMovementId));
+                MessagePackerFb.PackPairDint(ADR('last_vision_pulse'),  UDINT_TO_DINT(GVL.ScratchpadV1.LastVisionPulse));
+                MessagePackerFb.PackPairDint(ADR('boot_epoch'),         UDINT_TO_DINT(GVL.ScratchpadV1.BootEpoch));
                 // boot_epoch_now : current GVL.BootEpochCount, top-level peer
                 // of scratchpad. Renderer compares scratchpad.boot_epoch
                 // (captured at last write) against this; mismatch -> PLC
                 // restarted since the write -> scratchpad stale.
-                PackKvDint(ADR('boot_epoch_now'), UDINT_TO_DINT(GVL.BootEpochCount));
+                MessagePackerFb.PackKvDint(ADR('boot_epoch_now'), UDINT_TO_DINT(GVL.BootEpochCount));
                 // last_completed_movement_id : latched at the MOVE_DONE
                 // emit site (UpdateMotionProgress.st line 81 / 92), so it
                 // tracks "the last move that actually finished and drained
@@ -245,7 +245,7 @@ SysDrainIter := 0;
                 // -- otherwise a move that started but didn't finish is
                 // mis-reported as completed. See
                 // implementation_review_2026-06-22.md §2.
-                PackKvLint(ADR('last_completed_movement_id'), TO_LINT(PrevCompletedMovementId));
+                MessagePackerFb.PackKvLint(ADR('last_completed_movement_id'), TO_LINT(PrevCompletedMovementId));
             ELSIF (CommandType = 'SCRATCHPAD_WRITE') THEN
                 // §4 (2) -- host write path. Take the host-controlled fields
                 // off the request and store them. PLC NEVER interprets any of
@@ -283,8 +283,8 @@ SysDrainIter := 0;
                     CommandAck := FALSE;
                     GVL.ScratchpadPartialNakCount := GVL.ScratchpadPartialNakCount + 1;
                     ResponsePacketPointer^.ele_count := 0;
-                    PackKvBool(ADR('ack'), FALSE);
-                    PackKvStr(ADR('err'), ADR('partial_scratchpad'));
+                    MessagePackerFb.PackKvBool(ADR('ack'), FALSE);
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('partial_scratchpad'));
                 ELSE
                     CommandAck := TRUE;
                     GVL.ScratchpadV1.PlanId           := TO_UDINT(ScratchpadPlanIdRaw);
@@ -295,7 +295,7 @@ SysDrainIter := 0;
                     GVL.ScratchpadV1.SchemaVersion := 1;
                     GVL.ScratchpadV1.BootEpoch := GVL.BootEpochCount;
                     ResponsePacketPointer^.ele_count := 0;
-                    PackKvBool(ADR('ack'), TRUE);
+                    MessagePackerFb.PackKvBool(ADR('ack'), TRUE);
                 END_IF
             ELSIF (CommandType = 'RESET_DBG_INFO') THEN
                 // SYS-side reset: clears comm-stability counters without
@@ -320,7 +320,7 @@ SysDrainIter := 0;
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
                 ResponsePacketPointer^.ele_count := 0;
-                PackKvBool(ADR('reset'), TRUE);
+                MessagePackerFb.PackKvBool(ADR('reset'), TRUE);
             ELSIF (CommandType = 'VERSION') THEN
                 // Build provenance: lets an external tool verify the running
                 // PLC matches a repo commit without IDE assistance. Stamped by
@@ -328,9 +328,9 @@ SysDrainIter := 0;
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
                 ResponsePacketPointer^.ele_count := 0;
-                PackKvStr(ADR('git_sha'), ADR(GVL.BUILD_GIT_SHA));
-                PackKvLint(ADR('build_ts_ms'), GVL.BUILD_TS_MS);
-                PackKvLint(ADR('runtime_ms'), RuntimeMs);
+                MessagePackerFb.PackKvStr(ADR('git_sha'), ADR(GVL.BUILD_GIT_SHA));
+                MessagePackerFb.PackKvLint(ADR('build_ts_ms'), GVL.BUILD_TS_MS);
+                MessagePackerFb.PackKvLint(ADR('runtime_ms'), RuntimeMs);
             ELSIF (CommandType = 'GET_DIAG') THEN
                 // Generic comm/robustness counters dump. UI dashboard polls this
                 // (e.g. once per second) to chart drop/NAK/reset rates and the
@@ -347,33 +347,33 @@ SysDrainIter := 0;
                 //   remp_drop_reply, remp_drop_trig, dupe_cmd,
                 //   io_cmd_count, io_trig_count, flyevent_avail
                 ResponsePacketPointer^.ele_count := 0;
-                PackKvDint(ADR('remp_overflow_drop'), TO_DINT(GVL.ReMpOverflowDropCount));
-                PackKvLint(ADR('runtime_ms'), RuntimeMs);
-                PackKvDint(ADR('sm_scans'), TO_DINT(GVL.AxisGroupSMScans));
-                PackKvDint(ADR('remp_drop'), TO_DINT(GVL.ReMpDropCount));
-                PackKvDint(ADR('overlen_drop'), TO_DINT(GVL.OverlenDropCount));
-                PackKvDint(ADR('send_stall_drop'), TO_DINT(GVL.SendStallDropCount));
-                PackKvDint(ADR('group_not_ready_nak'), TO_DINT(GVL.GroupNotReadyNakCount));
-                PackKvDint(ADR('missing_type_nak'), TO_DINT(GVL.MissingTypeFieldNakCount));
-                PackKvDint(ADR('coord_not_cfg_nak'), TO_DINT(GVL.CoordNotConfiguredNakCount));
-                PackKvDint(ADR('proto_mismatch_nak'), TO_DINT(GVL.ProtocolVersionMismatchCount));
-                PackKvDint(ADR('idle_reset'), TO_DINT(GVL.IdleResetCount));
-                PackKvDint(ADR('read_err_reset'), TO_DINT(GVL.ReadErrorResetCount));
-                PackKvDint(ADR('parser_err_reset'), TO_DINT(GVL.ParserErrorResetCount));
-                PackKvDint(ADR('ui_ping_count'), TO_DINT(GVL.UiPingCount));
-                PackKvDint(ADR('ui_hb_stale_count'), TO_DINT(GVL.UiHeartbeatStaleCount));
-                PackKvDint(ADR('ping_max_gap_ms'), TO_DINT(GVL.PingMaxGapMs));
-                PackKvLint(ADR('last_ui_ping_ms'), GVL.LastUiPingMs);
-                PackKvDint(ADR('st_chg_event_count'), TO_DINT(GVL.StateChangeEventCount));
-                PackKvDint(ADR('self_reentry'), TO_DINT(GVL.SelfReentryCount));
-                PackKvDint(ADR('pending_stchg_drop'), TO_DINT(GVL.PendingStChgDropCount));
-                PackKvDint(ADR('pending_movedone_drop'), TO_DINT(GVL.PendingMoveDoneDropCount));
-                PackKvDint(ADR('remp_drop_reply'), TO_DINT(GVL.ReMpDropCount_Reply));
-                PackKvDint(ADR('remp_drop_trig'), TO_DINT(GVL.ReMpDropCount_TriggerEvent));
-                PackKvDint(ADR('dupe_cmd'), TO_DINT(GVL.DupeCommandCount));
-                PackKvDint(ADR('io_cmd_count'), TO_DINT(IoCommandCount));
-                PackKvDint(ADR('io_trig_count'), TO_DINT(IoTriggerCount));
-                PackKvDint(ADR('flyevent_avail'), TO_DINT(FlyEventAvailableCount));
+                MessagePackerFb.PackKvDint(ADR('remp_overflow_drop'), TO_DINT(GVL.ReMpOverflowDropCount));
+                MessagePackerFb.PackKvLint(ADR('runtime_ms'), RuntimeMs);
+                MessagePackerFb.PackKvDint(ADR('sm_scans'), TO_DINT(GVL.AxisGroupSMScans));
+                MessagePackerFb.PackKvDint(ADR('remp_drop'), TO_DINT(GVL.ReMpDropCount));
+                MessagePackerFb.PackKvDint(ADR('overlen_drop'), TO_DINT(GVL.OverlenDropCount));
+                MessagePackerFb.PackKvDint(ADR('send_stall_drop'), TO_DINT(GVL.SendStallDropCount));
+                MessagePackerFb.PackKvDint(ADR('group_not_ready_nak'), TO_DINT(GVL.GroupNotReadyNakCount));
+                MessagePackerFb.PackKvDint(ADR('missing_type_nak'), TO_DINT(GVL.MissingTypeFieldNakCount));
+                MessagePackerFb.PackKvDint(ADR('coord_not_cfg_nak'), TO_DINT(GVL.CoordNotConfiguredNakCount));
+                MessagePackerFb.PackKvDint(ADR('proto_mismatch_nak'), TO_DINT(GVL.ProtocolVersionMismatchCount));
+                MessagePackerFb.PackKvDint(ADR('idle_reset'), TO_DINT(GVL.IdleResetCount));
+                MessagePackerFb.PackKvDint(ADR('read_err_reset'), TO_DINT(GVL.ReadErrorResetCount));
+                MessagePackerFb.PackKvDint(ADR('parser_err_reset'), TO_DINT(GVL.ParserErrorResetCount));
+                MessagePackerFb.PackKvDint(ADR('ui_ping_count'), TO_DINT(GVL.UiPingCount));
+                MessagePackerFb.PackKvDint(ADR('ui_hb_stale_count'), TO_DINT(GVL.UiHeartbeatStaleCount));
+                MessagePackerFb.PackKvDint(ADR('ping_max_gap_ms'), TO_DINT(GVL.PingMaxGapMs));
+                MessagePackerFb.PackKvLint(ADR('last_ui_ping_ms'), GVL.LastUiPingMs);
+                MessagePackerFb.PackKvDint(ADR('st_chg_event_count'), TO_DINT(GVL.StateChangeEventCount));
+                MessagePackerFb.PackKvDint(ADR('self_reentry'), TO_DINT(GVL.SelfReentryCount));
+                MessagePackerFb.PackKvDint(ADR('pending_stchg_drop'), TO_DINT(GVL.PendingStChgDropCount));
+                MessagePackerFb.PackKvDint(ADR('pending_movedone_drop'), TO_DINT(GVL.PendingMoveDoneDropCount));
+                MessagePackerFb.PackKvDint(ADR('remp_drop_reply'), TO_DINT(GVL.ReMpDropCount_Reply));
+                MessagePackerFb.PackKvDint(ADR('remp_drop_trig'), TO_DINT(GVL.ReMpDropCount_TriggerEvent));
+                MessagePackerFb.PackKvDint(ADR('dupe_cmd'), TO_DINT(GVL.DupeCommandCount));
+                MessagePackerFb.PackKvDint(ADR('io_cmd_count'), TO_DINT(IoCommandCount));
+                MessagePackerFb.PackKvDint(ADR('io_trig_count'), TO_DINT(IoTriggerCount));
+                MessagePackerFb.PackKvDint(ADR('flyevent_avail'), TO_DINT(FlyEventAvailableCount));
             ELSIF (CommandType = 'COORD1_BIND') THEN
                 // Bind the coord1 tracking frame to the conveyor encoder.
                 // Phase 4 step 2: PCS_1 is now driven by MC_TrackConveyorBelt
@@ -446,7 +446,7 @@ SysDrainIter := 0;
                 IF BindReject THEN
                     CommandAck := FALSE;
                     ResponsePacketPointer^.ele_count := 0;
-                    PackKvStr(ADR('err'), ADR(BindRejectReason));
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR(BindRejectReason));
                 ELSE
                     // Commit (Phase 4 step 2): set the calibration + belt
                     // origin first, then flip Coord1Bound TRUE -- the per-
@@ -468,8 +468,8 @@ SysDrainIter := 0;
                     GVL.Coord1BindCount   := GVL.Coord1BindCount + 1;
                     CommandAck := TRUE;
                     ResponsePacketPointer^.ele_count := 0;
-                    PackKvStr(ADR('mode'), ADR('linear'));
-                    PackKvDint(ADR('n'), 0);
+                    MessagePackerFb.PackKvStr(ADR('mode'), ADR('linear'));
+                    MessagePackerFb.PackKvDint(ADR('n'), 0);
                 END_IF
             ELSIF (CommandType = 'COORD1_UNBIND') THEN
                 // Phase 4 step 2: drop GVL.Coord1Bound so the per-scan tcb()
@@ -491,37 +491,37 @@ SysDrainIter := 0;
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
                 ResponsePacketPointer^.ele_count := 0;
-                PackKvBool(ADR('bound'), GVL.Coord1Bound);
+                MessagePackerFb.PackKvBool(ADR('bound'), GVL.Coord1Bound);
                 IF GVL.Coord1CamMode = GVL.COORD1_MODE_TABLE THEN
-                    PackKvStr(ADR('mode'), ADR('table'));
+                    MessagePackerFb.PackKvStr(ADR('mode'), ADR('table'));
                 ELSE
-                    PackKvStr(ADR('mode'), ADR('linear'));
+                    MessagePackerFb.PackKvStr(ADR('mode'), ADR('linear'));
                 END_IF
-                PackKvDint(ADR('cam_n'), TO_DINT(GVL.Coord1CamCount));
+                MessagePackerFb.PackKvDint(ADR('cam_n'), TO_DINT(GVL.Coord1CamCount));
                 IF GVL.Coord1CamCount > 0 THEN
-                    PackKvDint(ADR('cam_first'), GVL.Coord1CamMaster[0]);
+                    MessagePackerFb.PackKvDint(ADR('cam_first'), GVL.Coord1CamMaster[0]);
                 ELSE
-                    PackKvDint(ADR('cam_first'), 0);
+                    MessagePackerFb.PackKvDint(ADR('cam_first'), 0);
                 END_IF
                 IF GVL.Coord1CamCount > 0 THEN
-                    PackKvDint(ADR('cam_last'), GVL.Coord1CamMaster[GVL.Coord1CamCount - 1]);
+                    MessagePackerFb.PackKvDint(ADR('cam_last'), GVL.Coord1CamMaster[GVL.Coord1CamCount - 1]);
                 ELSE
-                    PackKvDint(ADR('cam_last'), 0);
+                    MessagePackerFb.PackKvDint(ADR('cam_last'), 0);
                 END_IF
-                PackKvDint(ADR('pulse_raw'), GVL.ConveyorPulseRaw);
-                PackKvDint(ADR('ref_pulse'), GVL.Coord1RefPulse);
-                PackKvReal(ADR('ref_x'), TO_REAL(GVL.Coord1RefXyz[0]));
-                PackKvReal(ADR('ref_y'), TO_REAL(GVL.Coord1RefXyz[1]));
-                PackKvReal(ADR('ref_z'), TO_REAL(GVL.Coord1RefXyz[2]));
-                PackKvReal(ADR('scale_x'), TO_REAL(GVL.Coord1Scale[0]));
-                PackKvReal(ADR('scale_y'), TO_REAL(GVL.Coord1Scale[1]));
-                PackKvReal(ADR('scale_z'), TO_REAL(GVL.Coord1Scale[2]));
-                PackKvReal(ADR('origin_x'), TO_REAL(GVL.Coord1OriginNow[0]));
-                PackKvReal(ADR('origin_y'), TO_REAL(GVL.Coord1OriginNow[1]));
-                PackKvReal(ADR('origin_z'), TO_REAL(GVL.Coord1OriginNow[2]));
-                PackKvDint(ADR('bind_count'), TO_DINT(GVL.Coord1BindCount));
-                PackKvDint(ADR('bind_busy_nak'), TO_DINT(GVL.Coord1BindBusyNakCount));
-                PackKvDint(ADR('bad_table_nak'), TO_DINT(GVL.Coord1BadTableNakCount));
+                MessagePackerFb.PackKvDint(ADR('pulse_raw'), GVL.ConveyorPulseRaw);
+                MessagePackerFb.PackKvDint(ADR('ref_pulse'), GVL.Coord1RefPulse);
+                MessagePackerFb.PackKvReal(ADR('ref_x'), TO_REAL(GVL.Coord1RefXyz[0]));
+                MessagePackerFb.PackKvReal(ADR('ref_y'), TO_REAL(GVL.Coord1RefXyz[1]));
+                MessagePackerFb.PackKvReal(ADR('ref_z'), TO_REAL(GVL.Coord1RefXyz[2]));
+                MessagePackerFb.PackKvReal(ADR('scale_x'), TO_REAL(GVL.Coord1Scale[0]));
+                MessagePackerFb.PackKvReal(ADR('scale_y'), TO_REAL(GVL.Coord1Scale[1]));
+                MessagePackerFb.PackKvReal(ADR('scale_z'), TO_REAL(GVL.Coord1Scale[2]));
+                MessagePackerFb.PackKvReal(ADR('origin_x'), TO_REAL(GVL.Coord1OriginNow[0]));
+                MessagePackerFb.PackKvReal(ADR('origin_y'), TO_REAL(GVL.Coord1OriginNow[1]));
+                MessagePackerFb.PackKvReal(ADR('origin_z'), TO_REAL(GVL.Coord1OriginNow[2]));
+                MessagePackerFb.PackKvDint(ADR('bind_count'), TO_DINT(GVL.Coord1BindCount));
+                MessagePackerFb.PackKvDint(ADR('bind_busy_nak'), TO_DINT(GVL.Coord1BindBusyNakCount));
+                MessagePackerFb.PackKvDint(ADR('bad_table_nak'), TO_DINT(GVL.Coord1BadTableNakCount));
                 // Phase 4 step 2 kernel-side diagnostic. Two forms:
                 //   kernel_origin_*  = static ConveyorBeltOrigin (what
                 //                      MC_ReadCoordinateTransform reports;
@@ -533,31 +533,31 @@ SysDrainIter := 0;
                 //                      This is the LIVE WCS point that
                 //                      G1 frame=1 Position=(0,0,0) targets.
                 // Cross-check: prediction (origin_*) should equal live_kernel.
-                PackKvReal(ADR('kernel_origin_x'), TO_REAL(Pcs1KernelTransform.X));
-                PackKvReal(ADR('kernel_origin_y'), TO_REAL(Pcs1KernelTransform.Y));
-                PackKvReal(ADR('kernel_origin_z'), TO_REAL(Pcs1KernelTransform.Z));
-                PackKvReal(ADR('live_kernel_origin_x'), TO_REAL(Pcs1KernelTransform.X + ConveyorEncoderAxis.fActPosition));
-                PackKvReal(ADR('live_kernel_origin_y'), TO_REAL(Pcs1KernelTransform.Y));
-                PackKvReal(ADR('live_kernel_origin_z'), TO_REAL(Pcs1KernelTransform.Z));
+                MessagePackerFb.PackKvReal(ADR('kernel_origin_x'), TO_REAL(Pcs1KernelTransform.X));
+                MessagePackerFb.PackKvReal(ADR('kernel_origin_y'), TO_REAL(Pcs1KernelTransform.Y));
+                MessagePackerFb.PackKvReal(ADR('kernel_origin_z'), TO_REAL(Pcs1KernelTransform.Z));
+                MessagePackerFb.PackKvReal(ADR('live_kernel_origin_x'), TO_REAL(Pcs1KernelTransform.X + ConveyorEncoderAxis.fActPosition));
+                MessagePackerFb.PackKvReal(ADR('live_kernel_origin_y'), TO_REAL(Pcs1KernelTransform.Y));
+                MessagePackerFb.PackKvReal(ADR('live_kernel_origin_z'), TO_REAL(Pcs1KernelTransform.Z));
                 // Live arm TCP position (WCS). Folded into GET_COORD1_DEBUG
                 // so the viz tool can sample arm motion via SYS path
                 // without being blocked by the motion FSM gate (which
                 // NAKs all type:M packets after a virtual-axis self-halt).
-                PackKvReal(ADR('arm_x'), TO_REAL(ReadPosition.c.x));
-                PackKvReal(ADR('arm_y'), TO_REAL(ReadPosition.c.y));
-                PackKvReal(ADR('arm_z'), TO_REAL(ReadPosition.c.z));
+                MessagePackerFb.PackKvReal(ADR('arm_x'), TO_REAL(ReadPosition.c.x));
+                MessagePackerFb.PackKvReal(ADR('arm_y'), TO_REAL(ReadPosition.c.y));
+                MessagePackerFb.PackKvReal(ADR('arm_z'), TO_REAL(ReadPosition.c.z));
                 // Phase 4 step 2 probe: SM3 motion progress for the move
                 // currently in flight. With CoordSystem := PCS_1 on a
                 // belt-tracking move, this is the data point we need to
                 // answer "does progress 0->1 mean tracking 0->1".
-                PackKvLint(ADR('mv_id'), TO_LINT(CurrentMovementId));
-                PackKvReal(ADR('mv_progress'), CurrentMovementIdProgress);
+                MessagePackerFb.PackKvLint(ADR('mv_id'), TO_LINT(CurrentMovementId));
+                MessagePackerFb.PackKvReal(ADR('mv_progress'), CurrentMovementIdProgress);
             ELSE
                 // Unknown SYS command -- emit NAK so the TS caller doesn't hang on timeout.
                 ShouldReturn := TRUE;
                 CommandAck := FALSE;
                 ResponsePacketPointer^.ele_count := 0;
-                PackKvStr(ADR('err'), ADR('unknown SYS cmd'));
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('unknown SYS cmd'));
             END_IF;
 
             GVL.minfo_buf_ridx.ConsumeTail();
@@ -577,8 +577,8 @@ SysDrainIter := 0;
             // Drop-newest: skip the NAK entirely if the reply ring is full
             // rather than overwrite a slot the Comm-task consumer is reading.
             IF TryAcquireReplySlot(ADR(GVL.ReMpDropCount_Reply)) THEN
-                PackKvStr(ADR('err'), ADR('missing_type_field'));
-                PackKvStr(ADR('err_got_type'), ADR(PacketType));
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('missing_type_field'));
+                MessagePackerFb.PackKvStr(ADR('err_got_type'), ADR(PacketType));
                 CommitReplySlotAck(CommandId, FALSE);
             END_IF;
 
@@ -598,7 +598,7 @@ SysDrainIter := 0;
             IF NOT AxisGroupReady THEN
                 // Drop-newest: skip the NAK entirely if the reply ring is full.
                 IF TryAcquireReplySlot(ADR(GVL.ReMpDropCount_Reply)) THEN
-                    PackKvStr(ADR('err'), ADR('group_not_ready'));
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('group_not_ready'));
                     CommitReplySlotAck(CommandId, FALSE);
                 END_IF;
 

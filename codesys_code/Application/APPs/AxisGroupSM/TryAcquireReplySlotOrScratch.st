@@ -25,4 +25,5 @@ ELSE
     ResponsePacketPointer := ADR(GVL.reMP_info_scratch);
 END_IF;
 MsgPakInfoClear(ResponsePacketPointer^);
+MessagePackerFb.BindSlot(ResponsePacketPointer);  // builder pattern: pack helpers target this slot (real OR scratch)
 TryAcquireReplySlotOrScratch := SlotAvailable;

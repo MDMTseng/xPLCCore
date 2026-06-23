@@ -75,12 +75,12 @@ END_IF;
 IF (PendingStChgFromState >= 0) THEN
     IF ProbeReplySlot() THEN
         StateString := TO_STRING(AxisGroupManagerFb._eState);
-        PackKvStr(ADR('kind'), ADR('event'));
-        PackKvStr(ADR('name'), ADR('ST_CHG'));
-        PackKvDint(ADR('st'), AxisGroupManagerFb._eState);
-        PackKvStr(ADR('st_str'), ADR(StateString));
-        PackKvDint(ADR('from'), PendingStChgFromState);
-        PackKvLint(ADR('runtime_ms'), RuntimeMs);
+        MessagePackerFb.PackKvStr(ADR('kind'), ADR('event'));
+        MessagePackerFb.PackKvStr(ADR('name'), ADR('ST_CHG'));
+        MessagePackerFb.PackKvDint(ADR('st'), AxisGroupManagerFb._eState);
+        MessagePackerFb.PackKvStr(ADR('st_str'), ADR(StateString));
+        MessagePackerFb.PackKvDint(ADR('from'), PendingStChgFromState);
+        MessagePackerFb.PackKvLint(ADR('runtime_ms'), RuntimeMs);
         CommitReplySlotEvent();
         GVL.StateChangeEventCount := GVL.StateChangeEventCount + 1;
         PendingStChgFromState := -1;
@@ -111,10 +111,10 @@ END_IF;
 IF (GVL.CoordSystemConfigured <> PrevCoordSet) THEN
     // Drop-newest on overflow (see UpdateMotionProgress for rationale).
     IF TryAcquireReplySlot(ADR(GVL.ReMpDropCount_CoordSet)) THEN
-        PackKvStr(ADR('kind'), ADR('event'));
-        PackKvStr(ADR('name'), ADR('COORD_SET'));
-        PackKvBool(ADR('value'), GVL.CoordSystemConfigured);
-        PackKvLint(ADR('runtime_ms'), RuntimeMs);
+        MessagePackerFb.PackKvStr(ADR('kind'), ADR('event'));
+        MessagePackerFb.PackKvStr(ADR('name'), ADR('COORD_SET'));
+        MessagePackerFb.PackKvBool(ADR('value'), GVL.CoordSystemConfigured);
+        MessagePackerFb.PackKvLint(ADR('runtime_ms'), RuntimeMs);
         CommitReplySlotEvent();
     END_IF;
 END_IF;
@@ -128,14 +128,14 @@ PrevCoordSet := GVL.CoordSystemConfigured;
 // than a missing heartbeat tick; ReMpDropCount grows and the seq jumps.
 IF (LastHeartbeatMs = 0) OR (RuntimeMs - LastHeartbeatMs >= HEARTBEAT_INTERVAL_MS) THEN
     IF TryAcquireReplySlot(ADR(GVL.ReMpDropCount_Heartbeat)) THEN
-        PackKvStr(ADR('kind'), ADR('event'));
-        PackKvStr(ADR('name'), ADR('HEARTBEAT'));
-        PackKvLint(ADR('runtime_ms'), RuntimeMs);
-        PackKvLint(ADR('remp_drop_count'), TO_LINT(GVL.ReMpDropCount));
+        MessagePackerFb.PackKvStr(ADR('kind'), ADR('event'));
+        MessagePackerFb.PackKvStr(ADR('name'), ADR('HEARTBEAT'));
+        MessagePackerFb.PackKvLint(ADR('runtime_ms'), RuntimeMs);
+        MessagePackerFb.PackKvLint(ADR('remp_drop_count'), TO_LINT(GVL.ReMpDropCount));
         // Per-type drop breakdown so DiagPanel can tell "lost replies" (real
         // problem) from "lost heartbeat tick" (cosmetic) without polling.
-        PackKvLint(ADR('drops_reply'),  TO_LINT(GVL.ReMpDropCount_Reply));
-        PackKvLint(ADR('drops_events'), TO_LINT(GVL.ReMpDropCount_StChg + GVL.ReMpDropCount_CoordSet + GVL.ReMpDropCount_Heartbeat + GVL.ReMpDropCount_TriggerEvent));
+        MessagePackerFb.PackKvLint(ADR('drops_reply'),  TO_LINT(GVL.ReMpDropCount_Reply));
+        MessagePackerFb.PackKvLint(ADR('drops_events'), TO_LINT(GVL.ReMpDropCount_StChg + GVL.ReMpDropCount_CoordSet + GVL.ReMpDropCount_Heartbeat + GVL.ReMpDropCount_TriggerEvent));
         CommitReplySlotEvent();
     END_IF;
     LastHeartbeatMs := RuntimeMs;
