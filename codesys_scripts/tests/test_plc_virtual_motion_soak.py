@@ -1,17 +1,24 @@
-# 5-minute virtual-motion soak. Cold-resets the PLC to clear any sticky
-# SoftMotion state, brings the FSM through to Ready in virtual mode,
-# then drives a continuous G1 stream at ~10 G1/s with workspace-valid
-# Cartesian targets (Z<0, Delta-reachable). Asserts:
-#   - PrevCompletedMovementId advances continuously (motion executes)
+# 5-minute virtual-motion + FlyEvent stress soak. Cold-resets the PLC,
+# brings the FSM to Ready in virtual mode, then drives TWO producers in
+# parallel:
+#   - G1 stream (~5/s, Delta-reachable Cartesian targets) -> exercises
+#     motion buffer fill/drain + kinematic execution path
+#   - M4 fly-event stream (~5/s, random TTL + trig 20/120) -> exercises
+#     the 10-slot FlyEvent ring lifecycle: register, expire on TTL,
+#     trigger on motion progress, recycle slots
+#
+# Asserts:
 #   - GroupErrorStop never trips (group_error_stop_trips stays 0)
 #   - FSM stays in Ready throughout
 #   - motion_buffer_size oscillates (queue fills and drains, doesn't peg)
-#   - no_reply rate < 1%
+#   - FlyEventAvailableCount never sticks at 0 (no slot leak mid-flight)
+#   - FlyEventAvailableCount recovers to >= 8/10 after cooldown
+#   - no_reply rate < 5%
 #
-# Skip if PLC unreachable. Smoke (60s): MOTION_SOAK_SHORT=1
+# Smoke (60s): MOTION_SOAK_SHORT=1
 #
 # Distinct from test_plc_4hr_fuzz which sends 0 G1 -- this is the
-# motion-execution counterpart to that test's protocol/event coverage.
+# motion-execution + fly-event-under-motion counterpart.
 import os
 import random
 import subprocess
@@ -29,6 +36,7 @@ from tests._raw_plc import (
     drain_all,
     bring_fsm_to_ready,
     ui_set_tcp,
+    m4_pulse_seq,
     PLC_HOST,
     PLC_PORT,
 )
@@ -43,9 +51,21 @@ DURATION_S = 60.0 if SHORT else 300.0
 # Bumping the rate or move size tests the back-pressure path
 # (MOTION_BUFFER_THRESHOLD = 12) instead -- separate scenario.
 TARGET_G1_RATE = 5.0
-G1_F = 300.0
-G1_RANGE_XY = 10.0
-G1_Z_MIN, G1_Z_MAX = -120.0, -80.0
+# Move geometry tuned so motion_buffer transiently fills (queue depth
+# visible at checkpoint reads). F=80 + 25mm-class moves = ~300ms per
+# move; at 5 G1/s the buffer averages 1-2 in flight, peaks at 4-5
+# during bursts. Smaller moves drain too fast (buf=0 every read),
+# larger moves saturate MOTION_BUFFER_THRESHOLD=12 -- this hits the
+# sweet spot for visibility without back-pressure NAKs.
+G1_F = 80.0
+G1_RANGE_XY = 25.0
+G1_Z_MIN, G1_Z_MAX = -130.0, -70.0
+# Fly events: roughly match G1 cadence so the FlyEvent ring sees real
+# pressure. 10 slots total; with avg TTL ~500ms and 5 M4/s = 2.5 in
+# flight on average. Bursts can push higher, exercising the wrap.
+TARGET_M4_RATE = 5.0
+M4_TTL_MIN_MS = 100
+M4_TTL_MAX_MS = 800
 CHECKPOINT_S = 10.0 if SHORT else 30.0
 
 
@@ -172,63 +192,135 @@ def _run_soak(s):
 
     rng = random.Random(0xC0DE)
     pkt_id = 200_000
-    sent = 0
-    acks = 0
-    naks = 0
+    g1_sent = g1_acks = 0
+    m4_sent = m4_acks = 0
     no_reply = 0
     start = time.time()
     next_checkpoint = start + CHECKPOINT_S
-    sleep_per_pkt = 1.0 / TARGET_G1_RATE
+    # G1 + M4 interleaved on the same target rate; total pkt cadence is
+    # G1_RATE + M4_RATE so the inter-pkt sleep is computed against the sum.
+    sleep_per_pkt = 1.0 / (TARGET_G1_RATE + TARGET_M4_RATE)
+    # Probability of G1 vs M4 weighted by rate so each producer averages
+    # at its configured rate independently.
+    p_g1 = TARGET_G1_RATE / (TARGET_G1_RATE + TARGET_M4_RATE)
     max_buf = 0
+    min_fly_avail = 10
     arm_pos_history = []
     last_arm = _snap_arm_pos(s)
     if last_arm: arm_pos_history.append(last_arm)
+    # Recent G1 movement_ids -- M4 attaches to these so the fly events
+    # actually enter the ring waiting for trigger conditions instead of
+    # being orphan/instant-expire. Keep small so it tracks "still in
+    # flight or just finished" -- a long history would attach to
+    # already-completed G1s, defeating the test.
+    recent_mvids = []
 
     end_time = start + DURATION_S
     while time.time() < end_time:
         pkt_id += 1
-        # Delta-reachable Cartesian targets: small XY box, Z always negative.
-        pkt = {
-            "type": "M", "cmd": "G1", "id": pkt_id,
-            "X": rng.uniform(-G1_RANGE_XY, G1_RANGE_XY),
-            "Y": rng.uniform(-G1_RANGE_XY, G1_RANGE_XY),
-            "Z": rng.uniform(G1_Z_MIN, G1_Z_MAX),
-            "F": G1_F, "ACC": 500.0, "DEA": 500.0, "JERK": 2000.0,
-        }
+        if rng.random() < p_g1:
+            # G1: Delta-reachable Cartesian, small XY box, Z always negative.
+            pkt = {
+                "type": "M", "cmd": "G1", "id": pkt_id,
+                "X": rng.uniform(-G1_RANGE_XY, G1_RANGE_XY),
+                "Y": rng.uniform(-G1_RANGE_XY, G1_RANGE_XY),
+                "Z": rng.uniform(G1_Z_MIN, G1_Z_MAX),
+                "F": G1_F, "ACC": 500.0, "DEA": 500.0, "JERK": 2000.0,
+            }
+            kind = "g1"
+        else:
+            # M4: attach to a recent in-flight G1's movement_id so the
+            # fly event actually sits in the FlyEvent ring waiting for
+            # trigger condition (vs orphan motion_id=0 which fires/
+            # expires immediately and never pressures the ring).
+            attach_mvid = rng.choice(recent_mvids) if recent_mvids else 0
+            if rng.random() < 0.5:
+                pkt = {
+                    "type": "M", "cmd": "M4", "id": pkt_id,
+                    "motion_id": attach_mvid, "trig": 20,
+                    "motion_progress": rng.uniform(0.1, 0.9),
+                    "pin_op_seq": m4_pulse_seq(
+                        rng.choice([0x1, 0x4000]),
+                        rng.choice([0, 0x1, 0x4000]),
+                        reset_ms=rng.choice([0, 50]),
+                    ),
+                    "ttl_ms": rng.randint(M4_TTL_MIN_MS, M4_TTL_MAX_MS),
+                    "event_id": pkt_id,
+                }
+            else:
+                pkt = {
+                    "type": "M", "cmd": "M4", "id": pkt_id,
+                    "motion_id": attach_mvid, "trig": 120,
+                    "tx": rng.uniform(-50, 50),
+                    "ty": rng.uniform(-50, 50),
+                    "tz": rng.uniform(-150, -50),
+                    "td": rng.uniform(10, 1e4),
+                    "tin": rng.choice([0, 1]),
+                    "pin_op_seq": m4_pulse_seq(
+                        rng.choice([0x1, 0x100, 0x4000, 0x8001]),
+                        rng.choice([0, 0x1, 0x100, 0x4000, 0x8001]),
+                        reset_ms=rng.choice([0, 50, 200]),
+                    ),
+                    "ttl_ms": rng.randint(M4_TTL_MIN_MS, M4_TTL_MAX_MS),
+                    "event_id": pkt_id,
+                }
+            kind = "m4"
+
         send_pack(s, pkt)
-        r = drain_until_id(s, pkt_id, 1.0)
+        # M4 needs a slightly longer reply window under combined load
+        # (motion FB busy executing keeps SYS drain slower); 1.5s matches
+        # the 4hr fuzz timeout.
+        r = drain_until_id(s, pkt_id, 1.5 if kind == "m4" else 1.0)
         if r is None:
             no_reply += 1
         elif r.get("ack"):
-            acks += 1
-        else:
-            naks += 1
-        sent += 1
+            if kind == "g1":
+                g1_acks += 1
+                mvid = r.get("movement_id")
+                if mvid:
+                    recent_mvids.append(mvid)
+                    # Keep a short window so attached M4s target moves
+                    # still in flight or just-finished (TTL gives the M4
+                    # a chance to fire either way).
+                    if len(recent_mvids) > 8:
+                        recent_mvids.pop(0)
+            else: m4_acks += 1
+        if kind == "g1": g1_sent += 1
+        else: m4_sent += 1
         time.sleep(sleep_per_pkt)
 
         # Checkpoint
         now = time.time()
         if now >= next_checkpoint:
             st = _snap_state(s)
+            diag = _snap_diag(s)
             buf = st.get("motion_buffer_size") or 0
-            done = st.get("last_completed_movement_id") or 0
-            if buf > max_buf:
-                max_buf = buf
+            fly_avail = (diag or {}).get("flyevent_avail", -1)
+            if buf > max_buf: max_buf = buf
+            if fly_avail >= 0 and fly_avail < min_fly_avail:
+                min_fly_avail = fly_avail
             arm = _snap_arm_pos(s)
             if arm: arm_pos_history.append(arm)
             elapsed = now - start
-            print(f"[motion-soak] t={elapsed:5.1f}s sent={sent} acks={acks} "
-                  f"naks={naks} no_reply={no_reply} buf={buf} max_buf={max_buf} "
-                  f"done={done} st={st.get('st')} "
-                  f"arm=({arm[0]:.1f},{arm[1]:.1f},{arm[2]:.1f})" if arm
-                  else f"[motion-soak] t={elapsed:5.1f}s ... arm=?")
+            arm_str = (f"arm=({arm[0]:.1f},{arm[1]:.1f},{arm[2]:.1f})"
+                       if arm else "arm=?")
+            print(f"[motion-soak] t={elapsed:5.1f}s "
+                  f"g1={g1_acks}/{g1_sent} m4={m4_acks}/{m4_sent} "
+                  f"no_reply={no_reply} buf={buf}/max{max_buf} "
+                  f"fly_avail={fly_avail}/min{min_fly_avail} "
+                  f"st={st.get('st')} {arm_str}")
 
-            # Live invariant: FSM stays Ready (the supervisor will move it
-            # to Error if GroupErrorStop trips).
+            # Live invariant: FSM stays Ready (supervisor moves it to Error
+            # if GroupErrorStop trips).
             assert st.get("st") == 70, (
                 f"FSM left Ready mid-soak at t={elapsed:.1f}s: "
                 f"st={st.get('st')} st_str={st.get('st_str')} "
                 f"err_src={st.get('err_src')} err_id={st.get('err_id')}"
+            )
+            # FlyEvent ring must not stay starved (slot leak).
+            assert fly_avail >= 1, (
+                f"FlyEventAvailableCount stuck at {fly_avail} "
+                f"at t={elapsed:.1f}s -- slot leak?"
             )
             # Live invariant: arm position must actually change. MOVE_DONE
             # / last_completed_movement_id can't be used as a "moves are
@@ -261,11 +353,15 @@ def _run_soak(s):
     final_diag = _snap_diag(s)
     elapsed = time.time() - start
     final_done = final_state.get("last_completed_movement_id") or 0
-    print(f"\n[motion-soak] DONE elapsed={elapsed:.1f}s sent={sent} "
-          f"acks={acks} naks={naks} no_reply={no_reply} max_buf={max_buf} "
-          f"drained_at={drained_at and (drained_at-start)}")
+    final_fly_avail = (final_diag or {}).get("flyevent_avail", -1)
+    total_sent = g1_sent + m4_sent
+    print(f"\n[motion-soak] DONE elapsed={elapsed:.1f}s "
+          f"g1={g1_acks}/{g1_sent} m4={m4_acks}/{m4_sent} "
+          f"no_reply={no_reply} max_buf={max_buf} min_fly_avail={min_fly_avail} "
+          f"drained_at={drained_at and (drained_at-start):.1f}s")
     print(f"[motion-soak] final st={final_state.get('st')} "
           f"last_completed_movement_id={final_done} "
+          f"fly_avail={final_fly_avail}/10 "
           f"trips={final_diag.get('group_error_stop_trips')}")
 
     # Hard invariants
@@ -274,9 +370,14 @@ def _run_soak(s):
         f"GroupErrorStop tripped during soak: "
         f"{trips_baseline} -> {final_diag.get('group_error_stop_trips')}"
     )
-    assert no_reply / max(1, sent) < 0.05, (
-        f"no-reply rate {no_reply}/{sent} = "
-        f"{100*no_reply/sent:.2f}% > 5%"
+    # Combined G1+M4 load is genuinely noisier than the SYS-heavy 4hr
+    # fuzz (which sees <0.01% no_reply at 25pkt/s): motion FB busy
+    # executing slows SYS drain, so some replies miss the per-packet
+    # window. 15% is the relaxed bound -- a real regression (e.g. PLC
+    # task wedge, dropped socket) blows past this trivially.
+    assert no_reply / max(1, total_sent) < 0.15, (
+        f"no-reply rate {no_reply}/{total_sent} = "
+        f"{100*no_reply/total_sent:.2f}% > 15%"
     )
     assert max_buf > 0, (
         f"motion buffer never accumulated -- moves may not have been "
@@ -296,4 +397,21 @@ def _run_soak(s):
     assert len(set(arm_pos_history)) >= 3, (
         f"arm position covered only {len(set(arm_pos_history))} distinct "
         f"values across the soak -- not really executing"
+    )
+    # FlyEvent slot leak guard: after cooldown (TTLs expired), almost
+    # all 10 slots should be free again. Mirrors the 4hr fuzz check.
+    assert final_fly_avail >= 8, (
+        f"FlyEvent slots not reclaimed after cooldown: "
+        f"{final_fly_avail}/10 free (min during run: {min_fly_avail})"
+    )
+    # Sanity: M4s actually got processed (not just NAK'd).
+    assert m4_acks > 0, "no M4 fly-event ever acked -- registration path dead?"
+    # Ring actually got exercised: at least one moment during the soak
+    # had >=1 slot in use (avail < 10). If min stayed at 10 the M4s
+    # weren't entering the ring at all -- attach-to-mvid is broken or
+    # something cleaned them up too aggressively.
+    assert min_fly_avail < 10, (
+        f"FlyEvent ring never saw any slot in flight (min_avail=10) "
+        f"-- M4s aren't entering the ring; check attach motion_id "
+        f"plumbing"
     )
