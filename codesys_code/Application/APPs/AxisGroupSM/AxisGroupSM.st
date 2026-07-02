@@ -395,6 +395,11 @@ PROGRAM AxisGroupSM
     // between pin operations (default, legacy) and COORD1_BIND
     // (scheduled track bind at a specific belt pulse).
     M4ActionStr      : STRING(16);
+    // B2c: GroupActualPositionFb.Valid AND NOT .Error, latched once per
+    // scan in UpdateAxisGroupState. Gates DistanceTrigger evaluation in
+    // ProcessFlyEventsAndIo -- a stale/garbage TCP read (e.g. the
+    // (0,0,0) a freshly downloaded app reports) must not fire triggers.
+    ArmPositionValid : BOOL := FALSE;
 
     END_VAR
 (* =========== IMPLEMENTATION =========== *)
@@ -458,6 +463,24 @@ PROGRAM AxisGroupSM
         CoordSystem := SMC_COORD_SYSTEM.PCS_1,
         Execute := GVL.Coord1Bound
     );
+
+    // B2a fix (analysis 1.6): consume trackConveyorBeltFb.Error. Pre-fix
+    // NONE of this FB's outputs were read -- if the kernel refused or
+    // dropped the tracking while Coord1Bound stayed TRUE, every frame=1
+    // G1 kept passing the Coord1Bound gate and targeted a NON-tracking
+    // PCS_1: silent wrong-position motion, invisible even to the
+    // window-exit detector. Supervisor pattern: latch source/ID, close
+    // the frame gate (Coord1Bound), trip EV_ERROR. Clearing Coord1Bound
+    // also drops Execute, so the FB releases and this block self-disarms
+    // (plus the state guard prevents re-latching while in Error).
+    IF trackConveyorBeltFb.Error AND GVL.Coord1Bound
+       AND AxisGroupManagerFb._eState <> E_RobotState.Error
+       AND AxisGroupManagerFb._eState <> E_RobotState.UnInited THEN
+        GVL.LastErrorSource := 'Coord1:TrackConveyorBelt';
+        GVL.LastErrorID     := TO_DWORD(trackConveyorBeltFb.ErrorID);
+        GVL.Coord1Bound     := FALSE;
+        AxisGroupManagerFb.Transition(eEvent := E_RobotEvent.EV_ERROR);
+    END_IF;
 
     // Per-scan Coord1 origin recompute -- DIAGNOSTIC ONLY (Phase 4 step 2).
     // The real PCS_1 origin used by G1 frame=1 motion comes from

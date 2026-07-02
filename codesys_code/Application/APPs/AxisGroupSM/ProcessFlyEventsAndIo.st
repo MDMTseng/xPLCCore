@@ -17,19 +17,37 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
             // squared distance to avoid SQRT on every scan. ReadPosition is
             // refreshed by UpdateAxisGroupState earlier in the same scan
             // (AxisGroupSM.st:346) so it's the actual TCP pose for this tick.
-            DistDx := ReadPosition.c.x - pFly^.TargetPos_X;
-            DistDy := ReadPosition.c.y - pFly^.TargetPos_Y;
-            DistDz := ReadPosition.c.z - pFly^.TargetPos_Z;
-            DistSq := DistDx*DistDx + DistDy*DistDy + DistDz*DistDz;
-            DistThresholdSq := pFly^.TargetDistance * pFly^.TargetDistance;
-            // TriggerInBoundary=TRUE: fire on entering the ball (dist <= radius).
-            // TriggerInBoundary=FALSE: fire on leaving the ball (dist >= radius).
-            IF (pFly^.TriggerInBoundary AND DistSq <= DistThresholdSq)
-               OR (NOT pFly^.TriggerInBoundary AND DistSq >= DistThresholdSq) THEN
-                TriggerActive := ArmFiredTrigger(pFly);
-            ELSIF TickTtl(pFly) THEN
-                TriggerActive := TRUE;
-                TriggerErrorCode := TRIGGER_TIMEOUT_ERR;
+            //
+            // B2c fix (analysis 1.6): gate the distance compare on
+            // ArmPositionValid (GroupActualPositionFb.Valid AND NOT
+            // .Error, latched in UpdateAxisGroupState). A stale/garbage
+            // position read must not fire (or mis-hold) a trigger --
+            // e.g. a freshly downloaded app reads TCP=(0,0,0) until the
+            // first valid cycle (see commit 74a01c2). Deliberately NOT
+            // an EV_ERROR trip: a transient invalid read must not kill
+            // the machine -- we just skip the evaluation those scans.
+            // TTL still decays so a persistently-invalid read ends in
+            // the normal TRIGGER_TIMEOUT_ERR path instead of a stuck slot.
+            IF NOT ArmPositionValid THEN
+                IF TickTtl(pFly) THEN
+                    TriggerActive := TRUE;
+                    TriggerErrorCode := TRIGGER_TIMEOUT_ERR;
+                END_IF;
+            ELSE
+                DistDx := ReadPosition.c.x - pFly^.TargetPos_X;
+                DistDy := ReadPosition.c.y - pFly^.TargetPos_Y;
+                DistDz := ReadPosition.c.z - pFly^.TargetPos_Z;
+                DistSq := DistDx*DistDx + DistDy*DistDy + DistDz*DistDz;
+                DistThresholdSq := pFly^.TargetDistance * pFly^.TargetDistance;
+                // TriggerInBoundary=TRUE: fire on entering the ball (dist <= radius).
+                // TriggerInBoundary=FALSE: fire on leaving the ball (dist >= radius).
+                IF (pFly^.TriggerInBoundary AND DistSq <= DistThresholdSq)
+                   OR (NOT pFly^.TriggerInBoundary AND DistSq >= DistThresholdSq) THEN
+                    TriggerActive := ArmFiredTrigger(pFly);
+                ELSIF TickTtl(pFly) THEN
+                    TriggerActive := TRUE;
+                    TriggerErrorCode := TRIGGER_TIMEOUT_ERR;
+                END_IF;
             END_IF;
 
         FlyEventTriggerType.MovmentProgressTrigger:
@@ -270,6 +288,18 @@ IF (SetCoordTransformFb.Error AND NOT DbgSetCoordSeenError) THEN
     GVL.DBG_SetCoordErrorMs := RuntimeMs;
     GVL.DBG_SetCoordLastErrorID := TO_DWORD(SetCoordTransformFb.ErrorID);
     DbgSetCoordSeenError := TRUE;
+
+    // B2b fix (analysis 1.6): SetCoord0/1 ACK and set
+    // GVL.CoordSystemConfigured BEFORE this FB runs -- pre-fix a later
+    // .Error only landed in the DBG fields, so the G1 gate stayed open
+    // against a transform the kernel never applied (G1s then executed
+    // in whatever frame was active before). Close the gate and surface
+    // the fault via the supervisor pattern. First-seen edge
+    // (DbgSetCoordSeenError) guarantees a single Transition per attempt.
+    GVL.CoordSystemConfigured := FALSE;
+    GVL.LastErrorSource := 'Coord1:SetCoordTransform';
+    GVL.LastErrorID     := TO_DWORD(SetCoordTransformFb.ErrorID);
+    AxisGroupManagerFb.Transition(eEvent := E_RobotEvent.EV_ERROR);
 END_IF;
 
 IF ApplyCoordTransform AND (SetCoordTransformFb.Busy OR SetCoordTransformFb.Done OR SetCoordTransformFb.Error) THEN
