@@ -105,8 +105,13 @@
             GVL.minfo_buf_ridx.ConsumeTail();
 
         ELSIF (CommandType = 'G4') THEN
-            ShouldReturn := TRUE;
-            CommandAck := TRUE;
+            // B1 fix (analysis 1.5, test_plc_refactor_findings_b2): do NOT
+            // set ShouldReturn/CommandAck at branch entry. Pre-fix they were
+            // set here, BEFORE SMC_GroupWait ran -- on CommandAccepted=FALSE
+            // the packet stayed queued but the tail-commit still emitted
+            // ack:TRUE (without movement_id), then every 100ms retry
+            // cooldown re-acked the same id. Mirror the G1 branch: reply
+            // only from the accepted / NAK paths.
             G4HaltTime := MessageUnpackerFb.TryReadREAL('P', - 1);
 
             IF (G4HaltTime > 0) THEN
@@ -127,6 +132,9 @@
                     RetryMotionCommandCooldown := RETRY_COOLDOWN_G4_MS;
                 END_IF;
             ELSE
+                // P <= 0 (or missing): NAK with a reason (R2 spirit --
+                // no bare NAKs).
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('bad_dwell'));
                 GVL.minfo_buf_ridx.ConsumeTail();
 
                 ShouldReturn := TRUE;
