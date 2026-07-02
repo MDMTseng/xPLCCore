@@ -455,22 +455,27 @@ def test_counter_invariants_under_noise_burst(raw_plc_socket):
 
 # -------------------------------------------------- FSM random walk ----
 # Dispatch a random sequence of *valid* GA_EV events. The FSM must remain
-# in the documented enum range (st in {0, 10, 20, 30, 40, 50, 60, 70, 99,
-# 9999}) and st_str must match. A regression that left _eState in an
-# unmapped value would surface here. We reset to UnInited at the end so
-# downstream tests aren't disturbed.
+# in the documented enum range and st_str must match. A regression that
+# left _eState in an unmapped value would surface here. We reset to
+# UnInited at the end so downstream tests aren't disturbed.
 
-# E_RobotState values
+# E_RobotState values (memory: plc_state_numeric_values). 2026-07-03 fix:
+# the labels were shifted one row and Error was listed as 99 -- the real
+# enum value is 990, so any LEGITIMATE Error entry (e.g. a real HOME_GO
+# on switch-less virtual axes fails homing_fb in <100ms and lands in
+# Error, err_src='Homing:homing_fb' -- reproduced live) flunked the
+# "legal enum" assertion. Error IS a documented enum state; the walk's
+# contract is "no garbage states", not "never Error".
 _LEGAL_STATES = {
-    0,    # UnInited
-    10,   # Powering
-    20,   # Powered
-    30,   # GroupEnabling
-    40,   # GroupEnabled
-    50,   # Homing
-    60,   # (reserved/legacy)
+    0,    # pre-init zero before the FSM writes _eState
+    10,   # UnInited
+    20,   # Powering
+    30,   # Powered
+    40,   # GroupEnabling
+    50,   # GroupEnabled
+    60,   # Homing
     70,   # Ready
-    99,   # Error
+    990,  # Error
     9999, # cold-boot sentinel before first enum write
 }
 
