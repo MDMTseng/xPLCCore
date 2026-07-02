@@ -45,10 +45,10 @@
 
 | 發現 | 標準形式 | 判準 |
 |---|---|---|
-| §1.4 InputEvent 二次 fault 吞沒 | 次階段 live 測試（需 conveyor pulse 模擬造出兩次 window-exit） | fault #2 後 FSM 必須離開 Ready；短期以 code review 判準代替：fly-bind fault 路徑改直呼 `Transition(EV_ERROR)`，`InputEvent` 不再被非 Visu 路徑寫入 |
-| §1.5 G4 提早/重複 ACK | 難以 wire 強制 `CommandAccepted=FALSE`；判準=code review + 不變式 | G4 的 `ShouldReturn/CommandAck` 只在 accepted/NAK 分支設；任何 fuzz run 中同一 id 的 reply 數 ≤1（fuzz 報表已可驗） |
-| §1.6 SMC FB `.Error` 未檢查 | code review 判準 | `trackConveyorBeltFb`/`SetCoordTransformFb`/`GroupActualPositionFb` 的 Error 都有消費者：NAK-by-event 或 trip EV_ERROR + 關 gate；COORD1_BIND 的 ack 延後到 TCB 實際 InSync/非 Error |
-| §2.1 Coord1 雙 bind drift | parity 判準 | 重構後兩路徑呼叫同一 `Coord1CommitBind`；SYS 與 fly 路徑對同一組非法輸入（scale=0、buffer>0、re-bind）行為一致（NAK vs reject counter 各自形式，但**判定邏輯同源**） |
+| §1.4 InputEvent 二次 fault 吞沒 | ✅ **B4 done**（`bdc6368`，wire 測試 `test_B4_fly_fault_twice_leaves_ready_both_times`，紅燈基線實證 fault #1 就被前一測試留下的 latch 吞掉） | fault #2 後 FSM 必須離開 Ready ✅（兩輪 fault + EV_RESET 之間，皆到 990）；fly-bind fault 路徑改直呼 `Transition(EV_ERROR)` ✅，`InputEvent` 不再被非 Visu 路徑寫入 ✅ |
+| §1.5 G4 提早/重複 ACK | ✅ **B1 done**（`934b75a`，wire 測試 `test_B1_g4_exactly_one_reply` 守單一回覆不變式；refusal 分支維持 code-review 判準） | G4 的 `ShouldReturn/CommandAck` 只在 accepted/NAK 分支設 ✅；同一 id 的 reply 數 =1 ✅；P<=0 NAK 補 `err='bad_dwell'` |
+| §1.6 SMC FB `.Error` 未檢查 | ✅ **B2 done**（`3f04998`，B2c 正向 wire 測試 `test_B2c_distance_trigger_fires_when_position_valid` 防 over-suppression；B2a/B2b 為 code-review 判準——error 條件無法由 wire 強制） | `trackConveyorBeltFb`→latch+清 Coord1Bound+EV_ERROR ✅；`SetCoordTransformFb`→清 CoordSystemConfigured+latch+EV_ERROR ✅；`GroupActualPositionFb`→`ArmPositionValid` gate DistanceTrigger（不 trip EV_ERROR，TTL 照 decay）✅。**偏離原判準**：COORD1_BIND 的 ack 沒有延後到 TCB InSync——依 batch-2 spec 改為 error consumer + 關 gate（延後 ack 是 wire 語義變更，另案評估） |
+| §2.1 Coord1 雙 bind drift | ✅ **B3 done**（`bdc6368`，parity wire 測試：SYS scale=0/re-bind/busy NAK pins + fly busy/scale=0 → fault path） | 兩路徑呼叫同一 `Coord1CommitBind` ✅；同組非法輸入（scale=0、buffer>0、re-bind）行為同源 ✅；fly bind 補上 buffer>0 refusal，refusal 走 fault path（FSM 離開 Ready、bound=FALSE），非 silent skip ✅；GVL.Coord1* symbol 全保留、per-path counter 留在呼叫點 ✅ |
 | §2.3 session epoch / 重入 scrub | 次階段 | stacked-fault（同態 EV_ERROR×2）後 dedupe ring 已 scrub：reset 回 Ready 後重放舊 id 的 G1 必須執行非 dedupe |
 | §1.7 DI group bounds | 接 IO 前必做；判準 | `group` 超界 → NAK `err='invalid_pin_group'`（接上 HECAT 後補 wire 測試） |
 | MoveLeft 重疊 MemCpy | code review 判準 | 改 `MemMove`（或證明 MEMUtils 前向複製）+ 既有 fuzz 全綠 |
@@ -73,7 +73,18 @@
    probe 實證 trigger 是照規格發火——同時佐證 §3 表 GroupActualPositionFb
    判準的必要性）；fuzz smoke 9/9 全綠（pathological / burst / noise /
    ping-flood / counter invariants / FSM random walk）。
-4. 第二批（結構）與 §3/§4 表的次階段項另排。
+4. ~~第二批（結構）~~ ✅ 2026-07-03 完成（BATCH 2，B1–B4）：新套件
+   `codesys_scripts/tests/test_plc_refactor_findings_b2.py` 8/8 綠
+   （紅燈基線：B3-fly=silent bind 實證、B4=latch 吞 fault 實證；
+   B1/B2c/SYS-pins 依預期即綠）。commits `934b75a`（B1 G4）+
+   `3f04998`（B2 error consumers）+ `bdc6368`（B3+B4 Coord1 統一 +
+   Transition）。部署走 create_coord1_bind_methods → import_all
+   （build 0 error）→ stop_then_install。回歸：R-suite 15/15、
+   W1 5+3skip（skip 為既有 virtual-axis 環境限制）、dedupe/
+   reply-format/fly-events 8/8、fuzz 9/9（fuzz FSM-walk 測試自身的
+   stale enum 表已修：`69bc011`——Error=990 非 99；紅因是既有
+   homing-on-virtual-axes 行為，err_src='Homing:homing_fb'，與
+   batch-2 無關）。§3/§4 表其餘次階段項另排。
 
 ---
 
