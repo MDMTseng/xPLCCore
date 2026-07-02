@@ -65,9 +65,14 @@
 ## 5. 執行順序
 
 1. ~~跑紅燈基線~~ ✅ 已完成，見 §6。
-2. 按 analysis §5 第一批動手，**每修一項→對應 Rn 轉綠→跑 W1+dedupe 回歸→單獨 commit**
-   （commit message 引用 Rn + finding）。
-3. 第一批全綠後跑 30min fuzz smoke 對基線。
+2. ~~第一批修復~~ ✅ 2026-07-03 完成：R1–R11 全部轉綠（15/15，測試零修改），
+   commits `ad82d76`（R10 abort gate）+ `87423d4`（R1–R9/R11 NAK hygiene +
+   ResetDiagCounters）。部署走 stop_then_install，build 0 error。
+3. ~~回歸 + fuzz smoke~~ ✅ W1 recovery / dedupe / reply-format / fly-events 全綠
+   （fly-events outside-boundary 測試本身有順序依賴，已修：`74a01c2`，
+   probe 實證 trigger 是照規格發火——同時佐證 §3 表 GroupActualPositionFb
+   判準的必要性）；fuzz smoke 9/9 全綠（pathological / burst / noise /
+   ping-flood / counter invariants / FSM random walk）。
 4. 第二批（結構）與 §3/§4 表的次階段項另排。
 
 ---
