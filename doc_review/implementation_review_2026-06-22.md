@@ -24,6 +24,8 @@
 | 🟡 | resume 純函式零自動化測試 | 防報廢核心邏輯沒被鎖住，地雷不會被 CI 抓到 |
 | 🔵 註記 | movement_id 型寬 LINT vs DINT；STOP+START→cold_start 範圍；reel→格號需校正 | 長尾 / 需團隊知悉 |
 
+> **2026-07-02 更新**：🔴 與兩個 🟡 已在後續 commits 處理完畢（🔴 修復 + 測試鎖定 + live demo 驗證；renderer 接線以 RecoveryDemoPage 部分落地、CalibPage 整合排入 W4#9）。詳見 [§7 追蹤結果](#7-追蹤結果2026-07-02-複查)。
+
 ---
 
 ## 1. 做得好的部分
@@ -128,3 +130,41 @@ W1 測試（D.12）只覆蓋舊安全契約，**完全沒測新的 resume 純函
 4. 接著才做 §4② 的 CalibPage 整合（§3），讓端到端 resume 真的 live。
 
 §5 三項可併入各自相關 commit 或排次階段，不阻塞上線。
+
+---
+
+## 7. 追蹤結果（2026-07-02 複查）
+
+複查範圍：`d9fc48a`..`2bdb118`（39 commits）。上面各項的處置狀態：
+
+| 原發現 | 狀態 | 對應 commit |
+|---|---|---|
+| 🔴 §2 movement_id 語義地雷 | ✅ **已修** | `43c7090` |
+| 🟡 §3 renderer 未接線 | 🚧 部分（見下） | `eca140e` / `d3000e1` |
+| 🟡 §4 resume 零測試 | ✅ **已修** | `43c7090` / `f04dbb0` |
+| 🔵 §5 LINT vs UDINT 型寬 | ⏳ 未動（如原判可延後） | — |
+
+### §2 修法核對（照 §2.3 三步全做了）
+
+1. **契約釘死**：`writeIntent` docstring 重寫為明確時序契約——「ack *之後*呼叫、傳 ack 回覆裡的 movement_id、絕不傳 last_completed」（`orchestrator/resume.ts:96-124`），並在 `coupling_invariants.md` 加了三站耦合條目（PLC packer / resume 比較 / writeIntent 時機，failure mode = 報廢）。
+2. **PLC 加真欄位**：`GET_MACHINE_STATE` 新增 `last_completed_movement_id`（LINT），來源是 MOVE_DONE emit 點 latch 的 `PrevCompletedMovementId`（現在位於 `DrainHostPackets.st:248`，msgpack 重構後搬過去的）。
+3. **resume.ts 改用之**：比較式換成 `last_completed_movement_id >= intent_movement_id`，附 inline 註解防止未來「簡化」回退（`resume.ts:199-208`）。
+
+**加固（超出原 review 要求）**：
+- `41b9013`：reMP ring 滿到 retry-drop 時**不再推進** `PrevCompletedMovementId`——原本會謊報「未送達的 move 已完成」，讓 resume 跳過 blow-off。修後最壞情況是誤走 blow-off（保守方向正確）。
+- `5786371`：`SCRATCHPAD_WRITE` 缺欄位改 NAK `err='partial_scratchpad'`（原本 TryReadINT64 缺 key 回 0 → 靜默 zero-stomp 還 ack=TRUE）。counter `GVL.ScratchpadPartialNakCount` 生產應恆 0。
+
+### §4 測試核對
+
+- `orchestrator/resume.test.ts`：17 條，覆蓋 reconcile 四種 cold_start 條件 + resume + **明確斷言比較用 last_completed_movement_id 而非 movement_id 的回歸測試**（正是原 bug 的 killer test）+ plan persistence roundtrip。
+- CI gate（`f04dbb0`）：husky pre-push + GitHub Actions 跑 `tsc --noEmit` + vitest + py_compile sweep。本次複查實跑 `npm test`：**26/26 pass**（多出的是 `lib/protocol.test.ts`）。
+
+### §3 現況（唯一還開著的項）
+
+- 新增 **RecoveryDemoPage**（ControlPage 新 tab）：1Hz 輪詢 machine state、plan_id / boot_epoch 對齊徽章、plan 編輯器、write-ahead 動作按鈕——resume.ts 表面已可對 live PLC 端到端操作。
+- `demo_recovery_flow.py`（`d3000e1`）：10 階段 live demo 走完 save plan → G1+writeIntent → reconcile → clear，等於在真線上回歸測試了 §2 修法。
+- **CalibPage.runAllObjects 仍未接**（檔案未動）——刻意排入 W4#9，且 PROJECT.md capability matrix 已如實標「🚧 scaffolding only」。commit 訊息誇大的問題已不存在。
+
+### 結論
+
+§6 建議順序 1-3 全部落地且驗證方式正確（unit test + live demo 雙保險），第 4 步（CalibPage 整合）是規劃中的下一步而非遺漏。本 review 除 §3 的生產整合外**可視為 closed**。
