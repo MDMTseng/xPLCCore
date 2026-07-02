@@ -111,12 +111,22 @@ Reply: `{ack:true, event_id:99, ev_buf_space:<n>}`.
 
 Registration gate (in `ProcessMotionPacket.st`): the packet is only
 queued if `action='coord1_bind' && trig=PulseTrigger &&
-exit_pulse_offset>0`. Otherwise ack'd but silently dropped.
+exit_pulse_offset>0`. Otherwise NAK `flyevent_reject` (silent drop
+removed 2026-07-03, R3).
 
-Rejection paths (all produce `LastErrorSource = 'Coord1:<reason>'` + SM
-Error on bind fire — not at queue time):
-- `rebind_active` — Coord1 already bound when this entry fires
-- `bad_scale` — X is zero, or Y/Z is non-zero
+Fire-time validation (2026-07-03, B3): the bind fires through the same
+`AxisGroupSM.Coord1CommitBind` method as the SYS `COORD1_BIND` handler,
+so both paths reject the identical invalid-input set. Any refusal at
+fire time takes the fault path — `Coord1LatchWindowError` snapshot +
+`LastErrorSource = 'Coord1Fly:<reason>'` + `Transition(EV_ERROR)`
+(direct call, not the `InputEvent` level-latch — B4: the latch swallowed
+every fault after the first) → `COORD1_ERROR` push + state→Error:
+- `rebind_requires_unbind` — Coord1 already bound when this entry fires
+- `coord_bind_busy` — motion buffer non-empty at fire time (the bind
+  would re-anchor PCS_1 under the in-flight move; the SYS path always
+  refused this, the fly path used to silently bind)
+- `belt_scale_x_required` — scale X is zero
+- `belt_direction_not_axis_x` — scale Y/Z non-zero
 
 ---
 
@@ -239,6 +249,8 @@ depends on the failure classification above.
 | PLC | `APPs/AxisGroupSM/AxisGroupSM.st` | window-exit detector, `MC_GroupStop`, `COORD1_ERROR` emit |
 | PLC | `APPs/AxisGroupSM/ProcessMotionPacket.st` | M4 parse, registration gate |
 | PLC | `APPs/AxisGroupSM/ProcessFlyEventsAndIo.st` | bind apply on fire |
+| PLC | `APPs/AxisGroupSM/Coord1CommitBind.st` | shared validation+commit (SYS + fly paths) |
+| PLC | `APPs/AxisGroupSM/Coord1LatchWindowError.st` | shared fault-snapshot latch |
 | Wire | `lib/protocol.ts` | `cmd.M4Bind`, `G1Args.frame`, `Coord1ErrorEvent` |
 | UI | `orchestrator/conveyorPick.ts` | `runConveyorPick` state machine |
 | Test | `codesys_scripts/jobs/templates/probe_flyevent_bind.py` | end-to-end PLC probe (6/6 PASS) |

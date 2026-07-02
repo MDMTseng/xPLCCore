@@ -395,6 +395,9 @@ PROGRAM AxisGroupSM
     // between pin operations (default, legacy) and COORD1_BIND
     // (scheduled track bind at a specific belt pulse).
     M4ActionStr      : STRING(16);
+    // B3: result scratch for the fly-side Coord1CommitBind call in
+    // ProcessFlyEventsAndIo (shares BindRejectReason with the SYS path).
+    BindFlyCommitOk  : BOOL;
     // B2c: GroupActualPositionFb.Valid AND NOT .Error, latched once per
     // scan in UpdateAxisGroupState. Gates DistanceTrigger evaluation in
     // ProcessFlyEventsAndIo -- a stale/garbage TCP read (e.g. the
@@ -657,18 +660,11 @@ PROGRAM AxisGroupSM
        AND GVL.ConveyorPulseRaw > GVL.Coord1ExitPulse
        AND AxisGroupManagerFb._eState <> E_RobotState.Error
        AND AxisGroupManagerFb._eState <> E_RobotState.UnInited THEN
-        GVL.Coord1ErrPending     := TRUE;
-        GVL.Coord1ErrAtMovementId := CurrentMovementId;
-        GVL.Coord1ErrAtProgress  := CurrentMovementIdProgress;
-        GVL.Coord1ErrAtPulse     := GVL.ConveyorPulseRaw;
-        GVL.Coord1ErrAtArmX      := ReadPosition.c.x;
-        GVL.Coord1ErrAtArmY      := ReadPosition.c.y;
-        GVL.Coord1ErrAtArmZ      := ReadPosition.c.z;
-        GVL.Coord1ErrAtPcsX      := Pcs1KernelTransform.X;
-        GVL.Coord1ErrAtPcsY      := Pcs1KernelTransform.Y;
-        GVL.Coord1ErrAtPcsZ      := Pcs1KernelTransform.Z;
-        GVL.Coord1ErrRefPulse    := GVL.Coord1RefPulse;
-        GVL.Coord1ErrExitPulse   := GVL.Coord1ExitPulse;
+        // B3 (analysis 2.1): snapshot latch unified with the fly-bind
+        // fault path -- one Coord1LatchWindowError for every COORD1
+        // fault source. eventId self-assign keeps the bind-time id.
+        Coord1LatchWindowError(eventId := GVL.Coord1BindEventId,
+                               refPulse := GVL.Coord1RefPulse);
         GVL.LastErrorSource      := 'Coord1:window_exit';
         AxisGroupManagerFb.Transition(E_RobotEvent.EV_ERROR);
     END_IF;

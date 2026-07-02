@@ -149,64 +149,56 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
                 // FlyEvent fires (typically via PulseTrigger at a precise
                 // belt pulse). Belt is +X axis only for this phase, so
                 // BindScaleY/Z are required to be 0 and BindScaleX != 0.
-                // If we're already bound, this is a host-side sequencing
-                // bug -> raise EV_ERROR with reason 'rebind_active' so
-                // the operator sees a loud failure instead of a silent
-                // wrong target.
-                IF GVL.Coord1Bound THEN
-                    // Latch the error context using the FlyEvent's own
-                    // bookkeeping data so the host can correlate.
-                    GVL.Coord1ErrPending     := TRUE;
-                    GVL.Coord1ErrAtMovementId := CurrentMovementId;
-                    GVL.Coord1ErrAtProgress  := CurrentMovementIdProgress;
-                    GVL.Coord1ErrAtPulse     := GVL.ConveyorPulseRaw;
-                    GVL.Coord1ErrAtArmX      := ReadPosition.c.x;
-                    GVL.Coord1ErrAtArmY      := ReadPosition.c.y;
-                    GVL.Coord1ErrAtArmZ      := ReadPosition.c.z;
-                    GVL.Coord1ErrAtPcsX      := Pcs1KernelTransform.X;
-                    GVL.Coord1ErrAtPcsY      := Pcs1KernelTransform.Y;
-                    GVL.Coord1ErrAtPcsZ      := Pcs1KernelTransform.Z;
-                    GVL.Coord1ErrRefPulse    := 0;  // bind never happened, no ref
-                    GVL.Coord1ErrExitPulse   := GVL.Coord1ExitPulse;
-                    GVL.Coord1BindEventId    := pFly^.EventId;
-                    InputEvent := E_RobotEvent.EV_ERROR;
-                ELSIF pFly^.BindScaleX = 0.0
-                      OR pFly^.BindScaleY <> 0.0
-                      OR pFly^.BindScaleZ <> 0.0 THEN
-                    // Reject malformed bind -- same SM error path but with
-                    // different latched event context for the host.
-                    GVL.Coord1ErrPending     := TRUE;
-                    GVL.Coord1ErrAtPulse     := GVL.ConveyorPulseRaw;
-                    GVL.Coord1BindEventId    := pFly^.EventId;
-                    InputEvent := E_RobotEvent.EV_ERROR;
+                //
+                // B3 fix (analysis 2.1): validation + commit now live in
+                // Coord1CommitBind -- the SAME method the SYS COORD1_BIND
+                // handler calls -- so the two paths can never drift again.
+                // The fly path thereby GAINS the MotionBufferSize>0
+                // refusal it was missing (a bind firing under queued
+                // motion used to silently re-anchor PCS_1 under the
+                // in-flight move -- exactly the mid-flight frame change
+                // the SYS path refuses). Trigger fire pulse is used as
+                // ref_pulse so the bind anchors at exactly the encoder
+                // value the host scheduled it for (PulseTrigger fires the
+                // same scan ConveyorPulseRaw first crosses the target).
+                //
+                // Non-axial belt (ScaleY/Z != 0) is caller-side because
+                // the method only sees the X component -- mirrors the SYS
+                // handler's own caller-side 'belt_direction_not_axis_x'.
+                IF pFly^.BindScaleY <> 0.0 OR pFly^.BindScaleZ <> 0.0 THEN
+                    BindFlyCommitOk  := FALSE;
+                    BindRejectReason := 'belt_direction_not_axis_x';
                 ELSE
-                    // Trigger fire pulse used as ref_pulse so the bind is
-                    // anchored at exactly the encoder value the host
-                    // scheduled it for. PulseTrigger fires the same scan
-                    // ConveyorPulseRaw first crosses TargetPulseValue, so
-                    // current GVL.ConveyorPulseRaw is the right anchor.
-                    Coord1PulseToMm := 1.0 / pFly^.BindScaleX;
-                    Coord1BeltOriginRef.X := pFly^.BindRefXyzX
-                                             - TO_LREAL(GVL.ConveyorPulseRaw) * Coord1PulseToMm;
-                    Coord1BeltOriginRef.Y := pFly^.BindRefXyzY;
-                    Coord1BeltOriginRef.Z := pFly^.BindRefXyzZ;
-                    Coord1BeltOriginRef.A := 0.0;
-                    Coord1BeltOriginRef.B := 0.0;
-                    Coord1BeltOriginRef.C := 0.0;
-                    GVL.Coord1RefPulse   := GVL.ConveyorPulseRaw;
-                    GVL.Coord1RefXyz[0]  := pFly^.BindRefXyzX;
-                    GVL.Coord1RefXyz[1]  := pFly^.BindRefXyzY;
-                    GVL.Coord1RefXyz[2]  := pFly^.BindRefXyzZ;
-                    GVL.Coord1Scale[0]   := pFly^.BindScaleX;
-                    GVL.Coord1Scale[1]   := 0.0;
-                    GVL.Coord1Scale[2]   := 0.0;
-                    GVL.Coord1ExitPulse  := GVL.ConveyorPulseRaw
-                                           + pFly^.BindExitPulseOffset;
-                    GVL.Coord1BindEventId := pFly^.EventId;
-                    GVL.Coord1CamMode    := GVL.COORD1_MODE_LINEAR;
-                    GVL.Coord1CamCount   := 0;
-                    GVL.Coord1Bound      := TRUE;
+                    BindFlyCommitOk := Coord1CommitBind(
+                        refX            := pFly^.BindRefXyzX,
+                        refY            := pFly^.BindRefXyzY,
+                        refZ            := pFly^.BindRefXyzZ,
+                        scaleX          := pFly^.BindScaleX,
+                        refPulse        := GVL.ConveyorPulseRaw,
+                        exitPulseOffset := pFly^.BindExitPulseOffset,
+                        eventId         := pFly^.EventId,
+                        RejectReason    => BindRejectReason);
+                END_IF;
+
+                IF BindFlyCommitOk THEN
                     GVL.Coord1FlyBindActiveCount := GVL.Coord1FlyBindActiveCount + 1;
+                ELSE
+                    // Fault path: any refusal (rebind while bound, motion
+                    // queued, malformed scale) is a host-side sequencing
+                    // bug -> latch the error context for the COORD1_ERROR
+                    // event push and trip the FSM. B4 fix (analysis 1.4):
+                    // call Transition(EV_ERROR) DIRECTLY -- the old
+                    // `InputEvent := EV_ERROR` level-latch was never reset
+                    // back to EV_NONE, so a second fault after an operator
+                    // GA_EV reset produced no edge and the FSM stayed
+                    // Ready while the arm kept moving. (Same pattern as
+                    // GA_EV and the supervisor; see the 2026-06-23
+                    // edge-trigger fix comment in DrainHostPackets.)
+                    Coord1LatchWindowError(eventId := pFly^.EventId,
+                                           refPulse := 0);
+                    GVL.LastErrorSource := CONCAT('Coord1Fly:', BindRejectReason);
+                    GVL.LastErrorID     := 0;
+                    AxisGroupManagerFb.Transition(eEvent := E_RobotEvent.EV_ERROR);
                 END_IF;
                 GVL.Coord1FlyBindCount := GVL.Coord1FlyBindCount + 1;
                 pFly^.ActionType := FlyEventActType.NOP;

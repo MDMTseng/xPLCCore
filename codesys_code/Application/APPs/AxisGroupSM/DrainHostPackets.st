@@ -12,6 +12,19 @@ VAR
 
     // GA_EV ev field raw read (code review fix #7). Same scope reasoning.
     GaEvRaw : LINT;
+
+    // COORD1_BIND wire-read staging (B3, analysis 2.1). Pre-fix the
+    // handler read straight into GVL.Coord1RefPulse/RefXyz/Scale and
+    // validated afterwards -- a REJECTED bind still stomped the GVL
+    // calibration fields. Stage locally; Coord1CommitBind writes GVL
+    // only on the accept path.
+    BindRefPulseW : DINT;
+    BindRefXW     : LREAL;
+    BindRefYW     : LREAL;
+    BindRefZW     : LREAL;
+    BindScaleXW   : LREAL;
+    BindScaleYW   : LREAL;
+    BindScaleZW   : LREAL;
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
 // Drains GVL.minfo_buf_ridx (host->PLC packet ring). Per-iteration:
@@ -414,37 +427,35 @@ SysDrainIter := 0;
                 // mid-flight, and reject re-bind while already bound
                 // (caller must UNBIND first so the kernel sees a clean
                 // falling edge on the TCB Execute).
+                // B3 fix (analysis 2.1): the shared validation + commit
+                // (busy / rebind / scale-x, then the GVL + belt-origin
+                // writes) moved into Coord1CommitBind -- the SAME method
+                // the FlyEvent coord1_bind action calls -- so the two
+                // bind paths can never drift again. Caller-side checks
+                // below are the wire-shape gates the method can't see
+                // (belt_kind, cam_table, non-axial scale components).
+                // Staging locals (not GVL) also fix a pre-existing wart:
+                // a REJECTED bind used to stomp GVL.Coord1RefXyz/Scale.
                 ShouldReturn := TRUE;
                 BindReject := FALSE;
                 BindRejectReason := '';
 
                 BindKind := MessageUnpackerFb.TryReadString('belt_kind', 'linear');
 
-                IF MotionBufferSize > 0 THEN
-                    BindReject := TRUE;
-                    BindRejectReason := 'coord_bind_busy';
-                    GVL.Coord1BindBusyNakCount := GVL.Coord1BindBusyNakCount + 1;
-                END_IF
-
-                IF NOT BindReject AND BindKind <> 'linear' AND BindKind <> '' THEN
+                IF BindKind <> 'linear' AND BindKind <> '' THEN
                     BindReject := TRUE;
                     BindRejectReason := 'belt_kind_not_yet_supported';
                 END_IF
 
-                IF NOT BindReject AND GVL.Coord1Bound THEN
-                    BindReject := TRUE;
-                    BindRejectReason := 'rebind_requires_unbind';
-                END_IF
-
                 IF NOT BindReject THEN
                     // Read top-level scalars (path-based, defaulting to 0).
-                    GVL.Coord1RefPulse   := TO_DINT(MessageUnpackerFb.TryReadINT64('ref_pulse', 0));
-                    GVL.Coord1RefXyz[0]  := TO_LREAL(MessageUnpackerFb.TryReadREAL('ref_xyz[0]', 0.0));
-                    GVL.Coord1RefXyz[1]  := TO_LREAL(MessageUnpackerFb.TryReadREAL('ref_xyz[1]', 0.0));
-                    GVL.Coord1RefXyz[2]  := TO_LREAL(MessageUnpackerFb.TryReadREAL('ref_xyz[2]', 0.0));
-                    GVL.Coord1Scale[0]   := TO_LREAL(MessageUnpackerFb.TryReadREAL('scale[0]', 0.0));
-                    GVL.Coord1Scale[1]   := TO_LREAL(MessageUnpackerFb.TryReadREAL('scale[1]', 0.0));
-                    GVL.Coord1Scale[2]   := TO_LREAL(MessageUnpackerFb.TryReadREAL('scale[2]', 0.0));
+                    BindRefPulseW := TO_DINT(MessageUnpackerFb.TryReadINT64('ref_pulse', 0));
+                    BindRefXW     := TO_LREAL(MessageUnpackerFb.TryReadREAL('ref_xyz[0]', 0.0));
+                    BindRefYW     := TO_LREAL(MessageUnpackerFb.TryReadREAL('ref_xyz[1]', 0.0));
+                    BindRefZW     := TO_LREAL(MessageUnpackerFb.TryReadREAL('ref_xyz[2]', 0.0));
+                    BindScaleXW   := TO_LREAL(MessageUnpackerFb.TryReadREAL('scale[0]', 0.0));
+                    BindScaleYW   := TO_LREAL(MessageUnpackerFb.TryReadREAL('scale[1]', 0.0));
+                    BindScaleZW   := TO_LREAL(MessageUnpackerFb.TryReadREAL('scale[2]', 0.0));
 
                     // Optional cam_table.master[] probe; Phase 4 step 2
                     // PCS_1 path is linear-only so we treat any cam_table
@@ -458,46 +469,47 @@ SysDrainIter := 0;
                     GVL.Coord1BadTableNakCount := GVL.Coord1BadTableNakCount + 1;
                 END_IF
 
-                // Phase 4 step 2 belt-direction gates: belt must move
-                // along WCS +X (Scale[0] != 0, Scale[1] = Scale[2] = 0).
-                // Non-axial / 2D belt support means a non-zero
-                // ConveyorBeltOrigin.A rotation -- added when needed.
-                IF NOT BindReject AND (GVL.Coord1Scale[1] <> 0.0 OR GVL.Coord1Scale[2] <> 0.0) THEN
+                // Phase 4 step 2 belt-direction gate: belt must move
+                // along WCS +X (Scale[1] = Scale[2] = 0). Non-axial / 2D
+                // belt support means a non-zero ConveyorBeltOrigin.A
+                // rotation -- added when needed. Caller-side because the
+                // shared method only takes the X component (mirrors the
+                // fly path's own caller-side check).
+                IF NOT BindReject AND (BindScaleYW <> 0.0 OR BindScaleZW <> 0.0) THEN
                     BindReject := TRUE;
                     BindRejectReason := 'belt_direction_not_axis_x';
                 END_IF
-                IF NOT BindReject AND GVL.Coord1Scale[0] = 0.0 THEN
-                    BindReject := TRUE;
-                    BindRejectReason := 'belt_scale_x_required';
+
+                IF NOT BindReject THEN
+                    // Shared validation + commit. exitPulseOffset -1 =
+                    // no window check (SYS bind is the dev/test path;
+                    // production binds go via FlyEvent with a budget).
+                    IF Coord1CommitBind(
+                        refX            := BindRefXW,
+                        refY            := BindRefYW,
+                        refZ            := BindRefZW,
+                        scaleX          := BindScaleXW,
+                        refPulse        := BindRefPulseW,
+                        exitPulseOffset := -1,
+                        eventId         := 0,
+                        RejectReason    => BindRejectReason) THEN
+                        GVL.Coord1BindCount := GVL.Coord1BindCount + 1;
+                        CommandAck := TRUE;
+                        ResponsePacketPointer^.ele_count := 0;
+                        MessagePackerFb.PackKvStr(ADR('mode'), ADR('linear'));
+                        MessagePackerFb.PackKvDint(ADR('n'), 0);
+                    ELSE
+                        BindReject := TRUE;
+                        IF BindRejectReason = 'coord_bind_busy' THEN
+                            GVL.Coord1BindBusyNakCount := GVL.Coord1BindBusyNakCount + 1;
+                        END_IF
+                    END_IF
                 END_IF
 
                 IF BindReject THEN
                     CommandAck := FALSE;
                     ResponsePacketPointer^.ele_count := 0;
                     MessagePackerFb.PackKvStr(ADR('err'), ADR(BindRejectReason));
-                ELSE
-                    // Commit (Phase 4 step 2): set the calibration + belt
-                    // origin first, then flip Coord1Bound TRUE -- the per-
-                    // scan tcb() at the top of the next scan picks up the
-                    // rising edge with the new origin already in place.
-                    // (SYS drain runs after the per-scan recompute, so an
-                    // edge fired this scan would use stale data.)
-                    Coord1PulseToMm := 1.0 / GVL.Coord1Scale[0];
-                    Coord1BeltOriginRef.X := GVL.Coord1RefXyz[0] - TO_LREAL(GVL.Coord1RefPulse) * Coord1PulseToMm;
-                    Coord1BeltOriginRef.Y := GVL.Coord1RefXyz[1];
-                    Coord1BeltOriginRef.Z := GVL.Coord1RefXyz[2];
-                    Coord1BeltOriginRef.A := 0.0;
-                    Coord1BeltOriginRef.B := 0.0;
-                    Coord1BeltOriginRef.C := 0.0;
-
-                    GVL.Coord1CamMode     := GVL.COORD1_MODE_LINEAR;
-                    GVL.Coord1CamCount    := 0;
-                    GVL.Coord1Bound       := TRUE;
-                    GVL.Coord1BindCount   := GVL.Coord1BindCount + 1;
-                    CommandAck := TRUE;
-                    ResponsePacketPointer^.ele_count := 0;
-                    MessagePackerFb.PackKvStr(ADR('mode'), ADR('linear'));
-                    MessagePackerFb.PackKvDint(ADR('n'), 0);
                 END_IF
             ELSIF (CommandType = 'COORD1_UNBIND') THEN
                 // Phase 4 step 2: drop GVL.Coord1Bound so the per-scan tcb()
