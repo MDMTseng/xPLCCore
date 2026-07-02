@@ -216,6 +216,19 @@ VAR_GLOBAL
 	   landed. NAK these instead so a malformed GA_EV is observable. *)
 	UnknownEventNakCount : UDINT := 0;
 
+	(* R2/R3/R4/R5/R11 fixes (test_plc_refactor_findings): every rejected
+	   packet must NAK-or-count. UnknownCmdNakCount = M packet whose cmd
+	   matched no dispatcher branch (used to NAK bare, no err/counter).
+	   FlyEventRejectNakCount = M4 / WAIT_FOR_TRIGGER registration-gate
+	   refusal (used to be consumed silently). FlyEventBufferFullNakCount =
+	   M4 / WAIT_FOR_TRIGGER arriving with <=3 free FlyEvent slots (used to
+	   sit unconsumed at the minfo tail and wedge the whole inbound queue).
+	   All three should stay 0 in production; nonzero means a host bug or
+	   slot-leak pressure. *)
+	UnknownCmdNakCount         : UDINT := 0;
+	FlyEventRejectNakCount     : UDINT := 0;
+	FlyEventBufferFullNakCount : UDINT := 0;
+
 	(* Server-initiated event packets (push notifications).
 	   AxisGroupSM emits an `ST_CHG` event into reMP_info_ridx on every
 	   FSM state change (detected by PrevAxisGroupState diff). Packet shape:

@@ -41,7 +41,12 @@ SysDrainIter := 0;
     WHILE (GVL.minfo_buf_ridx.Size() > 0) AND (SysDrainIter < SYS_DRAIN_MAX_PER_SCAN) DO
         MessageBufferPointer := ADR(GVL.minfo_buf[GVL.minfo_buf_ridx.GetTail()][0]);
         MessageUnpackerFb.Init(ADR(MessageBufferPointer[1]), MessageBufferPointer[0]);
-        CommandId := TO_DINT(MessageUnpackerFb.TryReadINT64('id', - 1));
+        // R6 fix: missing-id default is 0, matching the no-id sentinel the
+        // G1 dedupe ring and the M-path reply gate test against
+        // (CommandId <> 0). The old -1 default was cached and matched like
+        // a real id: two consecutive id-less G1s -> the second one
+        // false-hit the dedupe cache and the motion was silently skipped.
+        CommandId := TO_DINT(MessageUnpackerFb.TryReadINT64('id', 0));
         PacketType := MessageUnpackerFb.TryReadString('type', '');
         CommandType := MessageUnpackerFb.TryReadString('cmd', '');
         ProtocolVersionGot := MessageUnpackerFb.TryReadINT64('protocol_version', 0);
@@ -90,17 +95,24 @@ SysDrainIter := 0;
             IF (CommandType = 'GA_EV') THEN
                 ShouldReturn := TRUE;
                 GaEvRaw := MessageUnpackerFb.TryReadINT64('ev', -1);
-                // 2026-06-23 code-review fix: validate ev before posting.
-                // Pre-fix: TO_UDINT(-1) wrapped to 16#FFFFFFFF, Transition
-                // no-op'd, but reply still ACKed -- host couldn't tell the
-                // FSM did nothing. Range check covers E_RobotEvent's UDINT
-                // enum: NONE=0..EV_ER=11. Out-of-range (including the -1
-                // missing-key sentinel) is rejected with err='unknown_event'.
-                IF (GaEvRaw < 1) OR (GaEvRaw > 11) THEN
+                // R1 fix (test_plc_refactor_findings): membership check,
+                // not a range check. E_RobotEvent is SPARSE -- 1/3/5 are
+                // tombstoned gaps and 10/11 (EV_OK/EV_ER) are internal
+                // handshake events; the old 1..11 range let a host post
+                // ev=10 and skip a state's hardware handshake, or post a
+                // gap value and get ack=TRUE for a guaranteed no-op.
+                // Host-postable events are exactly: EV_POWER_ON=2,
+                // EV_GROUP_ENABLE=4, EV_HOME_GO=6, EV_HOME_GO_FORCE_SKIP=7,
+                // EV_RESET=8, EV_ERROR=9. Everything else (including the
+                // -1 missing-key sentinel) NAKs with err='unknown_event'.
+                IF NOT (GaEvRaw = 2 OR GaEvRaw = 4 OR GaEvRaw = 6
+                        OR GaEvRaw = 7 OR GaEvRaw = 8 OR GaEvRaw = 9) THEN
                     CommandAck := FALSE;
                     GVL.UnknownEventNakCount := GVL.UnknownEventNakCount + 1;
                     ResponsePacketPointer^.ele_count := 0;
-                    MessagePackerFb.PackKvBool(ADR('ack'), FALSE);
+                    // R9 fix: do NOT pack 'ack' here -- CommitReplySlotOrScratch
+                    // appends id+ack from CommandAck; packing it here too
+                    // produced a duplicate 'ack' key in one msgpack map.
                     MessagePackerFb.PackKvStr(ADR('err'), ADR('unknown_event'));
                 ELSE
                     CommandAck := TRUE;
@@ -283,8 +295,25 @@ SysDrainIter := 0;
                     CommandAck := FALSE;
                     GVL.ScratchpadPartialNakCount := GVL.ScratchpadPartialNakCount + 1;
                     ResponsePacketPointer^.ele_count := 0;
-                    MessagePackerFb.PackKvBool(ADR('ack'), FALSE);
+                    // R9 fix: 'ack' packed once by CommitReplySlotOrScratch.
                     MessagePackerFb.PackKvStr(ADR('err'), ADR('partial_scratchpad'));
+                ELSIF (ScratchpadPlanIdRaw > 2147483647)
+                      OR (ScratchpadPlanIndexRaw > 2147483647)
+                      OR (ScratchpadIntentKindRaw > 255)
+                      OR (ScratchpadIntentMidRaw > 2147483647)
+                      OR (ScratchpadLastVisionPulseRaw > 2147483647) THEN
+                    // R7 fix: values beyond the storage/readback width used
+                    // to TO_UDINT-wrap silently AND ack -- the host read back
+                    // a different number than it wrote (defeats the
+                    // partial-write NAK's spirit). Slot types are UDINT/USINT
+                    // but GET_MACHINE_STATE reads back via UDINT_TO_DINT, so
+                    // the round-trippable range is 0..2^31-1 (0..255 for
+                    // intent_kind). Out-of-range -> NAK, existing contents
+                    // survive untouched.
+                    CommandAck := FALSE;
+                    GVL.ScratchpadPartialNakCount := GVL.ScratchpadPartialNakCount + 1;
+                    ResponsePacketPointer^.ele_count := 0;
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('scratchpad_range'));
                 ELSE
                     CommandAck := TRUE;
                     GVL.ScratchpadV1.PlanId           := TO_UDINT(ScratchpadPlanIdRaw);
@@ -295,32 +324,16 @@ SysDrainIter := 0;
                     GVL.ScratchpadV1.SchemaVersion := 1;
                     GVL.ScratchpadV1.BootEpoch := GVL.BootEpochCount;
                     ResponsePacketPointer^.ele_count := 0;
-                    MessagePackerFb.PackKvBool(ADR('ack'), TRUE);
+                    // R9 fix: 'ack' packed once by CommitReplySlotOrScratch.
                 END_IF
             ELSIF (CommandType = 'RESET_DBG_INFO') THEN
                 // SYS-side reset: clears comm-stability counters without
-                // requiring FSM=Ready (the motion-side RESET_DBG_INFO at the
-                // bottom of this file is a legacy branch and only fires from
-                // the M dispatcher path). Generic comm hygiene; lets the UI
-                // dashboard rebaseline at any time.
-                GVL.ReMpDropCount               := 0;
-                GVL.OverlenDropCount            := 0;
-                GVL.SendStallDropCount          := 0;
-                GVL.GroupNotReadyNakCount       := 0;
-                GVL.MissingTypeFieldNakCount    := 0;
-                GVL.CoordNotConfiguredNakCount  := 0;
-                GVL.ProtocolVersionMismatchCount := 0;
-                GVL.IdleResetCount              := 0;
-                GVL.ReadErrorResetCount         := 0;
-                GVL.ParserErrorResetCount       := 0;
-                GVL.WriteErrorResetCount        := 0;
-                GVL.ClientConnectCount          := 0;
-                GVL.ServerLongIdleCount         := 0;
-                GVL.UiHeartbeatStaleCount       := 0;
-                GVL.GroupErrorStopTripCount     := 0;
-                GVL.StateChangeEventCount       := 0;
-                GVL.PingMaxGapMs                := 0;
-                GVL.PrevPingRuntimeMs           := 0;
+                // requiring FSM=Ready. R8 fix: the reset list lives in ONE
+                // place -- ResetDiagCounters() -- shared with the legacy
+                // M-path branch. The two inline lists had drifted (each
+                // missed counters the other cleared, and both missed the
+                // newer ones).
+                ResetDiagCounters();
                 ShouldReturn := TRUE;
                 CommandAck := TRUE;
                 ResponsePacketPointer^.ele_count := 0;
@@ -381,6 +394,11 @@ SysDrainIter := 0;
                 MessagePackerFb.PackKvDint(ADR('remp_drop_reply'), TO_DINT(GVL.ReMpDropCount_Reply));
                 MessagePackerFb.PackKvDint(ADR('remp_drop_trig'), TO_DINT(GVL.ReMpDropCount_TriggerEvent));
                 MessagePackerFb.PackKvDint(ADR('dupe_cmd'), TO_DINT(GVL.DupeCommandCount));
+                // R2/R3/R4/R5/R11: new NAK counters. Published here => they
+                // are part of the canonical ResetDiagCounters list (R8).
+                MessagePackerFb.PackKvDint(ADR('unknown_cmd_nak'), TO_DINT(GVL.UnknownCmdNakCount));
+                MessagePackerFb.PackKvDint(ADR('flyevent_reject_nak'), TO_DINT(GVL.FlyEventRejectNakCount));
+                MessagePackerFb.PackKvDint(ADR('flyevent_full_nak'), TO_DINT(GVL.FlyEventBufferFullNakCount));
                 MessagePackerFb.PackKvDint(ADR('io_cmd_count'), TO_DINT(IoCommandCount));
                 MessagePackerFb.PackKvDint(ADR('io_trig_count'), TO_DINT(IoTriggerCount));
                 MessagePackerFb.PackKvDint(ADR('flyevent_avail'), TO_DINT(FlyEventAvailableCount));

@@ -192,30 +192,10 @@
             END_IF
 
         ELSIF (CommandType = 'RESET_DBG_INFO') THEN
-            IoTriggerCount := 0;
-            IoTriggerResetCount := 0;
-            IoTriggerInfoCount := 0;
-            IoCommandCount := 0;
-
-            // Comm-stability counters reset (matches SYS/GET_DIAG payload)
-            // so a UI dashboard can rebaseline cleanly. Doesn't reset
-            // RuntimeMs / sm_scans (monotonic clocks) or last_ui_ping_ms
-            // (live state, not a counter).
-            GVL.ReMpDropCount               := 0;
-            GVL.OverlenDropCount            := 0;
-            GVL.SendStallDropCount          := 0;
-            GVL.GroupNotReadyNakCount       := 0;
-            GVL.MissingTypeFieldNakCount    := 0;
-            GVL.CoordNotConfiguredNakCount  := 0;
-            GVL.ProtocolVersionMismatchCount := 0;
-            GVL.IdleResetCount              := 0;
-            GVL.ReadErrorResetCount         := 0;
-            GVL.ParserErrorResetCount       := 0;
-            GVL.UiHeartbeatStaleCount       := 0;
-            GVL.StateChangeEventCount       := 0;
-            GVL.PingMaxGapMs                := 0;
-            GVL.PrevPingRuntimeMs           := 0;
-
+            // Legacy M-path branch (wire-visible; some old callers use it).
+            // R8 fix: delegate to the ONE canonical list so the two paths
+            // can never drift again.
+            ResetDiagCounters();
             ShouldReturn := TRUE;
             CommandAck := TRUE;
             GVL.minfo_buf_ridx.ConsumeTail();
@@ -443,8 +423,30 @@
 
 						ShouldReturn := TRUE;
 
+					ELSE
+						// R3/R4 fix (test_plc_refactor_findings): a rejected
+						// registration used to be consumed with no reply and
+						// no counter -- a no_silent_drops violation the host
+						// could only see as a timeout. NAK with the reason.
+						ShouldReturn := TRUE;
+						CommandAck := FALSE;
+						MessagePackerFb.PackKvStr(ADR('err'), ADR('flyevent_reject'));
+						GVL.FlyEventRejectNakCount := GVL.FlyEventRejectNakCount + 1;
 					END_IF;
 
+					GVL.minfo_buf_ridx.ConsumeTail();
+
+				ELSE
+					// R11 fix: with <=3 free slots the M4 used to sit
+					// unconsumed at the minfo tail; the dispatcher EXITs on a
+					// type-M tail, so EVERY packet behind it (SYS included)
+					// stalled with zero counters -- an invisible full-queue
+					// wedge. NAK + consume keeps the queue draining; the
+					// packet is retryable by the host once slots free up.
+					ShouldReturn := TRUE;
+					CommandAck := FALSE;
+					MessagePackerFb.PackKvStr(ADR('err'), ADR('flyevent_buffer_full'));
+					GVL.FlyEventBufferFullNakCount := GVL.FlyEventBufferFullNakCount + 1;
 					GVL.minfo_buf_ridx.ConsumeTail();
 
 				END_IF;
@@ -453,13 +455,16 @@
 
 ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
             IF (FlyEventAvailableCount > 3) THEN
-					
+
                 MotionTargetMovementId := TO_ULINT(MessageUnpackerFb.TryReadINT64('motion_id', TO_LINT(GroupReadStatusFb.LastAcceptedMovementId)));
 
-
-
-
-                IF (MotionOutputPin <> 0 AND MotionTargetMovementId <> 0) THEN
+                // R5 fix: the old gate also required MotionOutputPin <> 0 --
+                // a copy-paste leftover from the legacy M4 shape.
+                // MotionOutputPin is ProcessFlyEventsAndIo's scratch (the pin
+                // mask of the LAST FIRED pin-op stage), semantically unrelated
+                // to this registration; until any pin-op ever fired it is 0
+                // and every registration was refused -- silently (see ELSE).
+                IF (MotionTargetMovementId <> 0) THEN
                     FlyEventTempData.ActionType := FlyEventActType.ACK_SRC_ID;
                     FlyEventTempData.TriggerType := FlyEventTriggerType.MovmentProgressTrigger;
                     // Same TO_INT->INT16 wrap fix as the M4 branch above.
@@ -491,7 +496,25 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
                             EXIT;
                         END_IF;
                     END_FOR;
+                    // Registration OK: no immediate reply -- the ack is
+                    // deferred and arrives as the ACK_SRC_ID event when the
+                    // trigger fires (ShouldReturn deliberately stays FALSE).
+                ELSE
+                    // R5 fix: refusal used to consume the packet with
+                    // ShouldReturn never set -> host timed out with nothing
+                    // in any counter. NAK like every other reject path.
+                    ShouldReturn := TRUE;
+                    CommandAck := FALSE;
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('flyevent_reject'));
+                    GVL.FlyEventRejectNakCount := GVL.FlyEventRejectNakCount + 1;
                 END_IF;
+                GVL.minfo_buf_ridx.ConsumeTail();
+            ELSE
+                // R11 fix: same full-queue wedge as the M4 branch above.
+                ShouldReturn := TRUE;
+                CommandAck := FALSE;
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('flyevent_buffer_full'));
+                GVL.FlyEventBufferFullNakCount := GVL.FlyEventBufferFullNakCount + 1;
                 GVL.minfo_buf_ridx.ConsumeTail();
             END_IF;
 
@@ -651,6 +674,10 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
             GVL.minfo_buf_ridx.ConsumeTail();
 
         ELSE
+            // R2 fix: unknown motion cmd used to NAK bare (no err, no
+            // counter) -- host saw ack:false with zero diagnosis.
+            MessagePackerFb.PackKvStr(ADR('err'), ADR('unknown_cmd'));
+            GVL.UnknownCmdNakCount := GVL.UnknownCmdNakCount + 1;
             GVL.minfo_buf_ridx.ConsumeTail();
             ShouldReturn := TRUE;
         END_IF;
