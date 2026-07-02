@@ -49,10 +49,23 @@ END_IF;
 // block below tries to push every scan until the ring has space, so
 // a transient ring-full doesn't lose the event (UI would otherwise
 // wait up to 1s for the GET_MACHINE_STATE poll to notice).
+// R10 fix (test_plc_refactor_findings): the >0 -> 0 edge also fires when
+// an error/abort FLUSHES the buffer (error freeze above forces
+// MotionBufferSize:=0; GroupStop drops MovementId to 0) -- that is not a
+// completion. Latching it emitted MOVE_DONE for an aborted move and
+// advanced last_completed_movement_id past moves that never ran, which
+// the §4(2) resume reconcile reads as "intent completed" -> skipped
+// blow-off -> double reel advance. Only latch the edge while the group
+// is genuinely healthy and in Ready; an abort path must leave
+// PrevCompletedMovementId at the last move that truly finished.
 IF (PrevMotionBufferSizeForEvent > 0
     AND MotionBufferSize = 0
     AND GroupReadStatusFb.LastAcceptedMovementId <> 0
-    AND GroupReadStatusFb.LastAcceptedMovementId <> PrevCompletedMovementId) THEN
+    AND GroupReadStatusFb.LastAcceptedMovementId <> PrevCompletedMovementId
+    AND AxisGroupManagerFb._eState = E_RobotState.Ready
+    AND NOT GroupReadStatusFb.Error
+    AND NOT GroupReadPositionFb.Error
+    AND NOT GroupReadStatusFb.GroupErrorStop) THEN
     // Newest edge wins: if a previous MOVE_DONE was pending and a new
     // movement just completed before we got to push it, just publish
     // the newer one. UI watches for movement_id gaps and surfaces the
