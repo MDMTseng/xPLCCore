@@ -81,11 +81,18 @@ def test_distance_trigger_fires_inside_boundary(raw_plc_socket):
 
 
 def test_distance_trigger_outside_boundary_does_not_fire(raw_plc_socket):
-    """Mirror test: tin=1 with td=tiny (radius 0.001 mm around origin)
-    and TCP probably nowhere near origin -> trigger MUST NOT fire within
-    the TTL window. After ttl_ms expires we expect a TRIGGER_TIMEOUT_ERR
-    reply carrying our event_id, proving the timeout path is reached
-    from the DistanceTrigger CASE (not the progress CASE)."""
+    """Mirror test: tin=1 with td=tiny (radius 0.001 mm) around a point
+    the TCP can never reach -> trigger MUST NOT fire within the TTL
+    window. After ttl_ms expires we expect a TRIGGER_TIMEOUT_ERR reply
+    carrying our event_id, proving the timeout path is reached from the
+    DistanceTrigger CASE (not the progress CASE).
+
+    2026-07-03: target moved from the origin to (1500,1500,1500). On a
+    freshly downloaded app the virtual axes sit at exact zero and the
+    TCP kinematics read (0,0,0) -- the old origin-centred tiny ball then
+    fired correctly-per-spec and the test only stayed green when an
+    earlier test in the same session happened to have moved the arm.
+    A far out-of-workspace target removes the order dependency."""
     _force_virtual()
     s = raw_plc_socket
     if not bring_fsm_to_ready(s):
@@ -102,7 +109,7 @@ def test_distance_trigger_outside_boundary_does_not_fire(raw_plc_socket):
         "type": "M", "cmd": "M4", "id": 71010,
         "motion_id": 0,
         "trig": 120,
-        "tx": 0.0, "ty": 0.0, "tz": 0.0,
+        "tx": 1500.0, "ty": 1500.0, "tz": 1500.0,
         "td": 0.001,
         "tin": 1,
         "pin_op_seq": m4_pulse_seq(0x4000, 0x4000, reset_ms=0),
