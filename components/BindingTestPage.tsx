@@ -57,9 +57,10 @@ interface PersistedFields {
   acc: string;
   dea: string;
   advanced: boolean;
-  pinA: string;
-  pinB: string;
-  pressTimeMs: string;
+  pinA: string;          // press-down solenoid DO pin
+  pinB: string;          // lift solenoid DO pin
+  pressTimeMs: string;   // how long the press-down output is held
+  liftTimeMs: string;    // how long the lift output is held (after press)
   cycleCount: string;
   // Bench mode: delta trio simulated, reel real (SET_AXIS_SIM 0x07
   // before the FSM climb). Default ON -- this tab exists for the bench.
@@ -75,6 +76,7 @@ const DEFAULT_FIELDS: PersistedFields = {
   pinA: '0',
   pinB: '1',
   pressTimeMs: '500',
+  liftTimeMs: '500',
   cycleCount: '3',
   benchMode: true,
 };
@@ -268,16 +270,25 @@ export const BindingTestPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrlO
     return Number.isFinite(n) ? n : fallback;
   };
 
-  const parsePins = useCallback((): { pinA: number; pinB: number; mask: number } | null => {
+  // press = pinA (press-down solenoid), lift = pinB (lift solenoid).
+  // They are DISTINCT outputs driven in separate phases, never together,
+  // so a shared pin is a config error (would press and lift the same
+  // bit). maskBoth is only for the all-off safety release.
+  const parsePins = useCallback((): {
+    press: number; lift: number;
+    maskPress: number; maskLift: number; maskBoth: number;
+  } | null => {
     const a = Math.trunc(numOr(fields.pinA, -1));
     const b = Math.trunc(numOr(fields.pinB, -1));
     if (a < 0 || a > MAX_PIN || b < 0 || b > MAX_PIN) {
-      appendLog(`pin indices must be 0..${MAX_PIN} (CH1 physical outputs); got pinA=${fields.pinA} pinB=${fields.pinB}`, true);
+      appendLog(`pin indices must be 0..${MAX_PIN} (CH1 physical outputs); got press=${fields.pinA} lift=${fields.pinB}`, true);
       return null;
     }
-    if (a === b) appendLog(`note: pinA == pinB (${a}) -- mask has a single bit`, false);
-    const mask = (1 << a) | (1 << b);
-    return { pinA: a, pinB: b, mask };
+    if (a === b) {
+      appendLog(`press pin and lift pin must differ (both = ${a}); they are separate solenoids`, true);
+      return null;
+    }
+    return { press: a, lift: b, maskPress: 1 << a, maskLift: 1 << b, maskBoth: (1 << a) | (1 << b) };
   }, [fields.pinA, fields.pinB, appendLog]);
 
   const requireReady = useCallback((): boolean => {
@@ -392,33 +403,47 @@ export const BindingTestPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrlO
     return true;
   }, [sendTracked, appendLog]);
 
-  const pressTimedOnce = useCallback(async (): Promise<boolean> => {
+  // Two-phase double-acting cycle: press-down (pinA) held press_time_ms,
+  // THEN lift (pinB) held lift_time_ms. The two solenoids are mutually
+  // exclusive -- press releases before lift engages -- and both end OFF.
+  // Encoded as ONE 4-stage pin_op_seq so the whole schedule is PLC-timed:
+  // a UI crash mid-cycle still runs press-release, lift, and lift-release
+  // on the PLC. Stage = [wait_ms, mask, state]; wait is time held in the
+  // previous state before this stage applies.
+  const pressLiftOnce = useCallback(async (): Promise<boolean> => {
     if (!requireReady()) return false;
     const pins = parsePins();
     if (!pins) return false;
     const pressMs = Math.max(1, Math.trunc(numOr(fields.pressTimeMs, 500)));
-    // 2-stage sequence: stage 0 (delay 0): mask <- ON; stage 1 (delay
-    // press_time_ms): mask <- OFF. The release is PLC-timed -- even if
-    // the UI crashes mid-press, the PLC still releases on schedule.
-    const seq = [0, pins.mask, pins.mask, pressMs, pins.mask, 0];
-    appendLog(`timed press: mask=0x${pins.mask.toString(16)} (pins ${pins.pinA}+${pins.pinB}), ${pressMs}ms, PLC-timed release`);
-    return sendPressM4(seq, 'Press(timed)');
-  }, [requireReady, parsePins, fields.pressTimeMs, appendLog, sendPressM4]);
+    const liftMs = Math.max(1, Math.trunc(numOr(fields.liftTimeMs, 500)));
+    const seq = [
+      0,       pins.maskPress, pins.maskPress,  // press-down ON now
+      pressMs, pins.maskPress, 0,               // hold press_time, press OFF
+      0,       pins.maskLift,  pins.maskLift,   // lift ON (right after press releases)
+      liftMs,  pins.maskLift,  0,               // hold lift_time, lift OFF
+    ];
+    appendLog(`press+lift: press pin ${pins.press} for ${pressMs}ms, then lift pin ${pins.lift} for ${liftMs}ms (all PLC-timed)`);
+    return sendPressM4(seq, 'Press+Lift');
+  }, [requireReady, parsePins, fields.pressTimeMs, fields.liftTimeMs, appendLog, sendPressM4]);
 
-  const onPressTimed = useCallback(async () => {
+  const onPressLift = useCallback(async () => {
     setBusy(true);
-    try { await pressTimedOnce(); } finally { setBusy(false); }
-  }, [pressTimedOnce]);
+    try { await pressLiftOnce(); } finally { setBusy(false); }
+  }, [pressLiftOnce]);
 
-  const onPressManual = useCallback(async (on: boolean) => {
+  // Manual per-solenoid hold, for physical setup/verification of each
+  // output independently. ON has no auto-release; OFF is always allowed.
+  const onManual = useCallback(async (which: 'press' | 'lift', on: boolean) => {
     const pins = parsePins();
     if (!pins) return;
     if (on && !requireReady()) return;
+    const m = which === 'press' ? pins.maskPress : pins.maskLift;
+    const pin = which === 'press' ? pins.press : pins.lift;
     setBusy(true);
     try {
-      const seq = on ? [0, pins.mask, pins.mask] : [0, pins.mask, 0];
-      if (on) appendLog(`MANUAL press ON: mask=0x${pins.mask.toString(16)} -- NO AUTO-RELEASE, click "Press OFF" to release!`, true);
-      await sendPressM4(seq, on ? 'Press ON(manual)' : 'Press OFF');
+      const seq = on ? [0, m, m] : [0, m, 0];
+      if (on) appendLog(`MANUAL ${which} ON: pin ${pin} (mask=0x${m.toString(16)}) -- NO AUTO-RELEASE, click "${which} OFF" to release!`, true);
+      await sendPressM4(seq, `${which} ${on ? 'ON(manual)' : 'OFF'}`);
     } finally {
       setBusy(false);
     }
@@ -431,10 +456,11 @@ export const BindingTestPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrlO
     if (!pins) return;
     const n = Math.max(1, Math.trunc(numOr(fields.cycleCount, 1)));
     const pressMs = Math.max(1, Math.trunc(numOr(fields.pressTimeMs, 500)));
+    const liftMs = Math.max(1, Math.trunc(numOr(fields.liftTimeMs, 500)));
     abortRef.current = false;
     setCycleRunning(true);
     setBusy(true);
-    appendLog(`=== bind cycle start: ${n} cycle(s), pull=${fields.distance}mm, press=${pressMs}ms, mask=0x${pins.mask.toString(16)} ===`);
+    appendLog(`=== bind cycle start: ${n} cycle(s), pull=${fields.distance}mm, press=${pressMs}ms, lift=${liftMs}ms (press pin ${pins.press}, lift pin ${pins.lift}) ===`);
     try {
       for (let i = 1; i <= n; i++) {
         if (abortRef.current) { appendLog(`cycle ${i}/${n}: aborted before pull`); return; }
@@ -442,15 +468,15 @@ export const BindingTestPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrlO
         const pulled = await pullReelOnce();
         if (!pulled) { appendLog(`cycle ${i}/${n}: pull failed -- cycle stopped`, true); return; }
         if (abortRef.current) { appendLog(`cycle ${i}/${n}: aborted before press`); return; }
-        appendLog(`cycle ${i}/${n}: timed press (${pressMs}ms)`);
-        const pressed = await pressTimedOnce();
-        if (!pressed) { appendLog(`cycle ${i}/${n}: press M4 failed -- cycle stopped`, true); return; }
-        // Wait out the PLC-timed press + margin before the next pull.
-        const waitMs = pressMs + 400;
-        appendLog(`cycle ${i}/${n}: waiting press ${pressMs}ms + 400ms margin`);
+        appendLog(`cycle ${i}/${n}: press ${pressMs}ms + lift ${liftMs}ms`);
+        const pressed = await pressLiftOnce();
+        if (!pressed) { appendLog(`cycle ${i}/${n}: press+lift M4 failed -- cycle stopped`, true); return; }
+        // Wait out the whole PLC-timed press+lift + margin before the next pull.
+        const waitMs = pressMs + liftMs + 400;
+        appendLog(`cycle ${i}/${n}: waiting press+lift ${pressMs + liftMs}ms + 400ms margin`);
         const deadline = Date.now() + waitMs;
         while (Date.now() < deadline) {
-          if (abortRef.current) { appendLog(`cycle ${i}/${n}: aborted during press wait (release is PLC-timed, will still happen)`); return; }
+          if (abortRef.current) { appendLog(`cycle ${i}/${n}: aborted during press/lift wait (schedule is PLC-timed, will still finish)`); return; }
           await sleep(100);
         }
         appendLog(`cycle ${i}/${n}: done`);
@@ -460,14 +486,14 @@ export const BindingTestPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrlO
       setCycleRunning(false);
       setBusy(false);
     }
-  }, [requireReady, parsePins, fields.cycleCount, fields.pressTimeMs, fields.distance, appendLog, pullReelOnce, pressTimedOnce]);
+  }, [requireReady, parsePins, fields.cycleCount, fields.pressTimeMs, fields.liftTimeMs, fields.distance, appendLog, pullReelOnce, pressLiftOnce]);
 
   const onAbort = useCallback(async () => {
     abortRef.current = true;
-    appendLog('ABORT: stopping cycle, sending press OFF (reel stays where it is)', true);
+    appendLog('ABORT: stopping cycle, sending both outputs OFF (reel stays where it is)', true);
     const pins = parsePins();
     if (pins) {
-      await sendPressM4([0, pins.mask, 0], 'Abort press OFF');
+      await sendPressM4([0, pins.maskBoth, 0], 'Abort all OFF');
     }
   }, [appendLog, parsePins, sendPressM4]);
 
@@ -476,8 +502,8 @@ export const BindingTestPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrlO
   const pinsPreview = (() => {
     const a = Math.trunc(numOr(fields.pinA, -1));
     const b = Math.trunc(numOr(fields.pinB, -1));
-    if (a < 0 || a > MAX_PIN || b < 0 || b > MAX_PIN) return null;
-    return (1 << a) | (1 << b);
+    if (a < 0 || a > MAX_PIN || b < 0 || b > MAX_PIN || a === b) return null;
+    return { press: a, lift: b };
   })();
 
   return (
@@ -571,48 +597,62 @@ export const BindingTestPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrlO
           <button type="button" onClick={onPullReel} disabled={actuationDisabled}>Pull reel</button>
         </Section>
 
-        {/* Heat press */}
-        <Section title="Heat press (2 digital outputs)">
+        {/* Heat press: two-phase press-down then lift */}
+        <Section title="Heat press (press-down + lift, 2 DOs)">
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'flex-end', marginBottom: 6 }}>
-            <Field label={`pinA (0..${MAX_PIN})`}>
+            <Field label={`press-down pin A (0..${MAX_PIN})`}>
               <input type="number" min={0} max={MAX_PIN} step={1} value={fields.pinA} onChange={(e) => setField('pinA', e.target.value)} style={inputStyle} />
             </Field>
-            <Field label={`pinB (0..${MAX_PIN})`}>
+            <Field label={`lift pin B (0..${MAX_PIN})`}>
               <input type="number" min={0} max={MAX_PIN} step={1} value={fields.pinB} onChange={(e) => setField('pinB', e.target.value)} style={inputStyle} />
             </Field>
             <Field label="press_time_ms">
               <input type="number" min={1} step={1} value={fields.pressTimeMs} onChange={(e) => setField('pressTimeMs', e.target.value)} style={inputStyle} />
             </Field>
-            <span style={{ fontSize: 12, fontFamily: 'monospace', color: '#6b7280' }}>
-              mask={pinsPreview !== null ? `0x${pinsPreview.toString(16)}` : 'invalid pins'}
-            </span>
+            <Field label="lift_time_ms">
+              <input type="number" min={1} step={1} value={fields.liftTimeMs} onChange={(e) => setField('liftTimeMs', e.target.value)} style={inputStyle} />
+            </Field>
+          </div>
+          <div style={{ fontSize: 12, fontFamily: 'monospace', color: '#6b7280', marginBottom: 6 }}>
+            {pinsPreview !== null
+              ? `sequence: pin ${pinsPreview.press} ON (press) ${fields.pressTimeMs}ms -> OFF, then pin ${pinsPreview.lift} ON (lift) ${fields.liftTimeMs}ms -> OFF`
+              : 'invalid pins (press and lift must be different, 0..' + MAX_PIN + ')'}
           </div>
           <div style={{ fontSize: 12, color: '#166534', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 6, padding: 6, marginBottom: 6 }}>
-            Safety: the timed press is ONE packet whose release stage is timed by the PLC itself --
-            even if this UI crashes or loses connection mid-press, the PLC still releases the press
-            after press_time_ms.
+            Safety: the whole press-then-lift schedule is ONE packet, timed by the PLC -- even if
+            this UI crashes mid-cycle, the PLC still releases the press, runs the lift, and releases
+            it on schedule. Press and lift never energize together (press releases before lift).
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-            <button type="button" onClick={onPressTimed} disabled={actuationDisabled}>Press (timed)</button>
+            <button type="button" onClick={onPressLift} disabled={actuationDisabled}>Press + Lift cycle</button>
+            <span style={{ width: 12 }} />
             <button
               type="button"
-              onClick={() => onPressManual(true)}
+              onClick={() => onManual('press', true)}
               disabled={actuationDisabled}
               style={{ border: '1px solid #dc2626', color: '#dc2626' }}
-              title="Holds the outputs ON until you click Press OFF"
+              title="Holds the press-down output ON until you click Press OFF"
             >
-              Press ON (manual -- NO auto-release!)
+              Press ▼ ON
             </button>
-            {/* Press OFF is the safety release -- never disabled. */}
-            <button type="button" onClick={() => onPressManual(false)}>
-              Press OFF
+            <button type="button" onClick={() => onManual('press', false)}>Press ▼ OFF</button>
+            <span style={{ width: 12 }} />
+            <button
+              type="button"
+              onClick={() => onManual('lift', true)}
+              disabled={actuationDisabled}
+              style={{ border: '1px solid #dc2626', color: '#dc2626' }}
+              title="Holds the lift output ON until you click Lift OFF"
+            >
+              Lift ▲ ON
             </button>
+            <button type="button" onClick={() => onManual('lift', false)}>Lift ▲ OFF</button>
           </div>
           <div style={{ fontSize: 12, color: '#991b1b', marginTop: 6 }}>
-            Manual ON has no auto-release -- for physical setup/verification only. Use "Press OFF" to
-            release. Note: the PLC latches output bits across FSM state changes, and pin ops only
-            dispatch in Ready -- if the FSM drops to Error with the press ON, drive back to Ready
-            first, then click "Press OFF".
+            Manual ON has no auto-release -- for physically verifying each solenoid alone. Use the
+            matching OFF to release. Note: the PLC latches output bits across FSM state changes, and
+            pin ops only dispatch in Ready -- if the FSM drops to Error with an output ON, drive back
+            to Ready first, then click OFF.
           </div>
         </Section>
 
