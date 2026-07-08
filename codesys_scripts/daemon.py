@@ -55,6 +55,14 @@ if not os.path.isdir(ROOT):
 state = {"phase": "init", "since": time.time(), "job": "", "rpc_count": 0}
 state_lock = threading.Lock()
 
+# Stop signal for the heartbeat thread. Without it the thread ran `while
+# True` forever, so on daemon shutdown the main script returned while the
+# thread was still live and IronPython had to abort a running thread
+# during interpreter teardown -- a classic source of the
+# "Running script daemon.py caused exception / ArgumentNullException
+# (param del)" modal dialog. We now signal + join it before returning.
+hb_stop = threading.Event()
+
 
 def set_state(phase, job=""):
     state_lock.acquire()
@@ -68,8 +76,13 @@ def set_state(phase, job=""):
 
 def heartbeat_loop():
     """Runs in a daemon thread. Touches no CODESYS API -- only file I/O and
-    the shared state dict -- so it's safe to run off the IDE main thread."""
-    while True:
+    the shared state dict -- so it's safe to run off the IDE main thread.
+    Exits when hb_stop is set so shutdown can join it cleanly (no lingering
+    thread for IronPython to abort during teardown)."""
+    # The ENTIRE body (including the wait) is inside try/except so an
+    # unhandled exception can never kill the thread and surface to the
+    # scripting host as a script-level failure.
+    while not hb_stop.is_set():
         try:
             state_lock.acquire()
             try:
@@ -85,9 +98,10 @@ def heartbeat_loop():
             f = open(STATUS_PATH, "w")
             try: f.write(line)
             finally: f.close()
+            # Interruptible sleep: wakes immediately when stop is signalled.
+            hb_stop.wait(1.0)
         except Exception:
-            pass
-        time.sleep(1.0)
+            hb_stop.wait(1.0)
 
 
 def append_rpc_log(entry):
@@ -383,9 +397,22 @@ except KeyboardInterrupt:
     append_rpc_log("%s daemon-keyboardinterrupt" % time.strftime("%H:%M:%S"))
     print("[daemon] KeyboardInterrupt")
 except BaseException as ex:
+    # Capture the FULL traceback to the forensic log, not just repr(ex).
+    # The modal "ArgumentNullException (param del)" dialog truncates its
+    # traceback; if anything still escapes, the real frames land here.
     append_rpc_log("%s daemon-fatal: %s" % (time.strftime("%H:%M:%S"), repr(ex)[:300]))
+    append_rpc_log("%s daemon-fatal-traceback:\n%s" % (
+        time.strftime("%H:%M:%S"), traceback.format_exc()))
     traceback.print_exc()
 finally:
+    # Signal + join the heartbeat thread BEFORE returning so IronPython
+    # doesn't have to abort a live thread during interpreter teardown
+    # (the suspected source of the shutdown ArgumentNullException dialog).
+    try:
+        hb_stop.set()
+        hb.join(3.0)
+    except Exception:
+        pass
     try: srv.close()
     except Exception: pass
     set_state("stopped", "")
