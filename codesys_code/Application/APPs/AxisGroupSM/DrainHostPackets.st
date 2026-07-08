@@ -119,9 +119,11 @@ SysDrainIter := 0;
                 // gap value and get ack=TRUE for a guaranteed no-op.
                 // Host-postable events are exactly: EV_POWER_ON=2,
                 // EV_GROUP_ENABLE=4, EV_HOME_GO=6, EV_HOME_GO_FORCE_SKIP=7,
-                // EV_RESET=8, EV_ERROR=9. Everything else (including the
-                // -1 missing-key sentinel) NAKs with err='unknown_event'.
-                IF NOT (GaEvRaw = 2 OR GaEvRaw = 4 OR GaEvRaw = 6
+                // EV_RESET=8, EV_ERROR=9. EV_NONE=0 is also accepted, as a
+                // NO-OP STATE POLL (see below). Everything else -- the
+                // sparse gaps 1/3/5, the internal EV_OK=10/EV_ER=11, and
+                // the -1 missing-key sentinel -- NAKs err='unknown_event'.
+                IF NOT (GaEvRaw = 0 OR GaEvRaw = 2 OR GaEvRaw = 4 OR GaEvRaw = 6
                         OR GaEvRaw = 7 OR GaEvRaw = 8 OR GaEvRaw = 9) THEN
                     CommandAck := FALSE;
                     GVL.UnknownEventNakCount := GVL.UnknownEventNakCount + 1;
@@ -132,6 +134,17 @@ SysDrainIter := 0;
                     MessagePackerFb.PackKvStr(ADR('err'), ADR('unknown_event'));
                 ELSE
                     CommandAck := TRUE;
+                    // EV_NONE (0) is a no-op state poll: reply with the
+                    // current state WITHOUT posting a transition. The
+                    // renderer's init_plc_motion loop (OperationPage /
+                    // MiscControlsPage) sends GA_EV(0) to read st_str and
+                    // drive the power-up sequence from wherever the FSM
+                    // currently is; the R1 membership tightening NAK'd it
+                    // and PluginHello rejects any ack:false, so the loop
+                    // died on its first iteration. 0 changes nothing, so
+                    // ack is truthful and the R1 concern (an event that
+                    // silently skips a hardware handshake) does not apply.
+                    //
                     // 2026-06-23 edge-trigger fix: do NOT write InputEvent
                     // here. Pre-fix, the assignment caused
                     // UpdateRuntimeAndInputEvent next scan to see
@@ -141,9 +154,11 @@ SysDrainIter := 0;
                     // lied about the count. Pass GaEvRaw direct so the
                     // edge-detect mechanism stays scoped to VisuEventControl
                     // (its original owner) and TCP events bypass it cleanly.
-                    AxisGroupManagerFb.TRANSITION(
-                        eEvent := TO_UDINT(GaEvRaw)
-                    );
+                    IF GaEvRaw <> 0 THEN
+                        AxisGroupManagerFb.TRANSITION(
+                            eEvent := TO_UDINT(GaEvRaw)
+                        );
+                    END_IF;
 
                     ResponsePacketPointer^.ele_count := 0;
                     // NOTE: PrevAxisGroupState is intentionally NOT updated here.

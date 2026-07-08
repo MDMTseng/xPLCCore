@@ -127,6 +127,28 @@ def test_R1_gaev_rejects_gaps_and_internal_events(raw_plc_socket, ev):
     _send_recv(s, {"type": "SYS", "cmd": "GA_EV", "ev": EV_RESET}, 81200 + ev)
 
 
+def test_R1b_gaev_ev_none_is_noop_state_poll(raw_plc_socket):
+    """EV_NONE (ev=0) must be a valid NO-OP state poll: ack:true, current
+    state returned, FSM unchanged. The renderer's init_plc_motion loop
+    sends GA_EV(0) to read st_str before driving the power-up sequence;
+    the R1 membership tightening NAK'd it and PluginHello rejects any
+    ack:false, killing the loop on iteration 1. Regression guard."""
+    s = raw_plc_socket
+    _send_recv(s, {"type": "SYS", "cmd": "GA_EV", "ev": EV_RESET}, 81500)
+    time.sleep(0.3)
+    before = _send_recv(s, {"type": "SYS", "cmd": "GET_MACHINE_STATE"}, 81501)
+    r = _send_recv(s, {"type": "SYS", "cmd": "GA_EV", "ev": 0}, 81502)
+    assert r is not None, "GA_EV ev=0 silently dropped"
+    assert r.get("ack") is True, (
+        "GA_EV ev=0 (EV_NONE state poll) NAK'd -- breaks init_plc_motion. "
+        "reply=%r" % r)
+    assert r.get("st_str"), "GA_EV ev=0 reply carried no st_str: %r" % r
+    after = _send_recv(s, {"type": "SYS", "cmd": "GET_MACHINE_STATE"}, 81503)
+    assert (before or {}).get("st") == (after or {}).get("st"), (
+        "GA_EV ev=0 changed FSM state (%s -> %s); must be a pure no-op"
+        % ((before or {}).get("st"), (after or {}).get("st")))
+
+
 # ─── R2: unknown motion cmd NAK must carry err ──────────────────────
 
 def test_R2_unknown_motion_cmd_nak_has_err(virtual_motors_forced, raw_plc_socket):
