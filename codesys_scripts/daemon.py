@@ -296,8 +296,30 @@ except Exception as ex:
 srv.listen(4)
 srv.settimeout(0.5)  # short accept timeout so Ctrl+C is responsive
 set_state("idle", "")
+_daemon_start_mono = time.time()
 append_rpc_log("%s daemon-start pid=%s" % (time.strftime("%H:%M:%S"), os.getpid()))
 print("[daemon] listening. Ctrl+C in this console to stop.")
+
+
+def _log_exit(reason, with_traceback=True):
+    """Single choke point for every daemon exit path. Records the reason,
+    UPTIME (how long this instance survived -- the daemon self-terminates
+    ~5-11 min after start via an IDE-injected KeyboardInterrupt, and we
+    want to see that duration), pid, and -- crucially -- the traceback.
+    For a KeyboardInterrupt the traceback pins WHICH blocking call was
+    interrupted (accept / recv / sleep), which tells us whether the IDE
+    injected it externally vs an internal fault. Safe to call outside an
+    except block: format_exc() then yields 'NoneType: None' and is skipped."""
+    up = time.time() - _daemon_start_mono
+    line = "%s daemon-exit reason=%s uptime=%.1fs pid=%s" % (
+        time.strftime("%H:%M:%S"), reason, up, os.getpid())
+    append_rpc_log(line)
+    print("[daemon] EXIT: " + line)
+    if with_traceback:
+        tb = traceback.format_exc()
+        if tb and "NoneType: None" not in tb:
+            append_rpc_log("%s daemon-exit-traceback:\n%s" % (
+                time.strftime("%H:%M:%S"), tb))
 
 stop_requested = False
 # Accept-error throttle: a broken listening socket (e.g. WSAEINVAL 10022 on
@@ -341,8 +363,7 @@ try:
             continue
         except KeyboardInterrupt:
             print("[daemon] stopped by Ctrl+C")
-            append_rpc_log("%s loop-exit reason=KeyboardInterrupt-on-accept"
-                           % time.strftime("%H:%M:%S"))
+            _log_exit("KeyboardInterrupt-on-accept")
             break
         except Exception as ex:
             accept_err_streak += 1
@@ -372,8 +393,7 @@ try:
                         time.strftime("%H:%M:%S"), repr(rebind_ex)[:200]))
                     # fall through to streak-exit
             if accept_err_streak >= ACCEPT_ERR_MAX:
-                append_rpc_log("%s loop-exit reason=accept-error-streak"
-                               % time.strftime("%H:%M:%S"))
+                _log_exit("accept-error-streak")
                 print("[daemon] giving up after %d accept errors; restart me"
                       % ACCEPT_ERR_MAX)
                 break
@@ -382,8 +402,7 @@ try:
         try:
             stop_requested = handle_client(client)
         except KeyboardInterrupt:
-            append_rpc_log("%s handler-exit reason=KeyboardInterrupt"
-                           % time.strftime("%H:%M:%S"))
+            _log_exit("KeyboardInterrupt-in-handler")
             raise
         except Exception as ex:
             # Don't let a handler exception kill the loop.
@@ -391,19 +410,15 @@ try:
                 time.strftime("%H:%M:%S"), repr(ex)[:200]))
             traceback.print_exc()
         if stop_requested:
-            append_rpc_log("%s loop-exit reason=stop-cmd"
-                           % time.strftime("%H:%M:%S"))
+            _log_exit("stop-cmd", with_traceback=False)
 except KeyboardInterrupt:
-    append_rpc_log("%s daemon-keyboardinterrupt" % time.strftime("%H:%M:%S"))
+    _log_exit("KeyboardInterrupt-outer")
     print("[daemon] KeyboardInterrupt")
 except BaseException as ex:
-    # Capture the FULL traceback to the forensic log, not just repr(ex).
-    # The modal "ArgumentNullException (param del)" dialog truncates its
-    # traceback; if anything still escapes, the real frames land here.
-    append_rpc_log("%s daemon-fatal: %s" % (time.strftime("%H:%M:%S"), repr(ex)[:300]))
-    append_rpc_log("%s daemon-fatal-traceback:\n%s" % (
-        time.strftime("%H:%M:%S"), traceback.format_exc()))
-    traceback.print_exc()
+    # Any non-KeyboardInterrupt escape: reason = the exception class, full
+    # traceback to the log. The modal "ArgumentNullException (param del)"
+    # dialog truncates its traceback; the real frames land here.
+    _log_exit("fatal:" + type(ex).__name__)
 finally:
     # Signal + join the heartbeat thread BEFORE returning so IronPython
     # doesn't have to abort a live thread during interpreter teardown
@@ -416,5 +431,10 @@ finally:
     try: srv.close()
     except Exception: pass
     set_state("stopped", "")
-    append_rpc_log("%s daemon-stop pid=%s" % (time.strftime("%H:%M:%S"), os.getpid()))
+    try:
+        _final_up = time.time() - _daemon_start_mono
+    except NameError:
+        _final_up = -1.0
+    append_rpc_log("%s daemon-stop pid=%s uptime=%.1fs" % (
+        time.strftime("%H:%M:%S"), os.getpid(), _final_up))
     print("[daemon] stopped.")
