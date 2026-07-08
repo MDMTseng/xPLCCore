@@ -68,6 +68,45 @@ VAR_GLOBAL
 	fbVirtualMotorsExpire      : Standard.TON;
 	VIRTUAL_MOTORS_TTL         : TIME := T#10M;
 
+	(* --- Per-axis simulation mask (bench mode, 2026-07-08).
+	   Lets the host run the reel-pull motor REAL while the delta trio is
+	   simulated (tape-binding bench), without forking the FSM/dispatch
+	   semantics: the FSM climbs to Ready exactly as usual, only the
+	   drives' virtual mode differs. Runtime switch is SMC3_ReinitDrive
+	   with bVirtual per axis (SM3_Basic; equivalent to the SoftMotion
+	   Device Editor "virtual mode" checkbox, no device-tree edit needed).
+
+	   Bit layout matches axes_labels order (bit0..2 = EAxis0/1/2 delta
+	   trio, bit3 = reelpullmotor; 1 = simulated).
+
+	   AxisSimMask_Request : written by the SYS SET_AXIS_SIM handler
+	     (UnInited only). Self-expires AXIS_SIM_TTL_MS after the last
+	     accepted write -- deliberately a RuntimeMs deadline instead of a
+	     TON: the legacy TON gate latches Q while IN stays TRUE (see
+	     memory virtual_motors_gate_ton_reset), a re-stamped deadline
+	     avoids that trap. Expiry is evaluated in UnInited, so an applied
+	     mask is never yanked out from under a powered session; the NEXT
+	     reset after expiry reverts to all-real.
+	   AxisSimMaskApplied  : what the drives actually run right now.
+	     LIVE-DERIVED each scan from the axes' own bVirtual flags (the
+	     drives are the source of truth -- this also captures the
+	     device-tree "virtual mode" checkbox at boot, which on this rig
+	     has the delta trio virtual).
+	   AxisSimMask         : the PUBLISHED effective mask (Applied OR
+	     16#0F while the legacy bVirtualMotorsMode gate is open). This is
+	     what GET_MACHINE_STATE reports as axes_sim_mask and what the
+	     HOME_GO_FORCE_SKIP gate checks.
+	   AxisSimHostRequested: latched TRUE by the first accepted
+	     SET_AXIS_SIM. The reinit sequence only ever runs after the host
+	     opted in -- the legacy virtual_motors_force.py flow alone must
+	     keep today's behavior bit-identical (it never touched drives). *)
+	AxisSimMask_Request  : BYTE := 0;
+	AxisSimMaskApplied   : BYTE := 0;
+	AxisSimMask          : BYTE := 0;
+	AxisSimHostRequested : BOOL := FALSE;
+	AxisSimMaskSetMs     : LINT := 0;
+	AXIS_SIM_TTL_MS      : LINT := 600000;
+
 	(* --- Error diagnostic latch.
 	   Written from AxisGroupManager.Update (per-state FB error checks) and
 	   from the AxisGroupSM motion-FB supervisor. Cleared on UnInited entry.

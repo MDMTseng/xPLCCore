@@ -55,7 +55,12 @@ CASE _eState OF
 		E_RobotEvent.EV_HOME_GO:
 			 new_state:=E_RobotState.Homing;
 		E_RobotEvent.EV_HOME_GO_FORCE_SKIP:
-			 IF GVL.bVirtualMotorsMode THEN
+			 // Skip-home is allowed when the legacy all-axes gate is
+			 // open OR when the delta trio is simulated per-axis
+			 // (bench mode: SET_AXIS_SIM 0x07 -- simulated arms can't
+			 // physically home; the real reel axis doesn't home in
+			 // this routine at all, so a real reel doesn't block it).
+			 IF GVL.bVirtualMotorsMode OR ((GVL.AxisSimMask AND 16#07) = 16#07) THEN
 			     new_state:=E_RobotState.Ready;
 			 END_IF
 		END_CASE

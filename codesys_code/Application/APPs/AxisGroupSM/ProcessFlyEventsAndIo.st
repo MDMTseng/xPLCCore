@@ -97,7 +97,18 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
         // rationale). The action-clear below still runs even if the error
         // event was dropped -- the FlyEvent itself is one-shot, not the
         // notification.
+        //
+        // 2026-07-08: kind/name envelope added. Pre-fix this packet had
+        // neither `kind` nor `id`, so the renderer's RX loop dropped it
+        // on the floor -- the host could never learn that a registered
+        // fly event (e.g. a heat-press pin op) timed out instead of
+        // firing. Envelope now matches ST_CHG so PluginHello broadcasts
+        // it as a `plc:event` (name='TRIGGER_ERR'). Extra keys are
+        // backward compatible for the raw-socket test consumers, which
+        // match on event_id/error_code.
         IF TryAcquireReplySlot(ADR(GVL.ReMpDropCount_TriggerEvent)) THEN
+            MessagePackerFb.PackKvStr(ADR('kind'), ADR('event'));
+            MessagePackerFb.PackKvStr(ADR('name'), ADR('TRIGGER_ERR'));
             MessagePackerFb.PackKvDint(ADR('error_code'), TriggerErrorCode);
             MessagePackerFb.PackKvDint(ADR('src_id'),     pFly^.SourceCommandId);
             MessagePackerFb.PackKvLint(ADR('event_id'),   TO_LINT(pFly^.EventId));
@@ -222,9 +233,19 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
     IoTriggerInfoCount := IoTriggerInfoCount + 1;
 END_FOR;
 
-//DigitalOutputPointer := IoConfig_Globals.HECAT_1616.OutputData;//////////////////////////////////////////////
-OutputCHs[0] := TO_BYTE(DigitalOutputBits AND 16#FF);
-OutputCHs[1] := TO_BYTE(SHR(DigitalOutputBits,8) AND 16#FF);
+// 2026-07-08: the device I/O mapping (screenshot-confirmed) binds the two
+// output bytes to OutputCHs[1] and OutputCHs[2], NOT [0]/[1]:
+//   OutputCHs[1] <- %QB8  (device "CH1-8bit", physical outputs 0-7)
+//   OutputCHs[2] <- %QB9  (device "CH2-8bit", physical outputs 8-15)
+// The old code wrote [0]/[1], so the low byte (bits 0-7 -- exactly where
+// pin_op masks live) landed in the UNMAPPED OutputCHs[0] and never
+// reached hardware, while OutputCHs[2] (mapped to %QB9) was never driven.
+// Write [1]/[2] so DigitalOutputBits bit N -> physical output N.
+// (InputCHs[1]/[2] <- %IB8/%IB9 by the same mapping, but the DI consumers
+// are still unwired -- DigitalInputPointer is null -- so inputs are
+// mapped-but-unconsumed for now.)
+OutputCHs[1] := TO_BYTE(DigitalOutputBits AND 16#FF);
+OutputCHs[2] := TO_BYTE(SHR(DigitalOutputBits,8) AND 16#FF);
 
 
 DBG_PIN:=0;

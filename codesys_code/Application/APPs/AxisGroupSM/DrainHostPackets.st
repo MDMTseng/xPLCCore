@@ -13,6 +13,9 @@ VAR
     // GA_EV ev field raw read (code review fix #7). Same scope reasoning.
     GaEvRaw : LINT;
 
+    // SET_AXIS_SIM mask raw read. -1 sentinel = missing key.
+    AxisSimMaskRaw : LINT;
+
     // COORD1_BIND wire-read staging (B3, analysis 2.1). Pre-fix the
     // handler read straight into GVL.Coord1RefPulse/RefXyz/Scale and
     // validated afterwards -- a REJECTED bind still stomped the GVL
@@ -230,6 +233,12 @@ SysDrainIter := 0;
                 MessagePackerFb.PackElemStr(ADR('EAxis1 (arm2)'));
                 MessagePackerFb.PackElemStr(ADR('EAxis2 (arm3)'));
                 MessagePackerFb.PackElemStr(ADR('reelpullmotor'));
+                // axes_sim_mask : effective per-axis simulation mask, same
+                // bit order as axes_labels (bit0..2 delta, bit3 reel;
+                // 1 = simulated). Applied-state, not request -- a host
+                // that waits for its SET_AXIS_SIM mask to show up here
+                // before EV_POWER_ON never powers half-switched drives.
+                MessagePackerFb.PackKvDint(ADR('axes_sim_mask'), TO_DINT(GVL.AxisSimMask));
                 // reel_pos : reelpullmotor.fActPosition (REAL, axis-scaled
                 // user units -- mm under current GenericDSP402 scaling).
                 // Driven by decisions_2026-06-22.md §4 (1): renderer uses
@@ -415,6 +424,43 @@ SysDrainIter := 0;
                 MessagePackerFb.PackKvDint(ADR('io_cmd_count'), TO_DINT(IoCommandCount));
                 MessagePackerFb.PackKvDint(ADR('io_trig_count'), TO_DINT(IoTriggerCount));
                 MessagePackerFb.PackKvDint(ADR('flyevent_avail'), TO_DINT(FlyEventAvailableCount));
+            ELSIF (CommandType = 'SET_AXIS_SIM') THEN
+                // Per-axis simulation mask (bench mode). bit0..2 =
+                // EAxis0/1/2 (delta trio), bit3 = reelpullmotor; 1 =
+                // simulated. Honored ONLY in UnInited: flipping a drive
+                // between real and simulated re-runs its start-up phase
+                // (SMC3_ReinitDrive), which is only safe while the group
+                // is disabled and powerless. Reply echoes the EFFECTIVE
+                // mask this request produces (request OR legacy 16#0F
+                // gate); the applied state lands in axes_sim_mask when
+                // the reinit sequence completes -- hosts must poll for
+                // it before EV_POWER_ON.
+                ShouldReturn := TRUE;
+                AxisSimMaskRaw := MessageUnpackerFb.TryReadINT64('mask', -1);
+                IF (AxisSimMaskRaw < 0) OR (AxisSimMaskRaw > 15) THEN
+                    CommandAck := FALSE;
+                    ResponsePacketPointer^.ele_count := 0;
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('bad_mask'));
+                ELSIF (AxisGroupManagerFb._eState <> E_RobotState.UnInited) THEN
+                    CommandAck := FALSE;
+                    ResponsePacketPointer^.ele_count := 0;
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('not_uninited'));
+                ELSIF (AxisSimApplySeq <> 0) THEN
+                    // A previous apply is still reinitializing drives;
+                    // refusing beats queueing (the host's poll loop
+                    // retries trivially).
+                    CommandAck := FALSE;
+                    ResponsePacketPointer^.ele_count := 0;
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('sim_apply_busy'));
+                ELSE
+                    CommandAck := TRUE;
+                    GVL.AxisSimMask_Request  := TO_BYTE(AxisSimMaskRaw);
+                    GVL.AxisSimMaskSetMs     := RuntimeMs;
+                    GVL.AxisSimHostRequested := TRUE;
+                    ResponsePacketPointer^.ele_count := 0;
+                    MessagePackerFb.PackKvDint(ADR('mask'),
+                        TO_DINT(GVL.AxisSimMask_Request OR SEL(GVL.bVirtualMotorsMode, 16#00, 16#0F)));
+                END_IF
             ELSIF (CommandType = 'COORD1_BIND') THEN
                 // Bind the coord1 tracking frame to the conveyor encoder.
                 // Phase 4 step 2: PCS_1 is now driven by MC_TrackConveyorBelt

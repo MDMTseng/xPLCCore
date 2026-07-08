@@ -101,6 +101,26 @@ PROGRAM AxisGroupSM
         trackConveyorBeltFb : MC_TrackConveyorBelt;
         Coord1BeltOriginRef : MC_COORD_REF;
 
+        (* Per-axis simulation switch (bench mode; GVL.AxisSimMask docs).
+           One SMC3_ReinitDrive per axis: re-runs the drive start-up with
+           bVirtual per the target mask bit -- the runtime equivalent of
+           the Device Editor "virtual mode" checkbox. Sequence only runs
+           in UnInited (drives powerless, group disabled) and only after
+           the host opted in via SYS SET_AXIS_SIM. AxisSimApplySeq:
+           0 = idle, 1 = reinit in flight. Host handshake: the new mask
+           is published (axes_sim_mask) only when the sequence completes,
+           so a client that waits for the published mask before
+           EV_POWER_ON can never power half-reinitialized drives. *)
+        AxisSimReinit0    : SMC3_ReinitDrive;
+        AxisSimReinit1    : SMC3_ReinitDrive;
+        AxisSimReinit2    : SMC3_ReinitDrive;
+        AxisSimReinitReel : SMC3_ReinitDrive;
+        AxisSimApplySeq     : INT := 0;
+        AxisSimDesired      : BYTE := 0;
+        AxisSimApplyTarget  : BYTE := 0;
+        AxisSimApplyStartMs : LINT := 0;
+        AXIS_SIM_APPLY_TIMEOUT_MS : LINT := 10000;
+
         (* Phase 4 step 2 diagnostic: read what the kernel currently
            thinks PCS_1's origin is in WCS. This is the source of truth
            for what G1 frame=1 actually targets, and lets us verify
@@ -577,6 +597,88 @@ PROGRAM AxisGroupSM
     GVL.fbVirtualMotorsExpire(IN := GVL.bVirtualMotorsMode_Request, PT := GVL.VIRTUAL_MOTORS_TTL);
     GVL.bVirtualMotorsMode := GVL.bVirtualMotorsMode_Request AND NOT GVL.fbVirtualMotorsExpire.Q;
 
+    // ---- Per-axis simulation mask (bench mode; GVL.AxisSimMask docs). ----
+    // Applied mask is LIVE-DERIVED from the drives' own bVirtual flag --
+    // the drives are the source of truth, which also captures the
+    // device-tree "virtual mode" checkbox at boot (probed live
+    // 2026-07-08: EAxis0.bVirtual=TRUE on this rig before any
+    // SET_AXIS_SIM). The reinit-complete handshake falls out for free:
+    // axes_sim_mask only changes when the drives actually flipped.
+    GVL.AxisSimMaskApplied := 0;
+    IF IoConfig_Globals.EAxis0.bVirtual THEN GVL.AxisSimMaskApplied := GVL.AxisSimMaskApplied OR 16#01; END_IF;
+    IF IoConfig_Globals.EAxis1.bVirtual THEN GVL.AxisSimMaskApplied := GVL.AxisSimMaskApplied OR 16#02; END_IF;
+    IF IoConfig_Globals.EAxis2.bVirtual THEN GVL.AxisSimMaskApplied := GVL.AxisSimMaskApplied OR 16#04; END_IF;
+    IF reelpullmotor.bVirtual           THEN GVL.AxisSimMaskApplied := GVL.AxisSimMaskApplied OR 16#08; END_IF;
+    // Published effective mask: live drive state, with the legacy
+    // all-axes gate OR'd in for backward compatibility (the daemon-
+    // forced flag never touched drives pre-2026-07-08 and still
+    // doesn't -- it only declares the all-virtual rig state, exactly
+    // as the FORCE_SKIP gate always has).
+    GVL.AxisSimMask := GVL.AxisSimMaskApplied OR SEL(GVL.bVirtualMotorsMode, 16#00, 16#0F);
+
+    IF AxisGroupManagerFb._eState = E_RobotState.UnInited THEN
+        // Request TTL: RuntimeMs deadline re-stamped on every accepted
+        // SET_AXIS_SIM (see GVL.st for why not a TON). Only evaluated
+        // here, so an applied mask is never yanked mid-session; the
+        // next reset after expiry reverts to all-real.
+        IF (GVL.AxisSimMask_Request <> 0)
+           AND ((RuntimeMs - GVL.AxisSimMaskSetMs) > GVL.AXIS_SIM_TTL_MS) THEN
+            GVL.AxisSimMask_Request := 0;
+        END_IF;
+        AxisSimDesired := GVL.AxisSimMask_Request OR SEL(GVL.bVirtualMotorsMode, 16#00, 16#0F);
+        IF (AxisSimApplySeq = 0) AND GVL.AxisSimHostRequested
+           AND (AxisSimDesired <> GVL.AxisSimMaskApplied) THEN
+            AxisSimApplyTarget  := AxisSimDesired;
+            AxisSimApplyStartMs := RuntimeMs;
+            AxisSimApplySeq     := 1;
+        END_IF;
+    ELSIF AxisSimApplySeq <> 0 THEN
+        // FSM left UnInited mid-apply (host raced EV_POWER_ON instead of
+        // waiting for the published mask). Abort: drop Execute so the
+        // FBs reset; Applied stays at the old value so axes_sim_mask
+        // keeps telling the truth about what was last fully applied.
+        AxisSimApplySeq := 0;
+    END_IF;
+
+    // FB calls every scan (rising edge of bExecute starts the reinit;
+    // falling edge after completion/abort resets the FBs).
+    AxisSimReinit0(Axis := IoConfig_Globals.EAxis0,
+                   bExecute := (AxisSimApplySeq = 1),
+                   bVirtual := (AxisSimApplyTarget AND 16#01) <> 0);
+    AxisSimReinit1(Axis := IoConfig_Globals.EAxis1,
+                   bExecute := (AxisSimApplySeq = 1),
+                   bVirtual := (AxisSimApplyTarget AND 16#02) <> 0);
+    AxisSimReinit2(Axis := IoConfig_Globals.EAxis2,
+                   bExecute := (AxisSimApplySeq = 1),
+                   bVirtual := (AxisSimApplyTarget AND 16#04) <> 0);
+    AxisSimReinitReel(Axis := reelpullmotor,
+                      bExecute := (AxisSimApplySeq = 1),
+                      bVirtual := (AxisSimApplyTarget AND 16#08) <> 0);
+
+    IF AxisSimApplySeq = 1 THEN
+        IF AxisSimReinit0.bError OR AxisSimReinit1.bError
+           OR AxisSimReinit2.bError OR AxisSimReinitReel.bError THEN
+            // Latch-and-abort: Applied keeps the last fully-applied mask,
+            // so the host sees the mismatch in axes_sim_mask and can
+            // retry. No EV_ERROR -- we are already in UnInited and the
+            // drives are powerless; the latch is diagnostic.
+            GVL.LastErrorSource := 'AxisSim:ReinitDrive';
+            GVL.LastErrorID := TO_DWORD(AxisSimReinit0.nErrorID)
+                OR TO_DWORD(AxisSimReinit1.nErrorID)
+                OR TO_DWORD(AxisSimReinit2.nErrorID)
+                OR TO_DWORD(AxisSimReinitReel.nErrorID);
+            AxisSimApplySeq := 0;
+        ELSIF AxisSimReinit0.bDone AND AxisSimReinit1.bDone
+              AND AxisSimReinit2.bDone AND AxisSimReinitReel.bDone THEN
+            // Applied is live-derived above; all-bDone just ends the
+            // sequence (drops Execute so the FBs reset).
+            AxisSimApplySeq := 0;
+        ELSIF (RuntimeMs - AxisSimApplyStartMs) > AXIS_SIM_APPLY_TIMEOUT_MS THEN
+            GVL.LastErrorSource := 'AxisSim:ReinitTimeout';
+            GVL.LastErrorID := 0;
+            AxisSimApplySeq := 0;
+        END_IF;
+    END_IF;
 
     UpdateRuntimeAndInputEvent();
 
