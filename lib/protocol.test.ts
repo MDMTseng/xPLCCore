@@ -8,7 +8,7 @@
 // the same wire packet the PLC used to build internally.
 
 import { describe, it, expect } from 'vitest';
-import { expandM4ResetMs } from './protocol';
+import { cmd, expandM4ResetMs } from './protocol';
 
 describe('expandM4ResetMs', () => {
   it('passes through when no pin and no reset_ms', () => {
@@ -67,5 +67,34 @@ describe('expandM4ResetMs', () => {
   it('default state=0 when only pin given', () => {
     const out = expandM4ResetMs({ pin: 0b100 });
     expect(out).toEqual({ pin_op_seq: [0, 0b100, 0] });
+  });
+});
+
+// Immediate-fire pin-op builder. Pins the wire shape against the proven
+// pattern in test_plc_fly_events.py -- trig=120, huge radius, tin=1 --
+// so a refactor can't silently drop the "fires on next scan" property.
+describe('cmd.M4ImmediatePinOp', () => {
+  it('emits the huge-radius distance-trigger shape', () => {
+    const mask = 0b101; // bits 0+2, EC0808DN range
+    const out = cmd.M4ImmediatePinOp({
+      pin_op_seq: [0, mask, mask, 500, mask, 0],
+      event_id: 42,
+    });
+    expect(out).toEqual({
+      type: 'M', cmd: 'M4',
+      motion_id: 0,
+      trig: 120,
+      tx: 0, ty: 0, tz: 0,
+      td: 1.0e9,
+      tin: 1,
+      ttl_ms: 2000,
+      pin_op_seq: [0, mask, mask, 500, mask, 0],
+      event_id: 42,
+    });
+  });
+
+  it('honors an explicit ttl_ms', () => {
+    const out = cmd.M4ImmediatePinOp({ pin_op_seq: [0, 1, 1], event_id: 7, ttl_ms: 900 });
+    expect(out.ttl_ms).toBe(900);
   });
 });

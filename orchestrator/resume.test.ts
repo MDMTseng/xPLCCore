@@ -38,6 +38,7 @@ function makeMS(overrides: Partial<MachineState> = {}): MachineState {
     coord_set: true,
     axes_err_mask: 0, axes_state: 0, axes_err_id: [0, 0, 0, 0],
     axes_labels: ['a', 'b', 'c', 'd'],
+    axes_sim_mask: 0,
     reel_pos: 0,
     boot_epoch_now: 1,
     last_completed_movement_id: 0,

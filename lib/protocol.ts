@@ -80,6 +80,13 @@ export interface GaEvReply extends AckReply {
   err_id: number;
 }
 
+// SYS/SET_AXIS_SIM reply. Ack echoes the effective mask the PLC applied
+// (request combined with the legacy all-axes flag). NAK carries
+// err='not_uninited' (FSM must be UnInited) or err='bad_mask'.
+export interface SetAxisSimReply extends AckReply {
+  mask?: number;
+}
+
 // ─── Motion (type:"M") ───────────────────────────────────────────────
 
 export interface G1Args {
@@ -102,12 +109,21 @@ export interface M4Args {
   pin?: number;
   state?: number;
   reset_ms?: number;
+  motion_id?: number;
   motion_id_offset?: number;
   motion_progress?: number;
   group?: number;
   event_id?: number;
   ttl_ms?: number;
   pin_op_seq?: unknown;
+  // trig=120 (DistanceTrigger) parameters: fire when TCP is inside
+  // (tin=1) / outside (tin=0) the ball of radius `td` centred at
+  // (tx,ty,tz). Proven wire shape: test_plc_fly_events.py.
+  tx?: number;
+  ty?: number;
+  tz?: number;
+  td?: number;
+  tin?: number;
   // Phase 4 step 3 — FlyEvent COORD1_BIND variant. trig=130 (PulseTrigger)
   // + action='coord1_bind' + pulse_target schedules a conveyor bind to fire
   // when ConveyorPulseRaw crosses pulse_target. exit_pulse_offset (>0)
@@ -128,6 +144,23 @@ export interface M4BindArgs {
   event_id: number;
   scale?: [number, number, number];   // default [100, 0, 0]
   ttl_ms?: number;
+}
+
+// Immediate-fire pin operation. Wraps the proven "huge-radius distance
+// trigger" M4 shape (test_plc_fly_events.py, motion soak): trig=120 with
+// td=1e9 and tin=1 means the TCP is always inside the ball, so the
+// FlyEvent fires on the next Comm scan -- no motion required. Since B2c
+// the DistanceTrigger is gated on ArmPositionValid
+// (GroupActualPositionFb valid), which requires the group enabled
+// (FSM Ready on this rig). If the position read stays invalid the PLC
+// pushes a TRIGGER_TIMEOUT_ERR event carrying `event_id` when `ttl_ms`
+// expires instead of firing the pin op.
+export interface M4ImmediatePinOpArgs {
+  // Flat stage list: [delay_ms, pin_mask, pin_state, ...] repeated per
+  // stage. delay of stage 0 should be 0 (fire immediately on trigger).
+  pin_op_seq: number[];
+  event_id: number;
+  ttl_ms?: number;   // default 2000
 }
 
 export interface ReelGoArgs {
@@ -167,6 +200,12 @@ export interface MachineState {
   coord_set: boolean;
   axes_err_mask: number;
   axes_state: number;
+  // Effective per-axis simulation mask (bench mode). Bit layout matches
+  // axes_labels order: bit0-2 = EAxis0/1/2 (delta trio), bit3 =
+  // reelpullmotor. 1 = axis simulated (virtual), 0 = real drive.
+  // Set via SYS SET_AXIS_SIM (UnInited only); legacy
+  // bVirtualMotorsMode forces 0x0F. See doc/2-contracts/protocol.md.
+  axes_sim_mask: number;
   // Per-axis DS402 uiDriveInterfaceError mirror, same ordering as
   // axes_err_mask bits 0..3 (EAxis0/1/2/reelpullmotor). 0 = no fault.
   axes_err_id: number[];
@@ -271,7 +310,7 @@ export interface DiagSnapshot {
 
 export interface PushEvent {
   kind: 'event';
-  name: 'ST_CHG' | 'COORD_SET' | 'MOVE_DONE' | 'COORD1_ERROR';
+  name: 'ST_CHG' | 'COORD_SET' | 'MOVE_DONE' | 'COORD1_ERROR' | 'TRIGGER_ERR';
   runtime_ms: number;
   // COORD_SET only: BOOL gate state on this edge (true = SetCoord0/1
   // just raised it; false = UnInited entry just cleared it).
@@ -283,6 +322,19 @@ export interface PushEvent {
 // overshoots Coord1ExitPulse during a bound tracking move, or when a
 // bind is rejected (rebind_active / malformed scale). PLC source:
 // AxisGroupSM.st window-exit detector.
+// FlyEvent trigger-error push (TTL expiry / invalid-position timeout).
+// error_code 100 = TRIGGER_TIMEOUT_ERR. `event_id` echoes the M4 /
+// WAIT_FOR_TRIGGER registration; `src_id` is the registering command id.
+// Pre-2026-07-08 this packet had no kind/name and the renderer dropped
+// it -- consumers (e.g. BindingTestPage's press watchdog) rely on it to
+// learn a registered pin op timed out instead of firing.
+export interface TriggerErrEvent extends PushEvent {
+  name: 'TRIGGER_ERR';
+  error_code: number;
+  src_id: number;
+  event_id: number;
+}
+
 export interface Coord1ErrorEvent extends PushEvent {
   name: 'COORD1_ERROR';
   event_id: number;
@@ -376,6 +428,18 @@ export const cmd = {
       ttl_ms: a.ttl_ms,
     }),
   }),
+  // Immediate-fire pin op (heat press, bench IO). See M4ImmediatePinOpArgs.
+  M4ImmediatePinOp: (a: M4ImmediatePinOpArgs) => env<M4Reply>({
+    type: 'M', cmd: 'M4',
+    motion_id: 0,
+    trig: 120,
+    tx: 0, ty: 0, tz: 0,
+    td: 1.0e9,
+    tin: 1,
+    ttl_ms: a.ttl_ms ?? 2000,
+    pin_op_seq: a.pin_op_seq,
+    event_id: a.event_id,
+  }),
   ReelGo: (a: ReelGoArgs) => env<AckReply>({ type: 'M', cmd: 'ReelGo', ...compact(a) }),
   SetCoord0: () => env<AckReply>({ type: 'M', cmd: 'SetCoord0' }),
   SetCoord1: () => env<AckReply>({ type: 'M', cmd: 'SetCoord1' }),
@@ -400,6 +464,11 @@ export const cmd = {
   GetDiag: () => env<DiagSnapshot>({ type: 'SYS', cmd: 'GET_DIAG' }),
   ResetDbgInfo: () => env<AckReply>({ type: 'SYS', cmd: 'RESET_DBG_INFO' }),
   GA_EV: (ev: number) => env<GaEvReply>({ type: 'SYS', cmd: 'GA_EV', ev }),
+  // Per-axis simulation mask (bench mode). bit0-2 = EAxis0/1/2 (delta),
+  // bit3 = reelpullmotor; 1 = simulated. Honored ONLY in UnInited
+  // (NAK err='not_uninited' otherwise). Reply echoes the effective mask.
+  SetAxisSim: (mask: number) =>
+    env<SetAxisSimReply>({ type: 'SYS', cmd: 'SET_AXIS_SIM', mask }),
   // §4 (2) scratchpad write. v1 wire contract: caller sends ALL five
   // host-controlled fields every write (no partial updates). PLC stamps
   // schema_version=1 + boot_epoch on every write so subsequent reads
@@ -425,6 +494,7 @@ export const REQUIRED_KEYS = {
     'st', 'st_str', 'err_src', 'err_id', 'motion_buffer_size',
     'movement_id', 'runtime_ms', 'coord_set',
     'axes_err_mask', 'axes_state', 'axes_err_id', 'axes_labels',
+    'axes_sim_mask',
     'reel_pos', 'scratchpad', 'boot_epoch_now',
     'last_completed_movement_id',
   ],
