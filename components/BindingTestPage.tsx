@@ -31,11 +31,18 @@ const EV_HOME_GO_FORCE_SKIP = 7;
 const EV_RESET = 8;
 
 const POLL_MS = 1000;
-const SETTLE_POLL_MS = 300;
-const SETTLE_STABLE_POLLS = 3;
-const SETTLE_POS_TOL = 0.005;      // "not moving" tolerance between polls (mm)
-const SETTLE_TARGET_TOL = 0.05;    // "reached start+Distance" tolerance (mm)
-const REEL_SETTLE_TIMEOUT_MS = 30000;
+// Reel-settle tuning. The old values (300ms cadence, 3 stable polls,
+// 0.005mm "not moving" tol) caused a slow, jittery bind cycle: 0.005mm is
+// tighter than a REAL servo encoder's dither at rest, so the reel never
+// accumulated "stable" polls and every pull waited out the full timeout
+// (which was 30s) -- the strange pauses. Faster cadence + fewer stable
+// polls + a realistic dither tolerance settle a real pull in ~200-400ms;
+// the shorter timeout caps the worst case if something is actually stuck.
+const SETTLE_POLL_MS = 80;
+const SETTLE_STABLE_POLLS = 2;
+const SETTLE_POS_TOL = 0.05;       // "not moving" between polls (mm) -- above encoder dither, below any real move
+const SETTLE_TARGET_TOL = 0.1;     // "reached start+Distance" (mm) -- fast path when the reel lands near target
+const REEL_SETTLE_TIMEOUT_MS = 8000;
 const PRESS_TTL_MS = 2000;         // FlyEvent trigger TTL; timeout push = press did not fire
 const MIN_JERK = 10000;            // NEVER send JERK=0 -- SMC_MR_INVALID_VELACC_VALUES
 const MAX_PIN = 7;                 // safe subset: phys outputs 0-7 (CH1); raise to 15 once the 16-out part is confirmed
@@ -471,13 +478,15 @@ export const BindingTestPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrlO
         appendLog(`cycle ${i}/${n}: press ${pressMs}ms + lift ${liftMs}ms`);
         const pressed = await pressLiftOnce();
         if (!pressed) { appendLog(`cycle ${i}/${n}: press+lift M4 failed -- cycle stopped`, true); return; }
-        // Wait out the whole PLC-timed press+lift + margin before the next pull.
-        const waitMs = pressMs + liftMs + 400;
-        appendLog(`cycle ${i}/${n}: waiting press+lift ${pressMs + liftMs}ms + 400ms margin`);
+        // Wait out the whole PLC-timed press+lift + a small margin before
+        // the next pull (the press/lift durations are the user's own times;
+        // only the margin is overhead).
+        const waitMs = pressMs + liftMs + 150;
+        appendLog(`cycle ${i}/${n}: waiting press+lift ${pressMs + liftMs}ms + 150ms margin`);
         const deadline = Date.now() + waitMs;
         while (Date.now() < deadline) {
           if (abortRef.current) { appendLog(`cycle ${i}/${n}: aborted during press/lift wait (schedule is PLC-timed, will still finish)`); return; }
-          await sleep(100);
+          await sleep(50);
         }
         appendLog(`cycle ${i}/${n}: done`);
       }
