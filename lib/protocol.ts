@@ -445,6 +445,12 @@ export const cmd = {
   SetCoord1: () => env<AckReply>({ type: 'M', cmd: 'SetCoord1' }),
   WaitForMotionStop: (a: BlockArgs = {}) =>
     env<AckReply>({ type: 'M', cmd: 'WAIT_FOR_MOTION_STOP', ...compact(a) }),
+  // Deferred-ack wait for the REEL axis to stop (it isn't in the delta
+  // group, so WaitForMotionStop doesn't cover it). The PLC holds the ack
+  // frame until the reel is idle -- await this instead of polling reel_pos.
+  // NAKs `block_timeout` on `timeout_ms` (0/absent = wait forever).
+  WaitForReelStop: (a: BlockArgs = {}) =>
+    env<AckReply>({ type: 'M', cmd: 'WAIT_FOR_REEL_STOP', ...compact(a) }),
   BlockForDigitalInput: (a: DigitalInputWaitArgs) =>
     env<AckReply>({ type: 'M', cmd: 'BLOCK_FOR_DIGITAL_INPUT', ...compact(a) }),
   WaitForTriggerMotionProgress: (a: TriggerWaitArgs) =>

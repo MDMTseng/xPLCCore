@@ -54,6 +54,35 @@
                 GVL.minfo_buf_ridx.ConsumeTail();
             END_IF;
 
+        ELSIF (CommandType = 'WAIT_FOR_REEL_STOP' OR CommandType = 'BLOCK_FOR_REEL_STOP') THEN
+            // Like WAIT_FOR_MOTION_STOP but for the reel axis, which is NOT
+            // part of the delta group (so GroupReadPositionFb doesn't see
+            // it). Defers the ACK -- does NOT spin the scan -- until the
+            // reel is idle, then acks; NAK block_timeout on expiry. Lets the
+            // host await a ReelGo without polling reel_pos.
+            IF (CommandId <> BlockCommandId) THEN
+                BlockCommandId := CommandId;
+                BlockStartMs := RuntimeMs;
+                BlockTimeoutMs := MessageUnpackerFb.TryReadINT64('timeout_ms', 0);
+            END_IF;
+
+            // "Reel active" must include reelGoRequest*: a ReelGo sets the
+            // one-shot Execute request THIS scan but the MC_MoveRelative FB
+            // only goes Busy on the NEXT scan (main-body reel block runs
+            // after this method). Checking .Busy alone would falsely report
+            // "stopped" in that one-scan gap and ack before the move starts.
+            IF NOT (reelGoRequest OR reelGoRequest2
+                    OR reelMoveRelative.Busy OR reelMoveRelative2.Busy) THEN
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                GVL.minfo_buf_ridx.ConsumeTail();
+            ELSIF (BlockTimeoutMs > 0 AND (RuntimeMs - BlockStartMs) >= BlockTimeoutMs) THEN
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('block_timeout'));
+                ShouldReturn := TRUE;
+                CommandAck := FALSE;
+                GVL.minfo_buf_ridx.ConsumeTail();
+            END_IF;
+
         ELSIF (CommandType = 'BLOCK_FOR_DIGITAL_INPUT') THEN
             InputPinMask := TO_UINT(MessageUnpackerFb.TryReadINT64('pin', 0));
             InputPinGroup := TO_UINT(MessageUnpackerFb.TryReadINT64('group', 0));
