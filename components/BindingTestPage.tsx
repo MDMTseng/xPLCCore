@@ -31,17 +31,13 @@ const EV_HOME_GO_FORCE_SKIP = 7;
 const EV_RESET = 8;
 
 const POLL_MS = 1000;
-// Reel-settle tuning. The old values (300ms cadence, 3 stable polls,
-// 0.005mm "not moving" tol) caused a slow, jittery bind cycle: 0.005mm is
-// tighter than a REAL servo encoder's dither at rest, so the reel never
-// accumulated "stable" polls and every pull waited out the full timeout
-// (which was 30s) -- the strange pauses. Faster cadence + fewer stable
-// polls + a realistic dither tolerance settle a real pull in ~200-400ms;
-// the shorter timeout caps the worst case if something is actually stuck.
-const SETTLE_POLL_MS = 80;
-const SETTLE_STABLE_POLLS = 2;
-const SETTLE_POS_TOL = 0.05;       // "not moving" between polls (mm) -- above encoder dither, below any real move
-const SETTLE_TARGET_TOL = 0.1;     // "reached start+Distance" (mm) -- fast path when the reel lands near target
+// Reel-pull completion is PLC-authoritative via WAIT_FOR_REEL_STOP (the
+// PLC holds the ack until the reel axis is idle). This is only the upper
+// bound we pass as its timeout_ms -- a stuck reel NAKs block_timeout
+// instead of hanging the cycle. (Replaced the old reel_pos settle-polling,
+// whose 0.005mm "not moving" tolerance was tighter than real encoder
+// dither and made every pull wait out the full timeout -- the strange
+// pauses.)
 const REEL_SETTLE_TIMEOUT_MS = 8000;
 const PRESS_TTL_MS = 2000;         // FlyEvent trigger TTL; timeout push = press did not fire
 const MIN_JERK = 10000;            // NEVER send JERK=0 -- SMC_MR_INVALID_VELACC_VALUES
@@ -315,37 +311,6 @@ export const BindingTestPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrlO
     return null;
   }, [send]);
 
-  // ReelGo acks immediately; there is no movement_id for the reel axis.
-  // Completion = reel_pos reaches start+Distance within tolerance, or
-  // stops changing for SETTLE_STABLE_POLLS consecutive polls.
-  const waitReelSettle = useCallback(async (startPos: number, distance: number): Promise<{ ok: boolean; pos: number | null; why: string }> => {
-    const target = startPos + distance;
-    const deadline = Date.now() + REEL_SETTLE_TIMEOUT_MS;
-    let last: number | null = null;
-    let stable = 0;
-    await sleep(SETTLE_POLL_MS); // let the move start before sampling "stable"
-    while (Date.now() < deadline) {
-      if (abortRef.current) return { ok: false, pos: last, why: 'aborted' };
-      const p = await readReelPos();
-      if (p !== null) {
-        if (Math.abs(p - target) <= SETTLE_TARGET_TOL) {
-          return { ok: true, pos: p, why: `reached target ${target.toFixed(3)}` };
-        }
-        if (last !== null && Math.abs(p - last) <= SETTLE_POS_TOL) {
-          stable += 1;
-          if (stable >= SETTLE_STABLE_POLLS) {
-            return { ok: true, pos: p, why: `settled (${SETTLE_STABLE_POLLS} stable polls, off-target by ${(p - target).toFixed(3)})` };
-          }
-        } else {
-          stable = 0;
-        }
-        last = p;
-      }
-      await sleep(SETTLE_POLL_MS);
-    }
-    return { ok: false, pos: last, why: 'settle timeout' };
-  }, [readReelPos]);
-
   const buildReelGo = useCallback(() => {
     const Distance = numOr(fields.distance, 0);
     const F = numOr(fields.feed, 20);
@@ -361,22 +326,32 @@ export const BindingTestPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrlO
     return args;
   }, [fields]);
 
-  // Returns true when pull + settle succeeded (used by the cycle loop).
+  // Returns true when the pull completed (used by the cycle loop).
+  // Completion is now PLC-authoritative: after ReelGo we await
+  // WAIT_FOR_REEL_STOP, whose ack the PLC holds until the reel axis is
+  // idle (no reel_pos polling / settle-tolerance guessing). A bounded
+  // timeout_ms means a stuck reel NAKs block_timeout instead of hanging
+  // the cycle forever. reel_pos is still read before/after just for the
+  // log.
   const pullReelOnce = useCallback(async (): Promise<boolean> => {
     if (!requireReady()) return false;
     const args = buildReelGo();
     if (args.Distance === 0) { appendLog('distance is 0 -- nothing to pull', true); return false; }
     const start = await readReelPos();
-    if (start === null) { appendLog('could not read reel_pos before pull', true); return false; }
     const r = await sendTracked<AckReply>(cmd.ReelGo(args), `ReelGo(D=${args.Distance}, F=${args.F})`);
     if (!r || r.ack !== true) { appendLog('ReelGo not acked -- pull skipped', true); return false; }
-    const settle = await waitReelSettle(start, args.Distance);
-    appendLog(
-      `reel ${settle.ok ? 'settled' : 'DID NOT settle'}: start=${start.toFixed(3)} now=${settle.pos?.toFixed(3) ?? '?'} (${settle.why})`,
-      !settle.ok,
+    const stopped = await sendTracked<AckReply>(
+      cmd.WaitForReelStop({ timeout_ms: REEL_SETTLE_TIMEOUT_MS }),
+      'WaitForReelStop',
     );
-    return settle.ok;
-  }, [requireReady, buildReelGo, readReelPos, sendTracked, waitReelSettle, appendLog]);
+    const end = await readReelPos();
+    if (!stopped || stopped.ack !== true) {
+      appendLog(`reel DID NOT stop within ${REEL_SETTLE_TIMEOUT_MS}ms (${stopped?.err ?? 'no ack'}); start=${start?.toFixed(3) ?? '?'} now=${end?.toFixed(3) ?? '?'}`, true);
+      return false;
+    }
+    appendLog(`reel stopped: start=${start?.toFixed(3) ?? '?'} -> ${end?.toFixed(3) ?? '?'} (PLC-confirmed idle)`);
+    return true;
+  }, [requireReady, buildReelGo, readReelPos, sendTracked, appendLog]);
 
   const onPullReel = useCallback(async () => {
     setBusy(true);
@@ -600,8 +575,8 @@ export const BindingTestPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrlO
           </div>
           <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>
             JERK is fixed at {MIN_JERK} (hidden -- zero jerk trips SMC_MR_INVALID_VELACC_VALUES on the
-            PLC). Completion is detected by polling reel_pos until it reaches start+distance or stops
-            changing for {SETTLE_STABLE_POLLS} polls.
+            PLC). Completion is PLC-confirmed via WAIT_FOR_REEL_STOP (the PLC holds the ack until the
+            reel axis is idle) -- no reel_pos polling.
           </div>
           <button type="button" onClick={onPullReel} disabled={actuationDisabled}>Pull reel</button>
         </Section>
