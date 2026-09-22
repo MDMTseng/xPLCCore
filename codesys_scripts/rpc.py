@@ -1,57 +1,109 @@
 #!/usr/bin/env python3
-"""rpc.py -- thin client for the CODESYS scripting daemon.
+"""rpc.py -- client for the CODESYS scripting daemon (v2).
 
-Replaces the file-based watcher submission flow. The daemon is a long-running
-script in the CODESYS Scripting Console (codesys_scripts/daemon.py).
+The daemon is a long-lived IronPython process inside the CODESYS
+Scripting Console (daemon.py). This is its terminal-side client.
 
-Usage:
-    # ping the daemon (also doubles as a liveness probe)
-    python rpc.py ping
+What changed from v1
+--------------------
+v1 exposed ping / exec / stop. Anything else -- saving, checking a PLC
+variable, poking at the IDE -- meant stopping the daemon, and stopping
+was the operation that hung. So the workflow forced you through the
+dangerous path several times a day.
 
-    # run a script file in the warm CODESYS session
-    python rpc.py exec --file my_job.py
+v2 serves the common reasons you used to stop:
 
-    # run a snippet from stdin
-    echo 'print(projects.primary.path)' | python rpc.py exec --label whereami
+    rpc.py save                 persist the project without leaving
+    rpc.py read GVL.Foo         read a symbol through the live session
+    rpc.py write GVL.Foo TRUE   write (--force to force)
+    rpc.py logout               drop the online session, keep the daemon
 
-    # full push: import_all -> online_change -> pytest regression
-    # (this is the default code-push path; --no-tests for hot fixes)
-    python rpc.py push
-    python rpc.py push --no-tests
+and makes leaving a real operation with visible progress:
 
-    # one-shot environment health check (daemon + UI harness + PLC link)
-    python rpc.py status
+    rpc.py yield                hand the IDE back, wait, report the phase
 
-    # tell the daemon to exit (server-side Ctrl+C also works)
-    python rpc.py stop
+`yield` polls daemon.status while the daemon tears down, so instead of
+staring at a frozen IDE you see which step is slow:
 
-Exit codes:
-    0  success (or ping/stop returned ok)
+    release:logout    12.4s
+    release:save       0.3s
+    stopped
+
+Usage
+-----
+    rpc.py ping | status
+    rpc.py exec --file job.py [--readonly] [--no-snapshot]
+    echo 'print(projects.primary.path)' | rpc.py exec --label whereami
+    rpc.py save | snapshot | logout
+    rpc.py read  GVL.AxisGroupSMScans
+    rpc.py write GVL.bVirtualMotorsMode_Request TRUE [--force]
+    rpc.py yield [--timeout 120]
+    rpc.py stop
+    rpc.py doctor
+
+Exit codes
+----------
+    0  success
     1  job ran but raised inside CODESYS (stdout / traceback printed)
     2  daemon not reachable (connection refused)
     3  socket timeout waiting for reply
     4  bad request / bad reply
+    5  daemon wedged during release (see the reported phase)
 """
-import sys, json, socket, argparse, os, subprocess
 
-HOST = "127.0.0.1"
-PORT = 7420
+import sys
+import os
+import json
+import socket
+import argparse
+import time
+
 HERE = os.path.dirname(os.path.abspath(__file__))
-INTERNALS = os.path.join(HERE, "internals")
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
+import config
+
+E_OK, E_JOB, E_REFUSED, E_TIMEOUT, E_PROTO, E_WEDGED = 0, 1, 2, 3, 4, 5
+
+
+def status_file():
+    return os.path.join(config.state_dir(), "daemon.status")
+
+
+def read_status_file():
+    """The heartbeat file is written by a side thread, so it keeps
+    updating even when the daemon's main thread is blocked inside a
+    CODESYS call. That makes it the only reliable way to observe a
+    wedged daemon -- RPC will not answer, but this still ticks."""
+    path = status_file()
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            line = f.read().strip()
+    except OSError:
+        return None
+    if not line:
+        return None
+    out = {"_raw": line, "_mtime": os.path.getmtime(path)}
+    for token in line.split():
+        if "=" in token:
+            k, v = token.split("=", 1)
+            out[k] = v
+    return out
 
 
 def call(req, timeout):
-    s = socket.create_connection((HOST, PORT), timeout=timeout)
+    s = socket.create_connection(
+        (config.rpc_host(), config.rpc_port()), timeout=timeout)
     try:
         s.sendall((json.dumps(req) + "\n").encode("utf-8"))
-        # NOTE: do NOT shutdown(SHUT_WR) here. The IronPython socket inside
-        # CODESYS wedges on a half-closed peer; the daemon relies on the '\n'
-        # line delimiter to know the request is complete.
-        # The daemon's reply is one '\n'-terminated JSON line. Break as soon
-        # as the line is complete -- don't wait for EOF, because IronPython's
-        # sock.close() inside CODESYS doesn't reliably deliver FIN, which
-        # leaves recv() hanging until our socket timeout. (Smoke test
-        # 2026-04-25 surfaced this on set_force_value-bearing jobs.)
+        # Do NOT shutdown(SHUT_WR) here. The IronPython socket inside
+        # CODESYS wedges on a half-closed peer; the daemon relies on the
+        # '\n' delimiter to know the request is complete.
+        #
+        # Break as soon as the line is complete rather than waiting for
+        # EOF: IronPython's sock.close() inside CODESYS does not reliably
+        # deliver FIN, which leaves recv() hanging until our own timeout.
         chunks = []
         while True:
             buf = s.recv(65536)
@@ -68,154 +120,403 @@ def call(req, timeout):
     return json.loads(raw)
 
 
-def do_status(timeout):
-    """One-shot environment health check. Reports pass/fail per layer
-    so a debugging session starts from "what is actually broken" rather
-    than guessing. Returns 0 if all green, 1 otherwise."""
-    import json as _json
-    rows = []  # (layer, ok, detail)
-
-    # Layer 1: scripting daemon reachable
+def call_or_exit(req, timeout):
     try:
-        rep = call({"cmd": "ping"}, timeout=min(timeout, 5))
-        rows.append(("daemon", bool(rep.get("ok")), "rpc_count=%s" % rep.get("rpc_count", "?")))
+        return call(req, timeout)
     except ConnectionRefusedError:
-        rows.append(("daemon", False, "connection refused on %s:%d" % (HOST, PORT)))
-    except Exception as ex:
-        rows.append(("daemon", False, "error: %s" % ex))
-
-    # Layer 2: UI remote_harness reachable + UI<->PLC link
-    # Spawn remote_ctrl.py PING through the UI harness so we exercise the
-    # whole chain instead of probing the harness alone.
-    try:
-        res = subprocess.run(
-            [sys.executable, os.path.join(INTERNALS, "remote_ctrl.py"),
-             "send_tcp_msgpack", _json.dumps({"type": "SYS", "cmd": "PING"}),
-             "--timeout", str(min(timeout, 5))],
-            capture_output=True, text=True, timeout=min(timeout, 8),
-        )
-        out = _json.loads(res.stdout or "{}")
-        result = out.get("result") or {}
-        inner = result.get("value") if isinstance(result, dict) else None
-        if isinstance(inner, dict) and inner.get("pong"):
-            rows.append(("ui_harness", True, "pong runtime_ms=%s" % inner.get("runtime_ms", "?")))
-        else:
-            rows.append(("ui_harness", False, "no pong: %s" % str(out or res.stdout)[:200]))
-    except subprocess.TimeoutExpired:
-        rows.append(("ui_harness", False, "timeout (UI not running / not connected?)"))
-    except Exception as ex:
-        rows.append(("ui_harness", False, "error: %s" % ex))
-
-    # Layer 3: PLC FSM state via GET_MACHINE_STATE
-    try:
-        res = subprocess.run(
-            [sys.executable, os.path.join(INTERNALS, "remote_ctrl.py"),
-             "send_tcp_msgpack",
-             _json.dumps({"type": "SYS", "cmd": "GET_MACHINE_STATE"}),
-             "--timeout", str(min(timeout, 5))],
-            capture_output=True, text=True, timeout=min(timeout, 8),
-        )
-        out = _json.loads(res.stdout or "{}")
-        result = out.get("result") or {}
-        inner = result.get("value") if isinstance(result, dict) else None
-        if isinstance(inner, dict) and "st_str" in inner:
-            rows.append(("plc_fsm", True, "st=%s coord_set=%s axes_err_mask=%s"
-                         % (inner.get("st_str"), inner.get("coord_set"),
-                            inner.get("axes_err_mask"))))
-        else:
-            rows.append(("plc_fsm", False, "no machine-state reply"))
-    except Exception as ex:
-        rows.append(("plc_fsm", False, "error: %s" % ex))
-
-    width = max(len(r[0]) for r in rows)
-    all_ok = True
-    for layer, ok, detail in rows:
-        mark = "OK " if ok else "FAIL"
-        print("[%s] %-*s %s" % (mark, width, layer, detail))
-        all_ok = all_ok and ok
-    return 0 if all_ok else 1
-
-
-def main():
-    ap = argparse.ArgumentParser(description="CODESYS scripting RPC client")
-    ap.add_argument("cmd", choices=["ping", "exec", "stop", "push", "status", "daemon-start"])
-    ap.add_argument("--file", help="path to .py file (else read from stdin)")
-    ap.add_argument("--label", default="", help="short tag for daemon log")
-    ap.add_argument("--timeout", type=float, default=180,
-                    help="socket timeout in seconds (default 180)")
-    ap.add_argument("--no-tests", action="store_true",
-                    help="(push only) skip the pytest regression after online_change")
-    args = ap.parse_args()
-
-    if args.cmd == "status":
-        sys.exit(do_status(args.timeout))
-
-    if args.cmd == "daemon-start":
-        # Hands-off recovery: if the daemon is dead, kickstart it (spawn
-        # CODESYS with --runscript=daemon.py if the IDE isn't already up;
-        # otherwise print the paste-into-Scripting-Console workaround).
-        wrapper = os.path.join(INTERNALS, "daemon_kickstart.py")
-        argv = [sys.executable, wrapper, "--wait", str(max(30, args.timeout))]
-        sys.exit(subprocess.call(argv))
-
-    if args.cmd == "push":
-        # Delegate to the dedicated wrapper so the regression-gated push has
-        # one implementation. Anything else (rpc.py ping/exec/stop) keeps
-        # talking to the daemon directly.
-        wrapper = os.path.join(INTERNALS, "online_change_with_regression.py")
-        argv = [sys.executable, wrapper]
-        if args.no_tests:
-            argv.append("--skip-tests")
-        sys.exit(subprocess.call(argv))
-
-    req = {"cmd": args.cmd}
-    if args.cmd == "exec":
-        if args.file:
-            with open(args.file, "r", encoding="utf-8") as f:
-                code = f.read()
-            label = args.label or os.path.basename(args.file)
-        else:
-            if sys.stdin.isatty():
-                print("ERROR: no --file and stdin is a tty", file=sys.stderr)
-                sys.exit(4)
-            code = sys.stdin.read()
-            label = args.label or "stdin"
-        req["code"]  = code
-        req["label"] = label
-
-    try:
-        rep = call(req, timeout=args.timeout)
-    except ConnectionRefusedError:
-        print("ERROR: connection refused on %s:%d -- is daemon.py running in the CODESYS Scripting Console?"
-              % (HOST, PORT), file=sys.stderr)
-        sys.exit(2)
+        hint = read_status_file()
+        print("daemon not reachable on %s:%d"
+              % (config.rpc_host(), config.rpc_port()), file=sys.stderr)
+        if hint:
+            age = time.time() - hint["_mtime"]
+            print("last heartbeat %.0fs ago: %s" % (age, hint["_raw"]),
+                  file=sys.stderr)
+        print("start it with: rpc.py daemon-start", file=sys.stderr)
+        sys.exit(E_REFUSED)
     except socket.timeout:
-        print("ERROR: socket timeout after %ss waiting for daemon reply"
-              % args.timeout, file=sys.stderr)
-        sys.exit(3)
+        print("timed out waiting for the daemon", file=sys.stderr)
+        hint = read_status_file()
+        if hint:
+            print("heartbeat says: %s" % hint["_raw"], file=sys.stderr)
+        sys.exit(E_TIMEOUT)
     except (ValueError, json.JSONDecodeError) as ex:
-        print("ERROR: bad reply: %s" % ex, file=sys.stderr)
-        sys.exit(4)
+        print("bad reply: %s" % ex, file=sys.stderr)
+        sys.exit(E_PROTO)
 
-    if args.cmd == "exec":
-        sys.stdout.write(rep.get("stdout", ""))
-        if not rep.get("stdout", "").endswith("\n"):
-            sys.stdout.write("\n")
-        elapsed = rep.get("elapsed", 0.0)
-        if rep.get("ok"):
-            sys.stderr.write("[rpc] ok elapsed=%.2fs rpc_count=%s\n"
-                             % (elapsed, rep.get("rpc_count", "?")))
-            sys.exit(0)
-        else:
-            sys.stderr.write("[rpc] FAIL elapsed=%.2fs error=%s\n"
-                             % (elapsed, (rep.get("error") or "(none)").splitlines()[0]
-                                if rep.get("error") else "(none)"))
-            sys.exit(1)
 
-    # ping / stop
-    print(json.dumps(rep, indent=2))
-    sys.exit(0 if rep.get("ok") else 1)
+# ---- commands --------------------------------------------------------
+
+def cmd_ping(args):
+    rep = call_or_exit({"cmd": "ping"}, args.timeout)
+    width = max(len(k) for k in rep)
+    for k, v in rep.items():
+        print("  %-*s %s" % (width, k, v))
+    return E_OK if rep.get("ok") else E_JOB
+
+
+def cmd_save(args):
+    rep = call_or_exit({"cmd": "save"}, args.timeout)
+    print(rep.get("detail") or rep)
+    return E_OK if rep.get("ok") else E_JOB
+
+
+def cmd_snapshot(args):
+    rep = call_or_exit({"cmd": "snapshot", "label": args.label},
+                       args.timeout)
+    print(rep.get("snapshot") or rep)
+    return E_OK if rep.get("ok") else E_JOB
+
+
+def cmd_logout(args):
+    rep = call_or_exit({"cmd": "logout"}, args.timeout)
+    print(rep.get("detail") or rep)
+    return E_OK if rep.get("ok") else E_JOB
+
+
+def cmd_read(args):
+    rep = call_or_exit({"cmd": "read", "symbol": args.symbol}, args.timeout)
+    if rep.get("ok"):
+        print(rep.get("value"))
+        return E_OK
+    print(rep.get("error"), file=sys.stderr)
+    if args.verbose and rep.get("traceback"):
+        print(rep["traceback"], file=sys.stderr)
+    return E_JOB
+
+
+def cmd_write(args):
+    rep = call_or_exit({"cmd": "write", "symbol": args.symbol,
+                        "value": args.value, "force": args.force},
+                       args.timeout)
+    if rep.get("ok"):
+        print("%s = %s%s" % (rep.get("symbol"), rep.get("value"),
+                             " (forced)" if rep.get("forced") else ""))
+        return E_OK
+    print(rep.get("error"), file=sys.stderr)
+    if args.verbose and rep.get("traceback"):
+        print(rep["traceback"], file=sys.stderr)
+    return E_JOB
+
+
+def cmd_exec(args):
+    if args.file:
+        with open(args.file, "r", encoding="utf-8") as f:
+            code = f.read()
+        label = args.label or os.path.basename(args.file)
+    else:
+        code = sys.stdin.read()
+        label = args.label or "stdin"
+    rep = call_or_exit({"cmd": "exec", "code": code, "label": label,
+                        "readonly": args.readonly,
+                        "snapshot": not args.no_snapshot},
+                       args.timeout)
+    out = rep.get("stdout") or ""
+    if out:
+        print(out, end="" if out.endswith("\n") else "\n")
+    if rep.get("snapshot"):
+        print("[snapshot] %s" % rep["snapshot"])
+    if not args.readonly:
+        print("[saved] %s" % rep.get("saved"))
+        if rep.get("save_detail"):
+            print("[save]  %s" % rep["save_detail"], file=sys.stderr)
+    if rep.get("budget_exceeded"):
+        print("[budget] session retiring: %s" % rep["budget_exceeded"])
+    if not rep.get("ok"):
+        if rep.get("error"):
+            print(rep["error"], file=sys.stderr)
+        return E_JOB
+    return E_OK
+
+
+def _wait_for_release(timeout, quiet=False):
+    """Watch the heartbeat file while the daemon tears down.
+
+    This is the whole point of v2's release path: the phases published
+    during teardown turn 'CODESYS is frozen and I do not know why' into
+    'it is sitting in release:logout'."""
+    deadline = time.time() + timeout
+    last_phase = None
+    phase_started = time.time()
+    while time.time() < deadline:
+        snap = read_status_file()
+        if snap is None:
+            time.sleep(0.4)
+            continue
+        phase = snap.get("phase", "?")
+        if phase != last_phase:
+            if last_phase is not None and not quiet:
+                print("  %-18s %.1fs" % (last_phase, time.time() - phase_started))
+            last_phase = phase
+            phase_started = time.time()
+        if phase == "stopped":
+            if not quiet:
+                print("  %-18s done" % phase)
+            return True, phase
+        time.sleep(0.4)
+    return False, last_phase
+
+
+def cmd_yield(args):
+    cmd = "stop" if args.hard_stop else "yield"
+    try:
+        rep = call({"cmd": cmd, "reason": args.reason}, args.timeout)
+    except ConnectionRefusedError:
+        print("daemon already down")
+        return E_OK
+    except socket.timeout:
+        print("daemon did not acknowledge; watching heartbeat anyway",
+              file=sys.stderr)
+        rep = {}
+    if rep and not rep.get("ok"):
+        print("daemon refused: %s" % rep, file=sys.stderr)
+        return E_PROTO
+
+    print("releasing the IDE (%s)..." % (args.reason or cmd))
+    done, phase = _wait_for_release(args.wait)
+    if done:
+        print("IDE released. CODESYS stays open with the project saved.")
+        return E_OK
+    print("", file=sys.stderr)
+    print("STILL WEDGED after %ds, stuck in phase: %s"
+          % (args.wait, phase), file=sys.stderr)
+    print("", file=sys.stderr)
+    print("The project was saved before this phase unless the phase IS",
+          file=sys.stderr)
+    print("release:save. Check %s" % status_file(), file=sys.stderr)
+    print("Recover with: supervisor.py kill  (snapshots are in %s)"
+          % config.snapshot_dir(), file=sys.stderr)
+    return E_WEDGED
+
+
+def _exec_template(name, label, timeout, readonly=False):
+    """Run one of jobs/templates/*.py through the daemon."""
+    path = os.path.join(HERE, "jobs", "templates", name)
+    if not os.path.isfile(path):
+        print("missing job template: %s" % path, file=sys.stderr)
+        return E_PROTO, {}
+    with open(path, "r", encoding="utf-8") as f:
+        code = f.read()
+    rep = call_or_exit({"cmd": "exec", "code": code, "label": label,
+                        "readonly": readonly}, timeout)
+    out = rep.get("stdout") or ""
+    if out:
+        print(out, end="" if out.endswith("\n") else "\n")
+    if not rep.get("ok"):
+        if rep.get("error"):
+            print(rep["error"], file=sys.stderr)
+        return E_JOB, rep
+    return E_OK, rep
+
+
+def cmd_push(args):
+    """import .st from disk -> online change -> regression tests.
+
+    Each stage is a daemon transaction, so each one snapshots first and
+    saves after. v1 relied on online_change.py happening to call save(),
+    which meant a push that stopped after import_all left every edit
+    unsaved -- exactly the state that made a later hang expensive."""
+    stages = []
+
+    print("== import_all ==")
+    rc, rep = _exec_template("import_all.py", "push:import", args.timeout)
+    stages.append(("import_all", rc))
+    if rep.get("snapshot"):
+        print("[snapshot] %s" % rep["snapshot"])
+    print("[saved] %s" % rep.get("saved"))
+    if rc != E_OK:
+        print("push aborted at import_all", file=sys.stderr)
+        return rc
+
+    if not args.no_online:
+        print("")
+        print("== online_change ==")
+        rc, rep = _exec_template("online_change.py", "push:online",
+                                 args.timeout)
+        stages.append(("online_change", rc))
+        if rc != E_OK:
+            print("push aborted at online_change", file=sys.stderr)
+            return rc
+
+    if not args.no_tests:
+        print("")
+        print("== regression ==")
+        import subprocess
+        res = subprocess.run(
+            [sys.executable, "-m", "pytest", os.path.join(HERE, "tests")],
+            cwd=os.path.dirname(HERE))
+        stages.append(("pytest", res.returncode))
+        if res.returncode != 0:
+            print("push: tests failed", file=sys.stderr)
+            return E_JOB
+
+    print("")
+    for name, code in stages:
+        print("  %-14s %s" % (name, "ok" if code == 0 else "FAILED(%d)" % code))
+    return E_OK
+
+
+def cmd_daemon_start(args):
+    """Delegate to the supervisor so there is exactly one place that
+    knows how to launch CODESYS. v1 had the launch logic duplicated
+    between internals/daemon_kickstart.py and build.sh, which is how
+    build.sh ended up pinned to a CODESYS version that was no longer
+    installed."""
+    import supervisor
+    import argparse as _argparse
+    return supervisor.cmd_start(_argparse.Namespace(
+        wait=args.wait, force=args.force, verbose=args.verbose))
+
+
+def cmd_doctor(args):
+    """One-shot health check. Reports per layer so a debugging session
+    starts from 'what is actually broken' rather than guessing."""
+    rows = []
+
+    try:
+        print(config.describe())
+        rows.append(("config", True, config.config_path()))
+    except Exception as ex:
+        rows.append(("config", False, str(ex)))
+        print("config: %s" % ex, file=sys.stderr)
+
+    try:
+        proj = config.project_path()
+        rows.append(("project file", os.path.isfile(proj), proj))
+    except Exception as ex:
+        rows.append(("project file", False, str(ex)))
+
+    try:
+        exe = config.codesys_exe()
+        rows.append(("codesys exe", os.path.isfile(exe), exe))
+    except Exception as ex:
+        rows.append(("codesys exe", False, str(ex)))
+
+    snap = read_status_file()
+    if snap:
+        age = time.time() - snap["_mtime"]
+        stale = age > config.heartbeat_stale_seconds()
+        rows.append(("heartbeat", not stale,
+                     "%.0fs old, phase=%s" % (age, snap.get("phase"))))
+    else:
+        rows.append(("heartbeat", False, "no status file"))
+
+    try:
+        rep = call({"cmd": "ping"}, min(args.timeout, 5))
+        rows.append(("daemon rpc", bool(rep.get("ok")),
+                     "rpc_count=%s dirty=%s online=%s"
+                     % (rep.get("rpc_count"), rep.get("dirty"),
+                        rep.get("online"))))
+    except ConnectionRefusedError:
+        rows.append(("daemon rpc", False, "connection refused"))
+    except Exception as ex:
+        rows.append(("daemon rpc", False, str(ex)))
+
+    try:
+        s = socket.create_connection(
+            (config.plc_host(), config.plc_port()), timeout=3)
+        s.close()
+        rows.append(("plc tcp", True,
+                     "%s:%d" % (config.plc_host(), config.plc_port())))
+    except Exception as ex:
+        rows.append(("plc tcp", False, str(ex)))
+
+    print("")
+    width = max(len(r[0]) for r in rows)
+    bad = 0
+    for name, ok, detail in rows:
+        if not ok:
+            bad += 1
+        print("  [%s] %-*s  %s" % ("ok" if ok else "XX", width, name, detail))
+    return E_OK if bad == 0 else E_JOB
+
+
+# ---- argument parsing ------------------------------------------------
+
+def build_parser():
+    p = argparse.ArgumentParser(
+        prog="rpc.py",
+        description="Client for the CODESYS scripting daemon (v2).",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--timeout", type=float, default=600,
+                   help="socket timeout in seconds (default 600)")
+    p.add_argument("-v", "--verbose", action="store_true")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sp = sub.add_parser("ping", help="daemon state snapshot")
+    sp.set_defaults(func=cmd_ping)
+    sp = sub.add_parser("status", help="alias for ping")
+    sp.set_defaults(func=cmd_ping)
+
+    sp = sub.add_parser("exec", help="run a job in the warm session")
+    sp.add_argument("--file", help="job file (default: read stdin)")
+    sp.add_argument("--label", help="short tag for logs")
+    sp.add_argument("--readonly", action="store_true",
+                    help="job does not mutate: skip snapshot and save")
+    sp.add_argument("--no-snapshot", action="store_true",
+                    help="mutating job, but skip the pre-job snapshot")
+    sp.set_defaults(func=cmd_exec)
+
+    sp = sub.add_parser("save", help="save the project without leaving")
+    sp.set_defaults(func=cmd_save)
+
+    sp = sub.add_parser("snapshot", help="copy the .project aside now")
+    sp.add_argument("--label", default="manual")
+    sp.set_defaults(func=cmd_snapshot)
+
+    sp = sub.add_parser("logout", help="drop the online session, keep daemon")
+    sp.set_defaults(func=cmd_logout)
+
+    sp = sub.add_parser("read", help="read a symbol through the live session")
+    sp.add_argument("symbol")
+    sp.set_defaults(func=cmd_read)
+
+    sp = sub.add_parser("write", help="write a symbol")
+    sp.add_argument("symbol")
+    sp.add_argument("value")
+    sp.add_argument("--force", action="store_true")
+    sp.set_defaults(func=cmd_write)
+
+    sp = sub.add_parser("yield", help="hand the IDE back (daemon exits)")
+    sp.add_argument("--reason", default="manual")
+    sp.add_argument("--wait", type=int, default=120,
+                    help="seconds to watch the release phases")
+    sp.add_argument("--hard-stop", action="store_true",
+                    help="do not let the supervisor relaunch")
+    sp.set_defaults(func=cmd_yield)
+
+    sp = sub.add_parser("stop", help="yield and do not relaunch")
+    sp.add_argument("--reason", default="stop")
+    sp.add_argument("--wait", type=int, default=120)
+    sp.set_defaults(func=cmd_yield, hard_stop=True)
+
+    sp = sub.add_parser("push", help="import .st -> online change -> tests")
+    sp.add_argument("--no-tests", action="store_true",
+                    help="hot fix: skip the regression suite")
+    sp.add_argument("--no-online", action="store_true",
+                    help="import and save only, do not touch the PLC")
+    sp.set_defaults(func=cmd_push)
+
+    sp = sub.add_parser("daemon-start", help="spawn CODESYS with the daemon")
+    sp.add_argument("--wait", type=int, default=180)
+    sp.add_argument("--force", action="store_true")
+    sp.set_defaults(func=cmd_daemon_start)
+
+    sp = sub.add_parser("doctor", help="per-layer health check")
+    sp.set_defaults(func=cmd_doctor)
+
+    return p
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    if not hasattr(args, "hard_stop"):
+        args.hard_stop = False
+    try:
+        return args.func(args)
+    except config.ConfigError as ex:
+        print("config error: %s" % ex, file=sys.stderr)
+        return E_PROTO
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

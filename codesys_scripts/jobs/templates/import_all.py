@@ -7,11 +7,13 @@
 # After all files are applied, runs generate_code() and dumps build
 # messages so we can see if anything broke.
 #
-# Project is NOT saved by this script -- review in the IDE, then save.
+# v2: the daemon saves after every mutating job, so this script no
+# longer needs to (and no longer warns that it did not).
 
 import os
 
-SRC_ROOT = r"C:\Users\X1\Desktop\X2.5\TCP_UI\TCP_UI\codesys_code"
+# config is injected from the daemon globals (see daemon.py exec_job).
+SRC_ROOT = config.source_root()
 IMPL_MARKER = "(* =========== IMPLEMENTATION =========== *)"
 
 proj = projects.primary
@@ -171,4 +173,4 @@ for cat in system.get_message_categories():
             warns += 1
 
 print("BUILD: errors={} warnings={}".format(errs, warns))
-print("(project NOT saved; review in IDE and File > Save to persist.)")
+print("(daemon will save this project when the job returns.)")

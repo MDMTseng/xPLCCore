@@ -15,11 +15,41 @@ import traceback
 
 # scriptengine globals: projects, system, online are auto-injected by CODESYS.
 
-# Paths are hardcoded for now. --scriptargs parsing differs per CODESYS version,
-# so to keep the smoke test deterministic we bypass it. Once we confirm the
-# scripting API works, we can re-introduce argv parsing.
-project_path = r"C:\Users\X1\Desktop\XPack2_codesys\PackerX.project"
-log_path     = r"C:\Users\X1\Desktop\X2.5\TCP_UI\TCP_UI\codesys_scripts\build.log"
+# Path resolution: --scriptargs first, config second, hard error last.
+#
+# v1 hardcoded both paths and ignored --scriptargs entirely (the comment
+# said it was 'to keep the smoke test deterministic'), so the caller had
+# no way to aim this script and build.sh's own PROJECT variable was
+# decorative. supervisor.py now passes them and they are honoured;
+# config is the fallback when this runs by hand from the console.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_PARENT = os.path.dirname(_HERE)
+if _PARENT not in sys.path:
+    sys.path.insert(0, _PARENT)
+
+project_path = None
+log_path = None
+
+# CODESYS hands --scriptargs through as sys.argv, but the exact shape
+# differs between versions, so take the positional tokens rather than
+# assuming a fixed index.
+_args = [a for a in list(sys.argv)[1:] if a and not a.startswith('--')]
+if len(_args) >= 1:
+    project_path = _args[0]
+if len(_args) >= 2:
+    log_path = _args[1]
+
+if not project_path or not log_path:
+    try:
+        import config
+        if not project_path:
+            project_path = config.project_path()
+        if not log_path:
+            log_path = os.path.join(config.state_dir(), 'build.log')
+    except Exception:
+        print('[codesys-build] no usable paths from argv or config')
+        traceback.print_exc()
+        raise SystemExit(2)
 
 # Diagnostic: dump whatever CODESYS gave us in sys.argv so we learn the format.
 try:

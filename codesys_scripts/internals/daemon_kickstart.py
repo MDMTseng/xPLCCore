@@ -41,7 +41,12 @@ DAEMON_PORT = 7420
 # costs more than the maintenance.
 CODESYS_EXE = r"C:\Program Files\CODESYS 3.5.21.20\CODESYS\Common\CODESYS.exe"
 CODESYS_PROFILE = "CODESYS V3.5 SP21 Patch 20"
-PROJECT_PATH = r"C:\Users\X1\Desktop\XPack2_codesys\PackerX.project"
+import os as _os, sys as _sys
+_P = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _P not in _sys.path:
+    _sys.path.insert(0, _P)
+import config
+PROJECT_PATH = config.project_path()   # was a hardcoded desktop path
 
 
 def _daemon_alive(timeout: float = 1.5) -> bool:

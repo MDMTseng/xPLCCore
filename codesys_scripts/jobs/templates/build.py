@@ -4,7 +4,7 @@
 
 import traceback
 
-PROJECT = r"C:\Users\X1\Desktop\XPack2_codesys\PackerX.project"
+PROJECT = config.project_path()   # was a hardcoded desktop path
 
 proj = projects.primary
 if proj is None:

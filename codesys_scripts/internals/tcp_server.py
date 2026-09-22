@@ -47,7 +47,12 @@ EOF_LINE   = "__EOF__"
 DONE_LINE  = "__DONE__"
 POLL_SEC   = 0.3
 
-DEFAULT_PROJECT = r"C:\Users\X1\Desktop\XPack2_codesys\PackerX.project"
+import os as _os, sys as _sys
+_P = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+if _P not in _sys.path:
+    _sys.path.insert(0, _P)
+import config
+DEFAULT_PROJECT = config.project_path()   # was a hardcoded desktop path
 
 # ---- preload project so the first request is warm ----
 try:

@@ -14,7 +14,8 @@
 
 import os
 
-OUT_ROOT = r"C:\Users\X1\Desktop\X2.5\TCP_UI\TCP_UI\codesys_code"
+# config is injected from the daemon globals (see daemon.py exec_job).
+OUT_ROOT = config.source_root()
 SKIP_AS_FOLDER = set(["Device", "Plc Logic"])
 # Names that are purely organizational inside CODESYS and aren't user code:
 SKIP_ENTIRELY = set([

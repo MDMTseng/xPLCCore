@@ -1,20 +1,101 @@
 # codesys_scripts/
 
-Tooling around the CODESYS PLC project. Top level holds only the
-commands you run by hand; everything else is reached through them.
+Tooling around the CODESYS PLC project.
+
+> **v2 (branch `codesys-control-v2`)** reworked the daemon. If you are
+> looking for why `stop` used to hang the IDE, see "What v2 changed".
+
+## Configuration
+
+All machine-specific values live in **one** file, `codesys_env.json`
+(copy `codesys_env.sample.json`). Override its location with
+`$XPLC_CONFIG`. Relative paths resolve against the repo root.
+
+v1 hardcoded five absolute paths across `daemon.py` and `build.sh`, all
+pointing at one developer's desktop, and `daemon.py` called
+`os.makedirs()` on the state path -- so moving the repo to another
+machine silently built a junk tree instead of failing. Placeholders in
+the config now raise instead.
+
+Check everything at once:
+
+```bash
+python rpc.py doctor
+```
 
 ## What you run
 
 | File | Use for |
 | ---- | ------- |
-| `rpc.py` | All scripting-daemon interactions: `ping`, `exec --file ...`, `push`, `status`, `stop`, `daemon-start`. Most workflows go through here. |
-| `daemon.py` | RPC server. Runs **inside** the CODESYS Scripting Console (Tools > Scripting > Execute Script File... > pick this), not from the terminal. `rpc.py daemon-start` spawns CODESYS with `--runscript=daemon.py` so you usually don't touch it directly. |
-| `build.sh` | Headless CODESYS build of the project (writes `build.log`). |
-| `pytest.ini` | (Not a command -- here so `pytest` from the repo root picks up the right config.) |
+| `rpc.py` | Talking to the daemon: `ping`, `exec`, `save`, `read`, `write`, `logout`, `snapshot`, `yield`, `stop`, `doctor`. |
+| `supervisor.py` | Owning the CODESYS process from outside: `start`, `watch`, `kill`, `build`, `snapshots`, `restore`, `ps`. |
+| `daemon.py` | RPC server. Runs **inside** the Scripting Console; you normally let `supervisor.py start` launch it. |
+| `build.sh` | Thin wrapper for `supervisor.py build` (cold headless compile). |
+| `config.py` | Shared config loader. Imported by both IronPython and CPython sides. |
 
-`tests/` is the live regression suite. `jobs/templates/` is the
-catalog of scripts `rpc.py exec --file` invokes (push pipeline,
-virtual-motors gate, lifecycle).
+## What v2 changed
+
+**The problem.** While the v1 daemon ran, the IDE was unusable, so the
+only way to get CODESYS back was to stop the daemon -- and stopping was
+the operation that hung. You were forced through the dangerous path
+several times a day, always after hours of accumulated edits.
+
+Two root causes:
+
+1. **`daemon.py` never saved.** Saving was opt-in per job template: 14
+   of 47 called `proj.save()`, and `import_all.py` explicitly did not.
+   Dirty state accumulated for the whole session.
+2. **`stop` was `return True`.** No save, no logout, no close. CODESYS
+   tore down the IronPython scope holding a dirty project and often a
+   live online session. If the IDE needed a modal at that moment it
+   could not show one -- the script still owned the scripting context.
+
+**The fixes.**
+
+- **Nothing accumulates.** Every mutating job ends with `proj.save()`,
+  including jobs that raised. Teardown cost is proportional to
+  accumulated state; drive it to zero and teardown gets cheap.
+- **You do not have to leave to get work done.** `save`, `read`,
+  `write`, `logout` and `snapshot` are RPCs now, so the usual reasons to
+  kill the daemon are served without killing it.
+- **Release is first-class.** `rpc.py yield` tears down in a defined
+  order (logout -> save -> drop refs -> close socket) and leaves CODESYS
+  open with the project saved, so re-entry is warm.
+- **Shutdown is observable.** Each teardown step publishes its phase to
+  `daemon.status` from the heartbeat thread, which keeps ticking even
+  when the main thread is blocked in a CODESYS call. `rpc.py yield`
+  prints the phases live, so a slow release tells you *which step*.
+- **Every mutating job snapshots first.** `.project` is copied to
+  `jobs/snapshots/` before the job runs. Because the file is always
+  current, that snapshot really is "the state before this job".
+- **Sessions retire on a budget.** After `session_max_jobs` or
+  `session_max_seconds` the daemon releases cleanly rather than rotting.
+- **The supervisor can kill safely.** `supervisor.py kill` is only an
+  acceptable recovery *because* of save-per-job. Do not weaken that rule
+  without revisiting `supervisor.py`.
+
+Typical loop:
+
+```bash
+python supervisor.py start            # launch CODESYS + daemon
+python rpc.py exec --file job.py      # snapshot -> run -> save
+python rpc.py read GVL.AxisGroupSMScans
+python rpc.py save
+python rpc.py yield                   # take the IDE back, watch the phases
+```
+
+If a release wedges anyway:
+
+```bash
+python supervisor.py ps               # what is running, how old the heartbeat is
+python supervisor.py kill --yes       # safe: worst case you lose one job
+python supervisor.py snapshots        # rollback points
+python supervisor.py restore <name>
+```
+
+---
+
+
 
 ## What's in the subdirectories
 
@@ -30,27 +111,6 @@ virtual-motors gate, lifecycle).
 - `_archive/` -- root-level scripts retired in the 2026-06-17 sweep
   (legacy `watcher.py`, mock harnesses, standalone `test_*.py`
   one-shots). Treat as read-only history.
-
-## Common workflows
-
-```bash
-# push code (edit .st, then):
-python codesys_scripts/rpc.py push                 # full: import + online + tests
-python codesys_scripts/rpc.py push --no-tests      # hot fix, skip regression
-
-# environment health check
-python codesys_scripts/rpc.py status
-
-# revive a dead daemon (spawns CODESYS if needed)
-python codesys_scripts/rpc.py daemon-start
-
-# headless build
-codesys_scripts/build.sh
-
-# tests
-pytest codesys_scripts/tests/                      # full suite
-pytest codesys_scripts/tests/test_plc_4hr_fuzz.py  # 4hr fuzz
-```
 
 ## Programmatic control surface
 

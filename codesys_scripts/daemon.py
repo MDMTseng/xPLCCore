@@ -1,37 +1,54 @@
 # -*- coding: ascii -*-
-# daemon.py -- run inside the CODESYS Scripting Console (Tools -> Scripting
-# -> Execute Script File... or paste).
+# daemon.py -- RPC server running inside the CODESYS Scripting Console.
 #
-# Replaces the file-polling watcher.py with a TCP RPC server. Each submission
-# is one line-delimited-JSON round-trip on 127.0.0.1:7420.
+#   Tools > Scripting > Execute Script File... > pick this file
+#   (or let supervisor.py launch CODESYS with --runscript=daemon.py)
 #
-#   request : {"cmd":"exec","code":"<source>","label":"short tag"}\n
-#   reply   : {"ok":true,"stdout":"...","elapsed":1.23}\n
-#             {"ok":false,"error":"<traceback>","stdout":"...","elapsed":...}
-#   ping    : {"cmd":"ping"} -> {"ok":true,"phase":"idle",...}
-#   stop    : {"cmd":"stop"} -> {"ok":true} (server exits its accept loop)
+# ---------------------------------------------------------------------
+# v2 design notes -- read this before touching the shutdown path.
+# ---------------------------------------------------------------------
 #
-# Telemetry:
-#   jobs/daemon.status   -- 1Hz heartbeat; written from a side thread so it
-#                           keeps ticking even when a job is running. Lets us
-#                           see "currently running job=X for 47s" instead of
-#                           wondering if the server died.
-#   jobs/daemon.rpc.log  -- one line per RPC: timestamp, ok, elapsed, label.
-#                           Permanent forensic trail; survives restarts.
+# v1 had two coupled failure modes:
 #
-# Failure-mode hardening (relative to watcher.py):
-#   * heartbeat thread is decoupled from job execution -- if a job wedges
-#     inside a CODESYS API call, status keeps updating with phase=running
-#     and the elapsed-since timer climbs, so I can spot stuck jobs.
-#   * every exec block has a finally that calls safe_logout() on any `oapp`
-#     left in the job's globals, so a job that raises mid-login can't leave
-#     the next job stuck on a login-conflict.
-#   * connection-refused gives the client an immediate signal instead of
-#     the silent "file sat in inbox forever" failure mode.
+#   (a) While the daemon ran, the IDE was unusable. The only way to get
+#       CODESYS back was to stop the daemon, so "stop" always happened at
+#       the worst possible moment: after hours of accumulated edits.
 #
-# Stop with Ctrl+C in the console, or send {"cmd":"stop"}.
+#   (b) Stopping was just `return True` out of the accept loop. No save,
+#       no logout, no close. CODESYS then tore down the IronPython scope
+#       while holding a dirty project and often a live online session.
+#       If the IDE wanted to raise a modal at that point it could not,
+#       because the script still owned the scripting execution context.
+#       That is the hang, and the reason it sometimes never came back.
+#
+# v2 attacks both:
+#
+#   1. NOTHING ACCUMULATES. Every mutating job ends with proj.save().
+#      Saving is no longer opt-in per job template (v1: 14 of 47 job
+#      templates called save, and import_all.py explicitly did not).
+#      Teardown cost is proportional to accumulated state; drive the
+#      accumulation to zero and teardown becomes cheap.
+#
+#   2. YOU DO NOT HAVE TO LEAVE TO GET WORK DONE. v1 exposed only
+#      ping/exec/stop, so "save the project" or "read a PLC variable"
+#      meant killing the daemon. v2 serves those over RPC: save, read,
+#      write, logout, snapshot, status.
+#
+#   3. RELEASE IS A FIRST-CLASS OPERATION. `yield` hands the IDE back in
+#      a defined order (logout -> save -> drop refs -> close sockets) and
+#      leaves CODESYS open with the project loaded, so re-entry is warm.
+#
+#   4. SHUTDOWN IS OBSERVABLE. Each teardown step publishes its phase to
+#      the heartbeat file from a side thread that keeps ticking even when
+#      the main thread is blocked inside a CODESYS API call. If release
+#      wedges you can now see WHICH STEP wedged instead of guessing.
+#
+# Wire protocol: one line-delimited JSON object each way.
+#   {"cmd":"exec","code":"...","label":"tag","readonly":false}\n
+#   -> {"ok":true,"stdout":"...","elapsed":1.23,"saved":true,...}\n
 
-import os, sys, time, json, socket, threading, traceback
+import os, sys, time, json, socket, threading, traceback, shutil
+
 try:
     from cStringIO import StringIO  # IronPython 2.7 fast path
 except ImportError:
@@ -40,103 +57,250 @@ except ImportError:
     except ImportError:
         from io import StringIO        # IronPython 3 / CPython 3
 
-HOST = "127.0.0.1"
-PORT = 7420
+# ---- configuration ---------------------------------------------------
+# CODESYS does not necessarily put a script's own directory on sys.path.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
 
-ROOT = r"c:\Users\X1\Desktop\X2.5\TCP_UI\TCP_UI\codesys_scripts\jobs"
-STATUS_PATH = os.path.join(ROOT, "daemon.status")
-RPC_LOG     = os.path.join(ROOT, "daemon.rpc.log")
-DEFAULT_PROJECT = r"C:\Users\X1\Desktop\XPack2_codesys\PackerX.project"
+import config
 
-if not os.path.isdir(ROOT):
-    os.makedirs(ROOT)
+HOST = config.rpc_host()
+PORT = config.rpc_port()
+STATE_DIR = config.state_dir()
+SNAPSHOT_DIR = config.snapshot_dir()
+STATUS_PATH = os.path.join(STATE_DIR, "daemon.status")
+RPC_LOG = os.path.join(STATE_DIR, "daemon.rpc.log")
+PROJECT_PATH = config.project_path()
+SNAPSHOT_KEEP = config.snapshot_keep()
+MAX_JOBS = config.session_max_jobs()
+MAX_SECONDS = config.session_max_seconds()
 
-# Shared state between the accept loop and the heartbeat thread.
-state = {"phase": "init", "since": time.time(), "job": "", "rpc_count": 0}
+# v1 called os.makedirs() on a hardcoded path belonging to another
+# machine, which silently manufactured a bogus tree instead of failing.
+# The state dir is ours to create; the project is not ours to invent.
+for _d in (STATE_DIR, SNAPSHOT_DIR):
+    if not os.path.isdir(_d):
+        os.makedirs(_d)
+
+if not os.path.isfile(PROJECT_PATH):
+    raise SystemExit(
+        "[daemon] configured project does not exist: %s\n"
+        "[daemon] fix 'project' in %s" % (PROJECT_PATH, config.config_path()))
+
+# ---- shared state ----------------------------------------------------
+state = {
+    "phase": "init",
+    "since": time.time(),
+    "job": "",
+    "rpc_count": 0,
+    "started": time.time(),
+    "last_save": 0.0,
+    "dirty": False,
+}
 state_lock = threading.Lock()
 
-# Stop signal for the heartbeat thread. Without it the thread ran `while
-# True` forever, so on daemon shutdown the main script returned while the
-# thread was still live and IronPython had to abort a running thread
-# during interpreter teardown -- a classic source of the
-# "Running script daemon.py caused exception / ArgumentNullException
-# (param del)" modal dialog. We now signal + join it before returning.
-hb_stop = threading.Event()
+# A single cached online session reused across read/write RPCs. Logging
+# in is slow, and paying it per symbol read would push people back to
+# "just stop the daemon and click around", which is what we are fixing.
+_online = {"app": None}
 
 
-def set_state(phase, job=""):
+def set_state(phase, job=None):
     state_lock.acquire()
     try:
         state["phase"] = phase
         state["since"] = time.time()
-        state["job"]   = job
+        if job is not None:
+            state["job"] = job
+    finally:
+        state_lock.release()
+
+
+def snapshot_state():
+    state_lock.acquire()
+    try:
+        return dict(state)
     finally:
         state_lock.release()
 
 
 def heartbeat_loop():
-    """Runs in a daemon thread. Touches no CODESYS API -- only file I/O and
-    the shared state dict -- so it's safe to run off the IDE main thread.
-    Exits when hb_stop is set so shutdown can join it cleanly (no lingering
-    thread for IronPython to abort during teardown)."""
-    # The ENTIRE body (including the wait) is inside try/except so an
-    # unhandled exception can never kill the thread and surface to the
-    # scripting host as a script-level failure.
-    while not hb_stop.is_set():
+    """Side thread. Touches no CODESYS API -- only file I/O and the shared
+    dict -- so it is safe off the IDE main thread, and critically it keeps
+    publishing while the main thread is blocked inside a CODESYS call.
+    That is what makes a wedged teardown diagnosable."""
+    while True:
         try:
-            state_lock.acquire()
-            try:
-                snap = dict(state)
-            finally:
-                state_lock.release()
+            snap = snapshot_state()
             elapsed = time.time() - snap["since"]
-            line = "%s phase=%s elapsed=%.1fs rpc_count=%d pid=%s job=%s\n" % (
+            line = ("%s phase=%s elapsed=%.1fs rpc_count=%d pid=%s "
+                    "uptime=%.0fs dirty=%s job=%s\n") % (
                 time.strftime("%Y-%m-%d %H:%M:%S"),
                 snap["phase"], elapsed, snap["rpc_count"], os.getpid(),
-                snap["job"].replace("\n", " ")[:80],
-            )
+                time.time() - snap["started"], snap["dirty"],
+                str(snap["job"]).replace("\n", " ")[:80])
             f = open(STATUS_PATH, "w")
-            try: f.write(line)
-            finally: f.close()
-            # Interruptible sleep: wakes immediately when stop is signalled.
-            hb_stop.wait(1.0)
+            try:
+                f.write(line)
+            finally:
+                f.close()
         except Exception:
-            hb_stop.wait(1.0)
+            pass
+        time.sleep(1.0)
 
 
-def append_rpc_log(entry):
+def log_rpc(entry):
     try:
         f = open(RPC_LOG, "a")
-        try: f.write(entry + "\n")
-        finally: f.close()
+        try:
+            f.write("%s %s\n" % (time.strftime("%H:%M:%S"), entry))
+        finally:
+            f.close()
     except Exception:
         pass
 
 
+# ---- project helpers -------------------------------------------------
+
 def ensure_project():
-    """Best-effort verify projects.primary is usable. Re-opens DEFAULT_PROJECT
-    if the user closed it manually mid-session."""
+    """Verify projects.primary is usable; reopen if the user closed it
+    manually during a yield window."""
     try:
         if projects.primary is not None:
             return True
     except Exception:
         pass
     try:
-        projects.open(DEFAULT_PROJECT)
+        projects.open(PROJECT_PATH)
         return projects.primary is not None
     except Exception:
         traceback.print_exc()
         return False
 
 
+def save_project():
+    """Persist the project. Returns (ok, detail)."""
+    set_state("saving")
+    try:
+        proj = projects.primary
+        if proj is None:
+            return False, "no project open"
+        proj.save()
+        state_lock.acquire()
+        try:
+            state["last_save"] = time.time()
+            state["dirty"] = False
+        finally:
+            state_lock.release()
+        return True, "saved"
+    except Exception as ex:
+        return False, "save failed: %s" % (ex,)
+
+
+def mark_dirty():
+    state_lock.acquire()
+    try:
+        state["dirty"] = True
+    finally:
+        state_lock.release()
+
+
+def prune_snapshots():
+    try:
+        entries = []
+        for fn in os.listdir(SNAPSHOT_DIR):
+            full = os.path.join(SNAPSHOT_DIR, fn)
+            if os.path.isfile(full):
+                entries.append((os.path.getmtime(full), full))
+        entries.sort()
+        while len(entries) > SNAPSHOT_KEEP:
+            victim = entries.pop(0)[1]
+            try:
+                os.remove(victim)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def snapshot_project(tag):
+    """Copy the on-disk .project aside as a rollback point.
+
+    This is only meaningful BECAUSE we save after every job: the file is
+    always current when the next job starts, so the snapshot really is
+    'the state before this job'. Worst case a crash costs one job."""
+    set_state("snapshotting")
+    try:
+        if not os.path.isfile(PROJECT_PATH):
+            return None
+        safe = []
+        for ch in (tag or "job"):
+            safe.append(ch if (ch.isalnum() or ch in "-_") else "_")
+        name = "%s_%s%s" % (time.strftime("%Y%m%d-%H%M%S"),
+                            "".join(safe)[:40],
+                            os.path.splitext(PROJECT_PATH)[1])
+        dst = os.path.join(SNAPSHOT_DIR, name)
+        shutil.copy2(PROJECT_PATH, dst)
+        # copy2 preserves the SOURCE mtime, which here is "when the
+        # project was last saved", not "when this rollback point was
+        # taken". prune_snapshots() orders by mtime, so leaving it that
+        # way means a restored project (whose mtime jumps backwards)
+        # would make pruning delete the wrong snapshots. Stamp the copy
+        # with its own creation time instead.
+        try:
+            os.utime(dst, None)
+        except OSError:
+            pass
+        prune_snapshots()
+        return dst
+    except Exception as ex:
+        log_rpc("snapshot-failed: %r" % (ex,))
+        return None
+
+
+# ---- online session --------------------------------------------------
+
+def get_online(login=True):
+    """Return a logged-in OnlineApplication, reusing the cached one."""
+    app = _online.get("app")
+    if app is not None:
+        return app
+    if not login:
+        return None
+    proj = projects.primary
+    if proj is None:
+        raise RuntimeError("no project open")
+    found = list(proj.find("Application", True) or [])
+    if not found:
+        raise RuntimeError("no Application object in project")
+    oapp = online.create_online_application(found[0])
+    oapp.login(OnlineChangeOption.Try, False)
+    _online["app"] = oapp
+    return oapp
+
+
+def drop_online(quiet=True):
+    """Log out the cached session. This is the single most likely thing
+    to wedge teardown, so release runs it FIRST and under its own phase."""
+    app = _online.get("app")
+    _online["app"] = None
+    if app is None:
+        return True, "no session"
+    try:
+        app.logout()
+        return True, "logged out"
+    except Exception as ex:
+        if not quiet:
+            raise
+        return False, "logout failed: %s" % (ex,)
+
+
 def safe_logout(job_globals):
-    """If the job left an online application bound as `oapp`, force a logout.
-    A job that raised between `oapp.login(...)` and its own `oapp.logout()`
-    would otherwise leave the next job's login fighting a stale session --
-    one of the prime suspects for the watcher's hangs (S2 in the debug
-    table). Best-effort: any exception from logout is swallowed."""
+    """A job that bound its own `oapp` and raised before logging out would
+    otherwise leave the next login fighting a stale session."""
     oapp = job_globals.get("oapp")
-    if oapp is None:
+    if oapp is None or oapp is _online.get("app"):
         return
     try:
         oapp.logout()
@@ -144,10 +308,17 @@ def safe_logout(job_globals):
         pass
 
 
-def exec_job(code, label):
-    """Compile + exec source in a fresh dict seeded from the daemon's globals
-    so the CODESYS-injected names (projects, online, system, OnlineChangeOption)
-    remain visible. Captures stdout+stderr. Returns (ok, output, elapsed, err)."""
+# ---- job execution ---------------------------------------------------
+
+def exec_job(code, label, readonly=False, want_snapshot=True):
+    """Run a job as a transaction:
+
+        snapshot (unless readonly) -> exec -> safe_logout -> save
+    """
+    snap_path = None
+    if not readonly and want_snapshot:
+        snap_path = snapshot_project(label)
+
     set_state("running", label)
     old_out, old_err = sys.stdout, sys.stderr
     buf = StringIO()
@@ -160,7 +331,7 @@ def exec_job(code, label):
     job_globals["__name__"] = "__main__"
     try:
         try:
-            compiled = compile(code, "<rpc:" + label + ">", "exec")
+            compiled = compile(code, "<rpc:%s>" % label, "exec")
             exec(compiled, job_globals)
         except SystemExit:
             pass
@@ -171,14 +342,100 @@ def exec_job(code, label):
     finally:
         sys.stdout, sys.stderr = old_out, old_err
         safe_logout(job_globals)
-    elapsed = time.time() - t0
-    set_state("idle", "")
-    return ok, buf.getvalue(), elapsed, err
 
+    elapsed = time.time() - t0
+    reply = {"ok": ok, "stdout": buf.getvalue(), "elapsed": elapsed}
+    if snap_path:
+        reply["snapshot"] = snap_path
+    if not ok:
+        reply["error"] = err
+
+    # Save even when the job raised. A job that edited three POUs and
+    # then blew up on the fourth has still dirtied the project, and
+    # leaving that unsaved is exactly the v1 data-loss path.
+    if not readonly:
+        mark_dirty()
+        saved, detail = save_project()
+        reply["saved"] = saved
+        if not saved:
+            reply["save_detail"] = detail
+            reply["ok"] = False
+
+    set_state("idle", "")
+    return reply
+
+
+# ---- symbol access ---------------------------------------------------
+
+def do_read(symbol):
+    oapp = get_online()
+    return oapp.read_value(symbol)
+
+
+def do_write(symbol, value, force=False):
+    oapp = get_online()
+    oapp.set_prepared_value(symbol, str(value))
+    if force:
+        oapp.force_prepared_values()
+    else:
+        oapp.write_prepared_values()
+    return True
+
+
+# ---- release / shutdown ----------------------------------------------
+
+_exit = {"requested": False, "reason": "", "restart": False}
+
+
+def request_exit(reason, restart):
+    _exit["requested"] = True
+    _exit["reason"] = reason
+    _exit["restart"] = restart
+
+
+def release_ide(reason):
+    """Hand the IDE back in a defined order, publishing each phase.
+
+    Order matters. The online session is dropped before the save because
+    a live login is the most common thing to block a save, and a blocked
+    save under a dirty project is what used to deadlock teardown against
+    a modal the IDE could not show."""
+    steps = []
+
+    set_state("release:logout", reason)
+    ok, detail = drop_online()
+    steps.append(("logout", ok, detail))
+
+    set_state("release:save", reason)
+    ok, detail = save_project()
+    steps.append(("save", ok, detail))
+
+    set_state("release:drop-refs", reason)
+    try:
+        _online["app"] = None
+        steps.append(("drop-refs", True, ""))
+    except Exception as ex:
+        steps.append(("drop-refs", False, repr(ex)))
+
+    for name, sok, detail in steps:
+        log_rpc("release step=%s ok=%s %s" % (name, sok, detail))
+    return steps
+
+
+def session_budget():
+    """Recycle before things go bad rather than after. Returns a reason
+    string when the session should be retired, else None."""
+    snap = snapshot_state()
+    if MAX_JOBS and snap["rpc_count"] >= MAX_JOBS:
+        return "job budget (%d)" % MAX_JOBS
+    if MAX_SECONDS and (time.time() - snap["started"]) >= MAX_SECONDS:
+        return "time budget (%ds)" % MAX_SECONDS
+    return None
+
+
+# ---- wire ------------------------------------------------------------
 
 def recv_line(sock, max_bytes=4 * 1024 * 1024):
-    """Read until '\\n' or EOF. Returns the line as a str (no trailing \\n),
-    or None on EOF / error / oversize."""
     parts = []
     total = 0
     while True:
@@ -189,97 +446,181 @@ def recv_line(sock, max_bytes=4 * 1024 * 1024):
         if not chunk:
             return None
         if isinstance(chunk, bytes):
-            try: chunk = chunk.decode("utf-8")
-            except Exception: chunk = chunk.decode("latin-1")
+            try:
+                chunk = chunk.decode("utf-8")
+            except Exception:
+                chunk = chunk.decode("latin-1")
         parts.append(chunk)
         total += len(chunk)
         if total > max_bytes:
             return None
         if "\n" in chunk:
-            joined = "".join(parts)
-            return joined.split("\n", 1)[0]
+            return "".join(parts).split("\n", 1)[0]
 
 
 def send_json(sock, obj):
-    payload = (json.dumps(obj) + "\n")
+    payload = json.dumps(obj) + "\n"
     try:
         sock.sendall(payload.encode("utf-8"))
     except Exception:
-        try: sock.sendall(payload)
-        except Exception: pass
+        try:
+            sock.sendall(payload)
+        except Exception:
+            pass
 
 
 def handle_client(sock):
+    """Returns True when the accept loop should exit."""
     try:
-        sock.settimeout(120)
+        sock.settimeout(300)
         line = recv_line(sock)
         if line is None:
             return False
         try:
             req = json.loads(line)
         except Exception as ex:
-            send_json(sock, {"ok": False, "error": "bad json: " + str(ex)})
+            send_json(sock, {"ok": False, "error": "bad json: %s" % ex})
             return False
+
         cmd = req.get("cmd")
-        if cmd == "ping":
-            state_lock.acquire()
-            try:
-                snap = dict(state)
-            finally:
-                state_lock.release()
+
+        if cmd in ("ping", "status"):
+            snap = snapshot_state()
             send_json(sock, {
                 "ok": True,
                 "phase": snap["phase"],
                 "since_elapsed": time.time() - snap["since"],
                 "job": snap["job"],
                 "rpc_count": snap["rpc_count"],
+                "uptime": time.time() - snap["started"],
+                "dirty": snap["dirty"],
+                "last_save_age": (time.time() - snap["last_save"]
+                                  if snap["last_save"] else None),
+                "online": _online.get("app") is not None,
+                "budget": session_budget(),
+                "project": PROJECT_PATH,
             })
             return False
-        if cmd == "stop":
-            send_json(sock, {"ok": True, "stopping": True})
+
+        if cmd == "save":
+            ok, detail = save_project()
+            send_json(sock, {"ok": ok, "detail": detail})
+            set_state("idle", "")
+            return False
+
+        if cmd == "snapshot":
+            path = snapshot_project(req.get("label") or "manual")
+            send_json(sock, {"ok": path is not None, "snapshot": path})
+            set_state("idle", "")
+            return False
+
+        if cmd == "logout":
+            ok, detail = drop_online()
+            send_json(sock, {"ok": ok, "detail": detail})
+            set_state("idle", "")
+            return False
+
+        if cmd == "read":
+            symbol = req.get("symbol")
+            if not symbol:
+                send_json(sock, {"ok": False, "error": "missing 'symbol'"})
+                return False
+            set_state("reading", symbol)
+            try:
+                value = do_read(symbol)
+                send_json(sock, {"ok": True, "symbol": symbol,
+                                 "value": str(value)})
+            except Exception as ex:
+                send_json(sock, {"ok": False, "symbol": symbol,
+                                 "error": "%s" % ex,
+                                 "traceback": traceback.format_exc()})
+            set_state("idle", "")
+            return False
+
+        if cmd == "write":
+            symbol = req.get("symbol")
+            if not symbol or "value" not in req:
+                send_json(sock, {"ok": False,
+                                 "error": "need 'symbol' and 'value'"})
+                return False
+            set_state("writing", symbol)
+            try:
+                do_write(symbol, req.get("value"), bool(req.get("force")))
+                mark_dirty()
+                send_json(sock, {"ok": True, "symbol": symbol,
+                                 "value": req.get("value"),
+                                 "forced": bool(req.get("force"))})
+            except Exception as ex:
+                send_json(sock, {"ok": False, "symbol": symbol,
+                                 "error": "%s" % ex,
+                                 "traceback": traceback.format_exc()})
+            set_state("idle", "")
+            return False
+
+        if cmd in ("yield", "release", "stop"):
+            # `yield`/`release` mean "give me the IDE back, I am coming
+            # back later" -- the supervisor may relaunch. `stop` means
+            # "we are done" -- it must not be restarted.
+            restart = cmd in ("yield", "release")
+            reason = req.get("reason") or cmd
+            send_json(sock, {"ok": True, "releasing": True,
+                             "restart": restart, "reason": reason})
+            request_exit(reason, restart)
             return True
+
         if cmd == "exec":
-            code  = req.get("code", "")
-            label = (req.get("label") or "")[:60]
+            code = req.get("code", "")
+            label = (req.get("label") or "(unnamed)")[:60]
+            readonly = bool(req.get("readonly"))
+            want_snapshot = req.get("snapshot", True)
             if not ensure_project():
                 send_json(sock, {"ok": False, "error": "no project open",
                                  "stdout": "", "elapsed": 0.0})
-                append_rpc_log("%s NOPROJ label=%s" % (
-                    time.strftime("%H:%M:%S"), label))
+                log_rpc("NOPROJ label=%s" % label)
                 return False
-            ok, output, elapsed, err = exec_job(code, label or "(unnamed)")
+            reply = exec_job(code, label, readonly, want_snapshot)
             state_lock.acquire()
             try:
                 state["rpc_count"] += 1
-                rpc_count = state["rpc_count"]
+                reply["rpc_count"] = state["rpc_count"]
             finally:
                 state_lock.release()
-            reply = {"ok": ok, "stdout": output, "elapsed": elapsed,
-                     "rpc_count": rpc_count}
-            if not ok:
-                reply["error"] = err
+            budget = session_budget()
+            if budget:
+                reply["budget_exceeded"] = budget
             send_json(sock, reply)
-            append_rpc_log("%s ok=%s elapsed=%.2fs label=%s" % (
-                time.strftime("%H:%M:%S"), ok, elapsed, label))
+            log_rpc("ok=%s elapsed=%.2fs saved=%s label=%s" % (
+                reply.get("ok"), reply.get("elapsed", 0.0),
+                reply.get("saved"), label))
+            if budget:
+                # Retire cleanly rather than letting the session rot.
+                log_rpc("budget-exit %s" % budget)
+                request_exit("budget: %s" % budget, True)
+                return True
             return False
-        send_json(sock, {"ok": False, "error": "unknown cmd: " + repr(cmd)})
+
+        send_json(sock, {"ok": False, "error": "unknown cmd: %r" % cmd})
         return False
     finally:
-        try: sock.close()
-        except Exception: pass
+        try:
+            sock.close()
+        except Exception:
+            pass
 
 
-# ---- main ----
-print("[daemon] starting on %s:%d" % (HOST, PORT))
+# ---- main ------------------------------------------------------------
+
+print("[daemon] v2 starting on %s:%d" % (HOST, PORT))
+print("[daemon] project: %s" % PROJECT_PATH)
+print("[daemon] state:   %s" % STATE_DIR)
 
 hb = threading.Thread(target=heartbeat_loop)
 hb.setDaemon(True)
 hb.start()
 
-# Preload project so the first RPC is warm.
 if ensure_project():
     try:
-        print("[daemon] project ready: " + projects.primary.path)
+        print("[daemon] project ready: %s" % projects.primary.path)
     except Exception:
         print("[daemon] project ready (path read failed)")
 else:
@@ -291,62 +632,31 @@ try:
     srv.bind((HOST, PORT))
 except Exception as ex:
     print("[daemon] bind failed: %s" % ex)
-    print("[daemon] is another daemon already running? Try `python rpc.py stop`.")
+    print("[daemon] another daemon already running? Try `rpc.py yield`.")
     raise
 srv.listen(4)
-srv.settimeout(0.5)  # short accept timeout so Ctrl+C is responsive
+srv.settimeout(0.5)  # short accept timeout keeps Ctrl+C responsive
 set_state("idle", "")
-_daemon_start_mono = time.time()
-append_rpc_log("%s daemon-start pid=%s" % (time.strftime("%H:%M:%S"), os.getpid()))
-print("[daemon] listening. Ctrl+C in this console to stop.")
+log_rpc("daemon-start pid=%s project=%s" % (os.getpid(), PROJECT_PATH))
+print("[daemon] listening. Ctrl+C here, or `rpc.py yield`, to hand back the IDE.")
+
+# Accept-error throttle. A broken listening socket (WSAEINVAL 10022 on
+# Windows) used to make accept() raise every iteration, spinning at 100%
+# CPU and flooding the log until CODESYS fell over. WSAEINVAL reliably
+# appears here after dense back-to-back connections (a pytest run firing
+# many rpc calls); closing and rebinding recovers without a restart.
+ACCEPT_ERR_SLEEP = 1.0
+ACCEPT_ERR_MAX = 5
+accept_err_streak = 0
+WSAEINVAL = 10022
 
 
-def _log_exit(reason, with_traceback=True):
-    """Single choke point for every daemon exit path. Records the reason,
-    UPTIME (how long this instance survived -- the daemon self-terminates
-    ~5-11 min after start via an IDE-injected KeyboardInterrupt, and we
-    want to see that duration), pid, and -- crucially -- the traceback.
-    For a KeyboardInterrupt the traceback pins WHICH blocking call was
-    interrupted (accept / recv / sleep), which tells us whether the IDE
-    injected it externally vs an internal fault. Safe to call outside an
-    except block: format_exc() then yields 'NoneType: None' and is skipped."""
-    up = time.time() - _daemon_start_mono
-    line = "%s daemon-exit reason=%s uptime=%.1fs pid=%s" % (
-        time.strftime("%H:%M:%S"), reason, up, os.getpid())
-    append_rpc_log(line)
-    print("[daemon] EXIT: " + line)
-    if with_traceback:
-        tb = traceback.format_exc()
-        if tb and "NoneType: None" not in tb:
-            append_rpc_log("%s daemon-exit-traceback:\n%s" % (
-                time.strftime("%H:%M:%S"), tb))
-
-stop_requested = False
-# Accept-error throttle: a broken listening socket (e.g. WSAEINVAL 10022 on
-# Windows) used to make accept() raise immediately every iteration, spinning
-# at 100% CPU and flooding daemon.rpc.log with 100k+ identical lines until
-# CODESYS crashed. Sleep + bound the retries so a wedged socket exits the
-# daemon cleanly instead of taking the IDE down with it.
-#
-# Self-heal (added 2026-04-28): WSAEINVAL on accept() reliably appears in this
-# environment after dense back-to-back client connections (e.g. pytest runs
-# that fire many rpc.py exec calls). Empirically, closing and rebinding the
-# listening socket recovers the daemon without requiring a manual restart in
-# the Scripting Console. Other accept errors still fall through to the
-# bounded-retry exit path -- only WSAEINVAL is treated as recoverable.
-ACCEPT_ERR_SLEEP   = 1.0   # seconds between retries when accept() raises
-ACCEPT_ERR_MAX     = 5     # consecutive errors before giving up
-accept_err_streak  = 0
-WSAEINVAL          = 10022
-
-
-def _rebind_listen_socket():
-    """Close + recreate the daemon's listening socket. Returns the new
-    socket on success, or raises if rebind fails (caller falls through to
-    the streak-exit path)."""
+def rebind_listen_socket():
     global srv
-    try: srv.close()
-    except Exception: pass
+    try:
+        srv.close()
+    except Exception:
+        pass
     new_srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     new_srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     new_srv.bind((HOST, PORT))
@@ -354,87 +664,83 @@ def _rebind_listen_socket():
     new_srv.settimeout(0.5)
     srv = new_srv
     return new_srv
+
+
 try:
-    while not stop_requested:
+    while not _exit["requested"]:
         try:
             client, _addr = srv.accept()
             accept_err_streak = 0
         except socket.timeout:
             continue
         except KeyboardInterrupt:
-            print("[daemon] stopped by Ctrl+C")
-            _log_exit("KeyboardInterrupt-on-accept")
+            print("[daemon] Ctrl+C -- releasing IDE")
+            request_exit("KeyboardInterrupt", False)
             break
         except Exception as ex:
             accept_err_streak += 1
-            is_wsaeinval = (
-                len(getattr(ex, "args", ())) >= 1
-                and isinstance(ex.args[0], int)
-                and ex.args[0] == WSAEINVAL
-            )
-            # Log only the first occurrence of a streak (avoid log flood) plus
-            # the final one before bailing out.
+            args = getattr(ex, "args", ())
+            is_wsaeinval = (len(args) >= 1 and isinstance(args[0], int)
+                            and args[0] == WSAEINVAL)
             if accept_err_streak == 1 or accept_err_streak >= ACCEPT_ERR_MAX:
-                append_rpc_log("%s accept-exception (streak=%d wsaeinval=%s): %s" % (
-                    time.strftime("%H:%M:%S"), accept_err_streak,
-                    is_wsaeinval, repr(ex)[:200]))
-            # Self-heal on WSAEINVAL: rebind the listening socket once per
-            # streak. If rebind succeeds, reset the streak and resume; if it
-            # raises, fall through to the bounded-retry exit.
+                log_rpc("accept-exception (streak=%d wsaeinval=%s): %s" % (
+                    accept_err_streak, is_wsaeinval, repr(ex)[:200]))
             if is_wsaeinval:
                 try:
-                    srv = _rebind_listen_socket()
-                    append_rpc_log("%s accept-rebound after WSAEINVAL streak=%d"
-                                   % (time.strftime("%H:%M:%S"), accept_err_streak))
+                    srv = rebind_listen_socket()
+                    log_rpc("accept-rebound after WSAEINVAL streak=%d"
+                            % accept_err_streak)
                     accept_err_streak = 0
                     continue
                 except Exception as rebind_ex:
-                    append_rpc_log("%s rebind-failed: %s" % (
-                        time.strftime("%H:%M:%S"), repr(rebind_ex)[:200]))
-                    # fall through to streak-exit
+                    log_rpc("rebind-failed: %s" % repr(rebind_ex)[:200])
             if accept_err_streak >= ACCEPT_ERR_MAX:
-                _log_exit("accept-error-streak")
-                print("[daemon] giving up after %d accept errors; restart me"
+                log_rpc("loop-exit reason=accept-error-streak")
+                print("[daemon] giving up after %d accept errors"
                       % ACCEPT_ERR_MAX)
+                request_exit("accept-error-streak", True)
                 break
             time.sleep(ACCEPT_ERR_SLEEP)
             continue
+
         try:
-            stop_requested = handle_client(client)
+            if handle_client(client):
+                break
         except KeyboardInterrupt:
-            _log_exit("KeyboardInterrupt-in-handler")
-            raise
+            log_rpc("handler-exit reason=KeyboardInterrupt")
+            request_exit("KeyboardInterrupt", False)
+            break
         except Exception as ex:
-            # Don't let a handler exception kill the loop.
-            append_rpc_log("%s handler-exception: %s" % (
-                time.strftime("%H:%M:%S"), repr(ex)[:200]))
+            log_rpc("handler-exception: %s" % repr(ex)[:200])
             traceback.print_exc()
-        if stop_requested:
-            _log_exit("stop-cmd", with_traceback=False)
+
 except KeyboardInterrupt:
-    _log_exit("KeyboardInterrupt-outer")
-    print("[daemon] KeyboardInterrupt")
+    log_rpc("daemon-keyboardinterrupt")
+    request_exit("KeyboardInterrupt", False)
 except BaseException as ex:
-    # Any non-KeyboardInterrupt escape: reason = the exception class, full
-    # traceback to the log. The modal "ArgumentNullException (param del)"
-    # dialog truncates its traceback; the real frames land here.
-    _log_exit("fatal:" + type(ex).__name__)
+    log_rpc("daemon-fatal: %s" % repr(ex)[:300])
+    traceback.print_exc()
+    request_exit("fatal", True)
 finally:
-    # Signal + join the heartbeat thread BEFORE returning so IronPython
-    # doesn't have to abort a live thread during interpreter teardown
-    # (the suspected source of the shutdown ArgumentNullException dialog).
+    # Close the listener FIRST so no new client can arrive mid-teardown
+    # and re-dirty the project we are about to save.
+    set_state("release:socket", _exit.get("reason", ""))
     try:
-        hb_stop.set()
-        hb.join(3.0)
+        srv.close()
     except Exception:
         pass
-    try: srv.close()
-    except Exception: pass
-    set_state("stopped", "")
-    try:
-        _final_up = time.time() - _daemon_start_mono
-    except NameError:
-        _final_up = -1.0
-    append_rpc_log("%s daemon-stop pid=%s uptime=%.1fs" % (
-        time.strftime("%H:%M:%S"), os.getpid(), _final_up))
-    print("[daemon] stopped.")
+
+    release_ide(_exit.get("reason") or "shutdown")
+
+    set_state("stopped", _exit.get("reason", ""))
+    log_rpc("daemon-stop pid=%s reason=%s restart=%s" % (
+        os.getpid(), _exit.get("reason"), _exit.get("restart")))
+
+    # Let the heartbeat publish the final 'stopped' line before the
+    # script returns and CODESYS tears the scope down.
+    time.sleep(1.2)
+
+    print("[daemon] released. IDE is yours. reason=%s"
+          % (_exit.get("reason") or "shutdown"))
+    if _exit.get("restart"):
+        print("[daemon] (supervisor may relaunch; project is saved)")
