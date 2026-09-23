@@ -32,9 +32,10 @@
 // Synchronisation: DC_SYNC. The master runs distributed clocks on this
 // slave like on the servo drives (DC_Sync opmode, AssignActivate #x300,
 // SYNC0 every 1000 us). The LAN9252 maps SYNC0 to its AL event and raises
-// INT (GPIO17); the ISR only wakes a high-priority task, which samples the
-// encoder and runs MainTask. So the sample is taken at a fixed point of
-// the shared DC time base, the same instant the drives latch theirs.
+// INT (GPIO17); the ISR only wakes a high-priority task (core 1), which
+// runs MainTask, hands the stepper its next RMT sequence, and wakes the
+// encoder task (core 0) to sample. Every sample is taken at a fixed point
+// of the shared DC time base; it reaches the PLC one cycle later.
 // This needs the rev-1 EEPROM config (0x0151 = 0x6E), which dumpEscConfig()
 // verifies at boot, and the rev-1 ESI (esi/EasyCAT_V2_0.xml) in CODESYS.
 // If no interrupt arrives for 100 ms (master stopped, slave not yet in
