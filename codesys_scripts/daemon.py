@@ -755,7 +755,11 @@ except KeyboardInterrupt:
     log_rpc("daemon-keyboardinterrupt")
     request_exit("KeyboardInterrupt", False)
 except BaseException as ex:
-    log_rpc("daemon-fatal: %s" % repr(ex)[:300])
+    # Log the FULL traceback, not repr(ex): if something escapes this
+    # far the frames are the only useful part, and a truncated repr sends
+    # them nowhere. Credit to 83a5fb1 on main, which made the same call.
+    log_rpc("daemon-fatal: %s" % repr(ex)[:200])
+    log_rpc(traceback.format_exc())
     traceback.print_exc()
     request_exit("fatal", True)
 finally:
@@ -778,6 +782,16 @@ finally:
     # alive here would fight the next run's heartbeat over the file.
     time.sleep(1.2)
     _hb_stop.set()
+    # Signalling alone is not enough. The script can return while the
+    # thread is still inside its final iteration, and IronPython then has
+    # to abort a live thread during interpreter teardown -- which surfaces
+    # as a "Running script daemon.py caused exception / ArgumentNullException
+    # (param del)" modal. A modal nobody can answer is exactly how a
+    # release turns into a hang, so wait for the thread to actually end.
+    try:
+        hb.join(3.0)
+    except Exception:
+        pass
 
     print("[daemon] released. IDE is yours. reason=%s"
           % (_exit.get("reason") or "shutdown"))
