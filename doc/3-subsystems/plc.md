@@ -202,6 +202,51 @@ triggers a camera must *return the Promise* and let the caller
 `await` it later. See [`calibpage.md`](./calibpage.md) §Refactor
 rules for the renderer-side pattern + examples.
 
+### Direction: composite commands (decided 2026-09-24)
+
+The renderer keeps orchestrating (async/await, decisions, vision
+results). Timing-critical fixed sequences move into the PLC one at a
+time as **composite commands**, until the split is: renderer decides,
+PLC executes the millisecond-level sequences. This revises A5 below
+for timing-critical sequences only -- business decisions (which slot,
+NG handling, whether to refill) stay in the renderer.
+
+`pin_op_seq` is already the first of these: one `M4` carries a pulse
+schedule the PLC runs without round-trips. What it cannot express is a
+sequence that **waits on a condition** -- "shoot once the reel axis has
+stopped *and* the arm has cleared the camera". That is what the next
+composite commands add.
+
+Rules for each one:
+
+- It wraps a fixed sequence, never a decision. Decisions arrive as
+  parameters (e.g. how many slots to advance).
+- The primitive commands stay. A composite command is an optional
+  replacement; the renderer can always fall back to the step-by-step
+  version.
+- Ack on accept, push events at the milestones the renderer needs
+  (e.g. "shots taken", so images can be fetched early), a final reply
+  on completion or failure naming the step that failed.
+- Every wait has a timeout. It can be aborted and stops in a safe state.
+- It is documented in [`protocol.md`](../2-contracts/protocol.md) like
+  any other command.
+
+Order:
+
+1. PLC event timestamp log (1 ms), to measure the two timing-critical
+   paths before changing them: feeder refill (target ~1 s) and tape
+   advance + two-light shot (target < 0.7 s).
+2. Renderer-side: replace fixed delays with `WAIT_FOR_REEL_STOP` and
+   fly events (no PLC change). The tape timing today is delay-based, a
+   leftover from the first machine, where the tape unit was separate
+   from the PLC and could only be told "advance".
+3. `TAPE_CYCLE`: advance N, wait for reel stop and arm clear, light 4
+   shot, light 5 shot. Needs no vision round-trip.
+4. `FEEDER_CYCLE`: stop vibration, light 1 shot, wait for the
+   renderer's refill decision, vibrate, settle, shoot. Defines the
+   vision-reply path into the PLC.
+5. Further ones only where the timestamp log shows they pay.
+
 ## High-level data flow
 
 ```
@@ -368,7 +413,7 @@ today's code.
 | A2 | `APPs/AxisGroupSM.st` | **`BLOCK_FOR_MOTION_STOP` / `BLOCK_FOR_DIGITAL_INPUT` have no timeout.** If the host dies mid-block, the PLC parks forever. Add an optional timeout param; on timeout, ack-failure and clear. | **Fixed 2026-04-24** — both handlers now read optional `timeout_ms` (LINT) from the packet, latch `BlockStartMs:=RuntimeMs` on the first scan they see a new `CommandId`, and NAK with `err='block_timeout'` once `(RuntimeMs - BlockStartMs) >= timeout_ms`. 0 or absent = wait forever (backwards-compatible). Side-fix: `BLOCK_FOR_MOTION_STOP` now also accepts `WAIT_FOR_MOTION_STOP` as an alias, which is what every UI caller has actually been sending — prior to this they were falling through to the catch-all ELSE and getting silently NAKed. |
 | A3 | `APPs/AxisGroupSM.st` + host | **No host↔PLC heartbeat.** PLC has no way to detect a dead host; host has no way to detect a silent PLC. On missing heartbeat (host→PLC), PLC should halt motion, drop pending fly events, enter recoverable idle. | **Done 2026-04-24** — Host half: `PluginHello.tsx` heartbeat effect replaced the old dead-letter `{type:'M',cmd:'KEEPALIVE'}` with `{type:'SYS',cmd:'PING'}` every `HEARTBEAT_INTERVAL_MS` (1s) / 3.5s stale window; exposed via `get_heartbeat_status` harness action. PLC half: `SYS/PING` handler stamps `GVL.LastUiPingMs` / `UiPingCount`; supervisor in `AxisGroupSM` now checks `(RuntimeMs - LastUiPingMs) > GVL.UI_HEARTBEAT_TIMEOUT_MS` (default 5000ms, > host stale so UI flags first) when FSM is Ready, and transitions to Error with `err_src='Supervisor:UiHeartbeatStale'` / `err_id=<ms_since_last_ping>`. `GVL.UiHeartbeatStaleCount` counts events. Recovery is EV_RESET → UnInited → ... on reconnect. |
 | A4 | `APPs/AxisGroupSM.st` + host | **No reconnect handshake.** After host crash, new renderer needs to read PLC state (homed? last `movement_id`? pending triggers?) and reconcile before resuming. Today it's "reload and pray." | **Done 2026-04-24** — PLC side `SYS/GET_MACHINE_STATE` returns `{st, st_str, err_src, err_id, motion_buffer_size, movement_id, runtime_ms}` as a pure read. Host side: `PluginHello.tsx` fires `GET_MACHINE_STATE` automatically on every `tcpConnected` false→true transition, caches result in `lastMachineSnapshotRef`, and exposes via `get_machine_state` / `get_heartbeat_status` harness actions. Follow-on: renderer components can now subscribe to the snapshot to decide "resume or prompt operator" — not yet wired into any page. |
-| A5 | `Robot_FBs/AxisGroupManager/*` | **Low-material handled renderer-side via polling loop** ([watchdog IIFE at CalibPage.tsx:809](../../components/CalibPage.tsx#L809)). PLC should watch the `ReelLacking` bit and autonomously enter a `WaitingForMaterial` state that pauses motion at a safe point. Renderer becomes the feed-issuer, not the watchdog. Add a `FEED` command that's only accepted in `WaitingForMaterial`. | **Rejected 2026-04-25** — user wants the PLC to stay generic (motion/IO/safety only). Material flow is business logic and stays in the renderer. The renderer-side watchdog stays. Tradeoff accepted: if the renderer dies, material flow stops, but the W1 supervisors still keep the *machine* safe. See [solidification.md W2](../1-concepts/solidification.md). |
+| A5 | `Robot_FBs/AxisGroupManager/*` | **Low-material handled renderer-side via polling loop** ([watchdog IIFE at CalibPage.tsx:809](../../components/CalibPage.tsx#L809)). PLC should watch the `ReelLacking` bit and autonomously enter a `WaitingForMaterial` state that pauses motion at a safe point. Renderer becomes the feed-issuer, not the watchdog. Add a `FEED` command that's only accepted in `WaitingForMaterial`. | **Rejected 2026-04-25** — user wants the PLC to stay generic (motion/IO/safety only). Material flow is business logic and stays in the renderer. The renderer-side watchdog stays. *Revised 2026-09-24 for timing-critical fixed sequences only -- see §Direction: composite commands; decisions still stay in the renderer.* Tradeoff accepted: if the renderer dies, material flow stops, but the W1 supervisors still keep the *machine* safe. See [solidification.md W2](../1-concepts/solidification.md). |
 | A6 | Project-wide | **No vision↔PLC contract documented.** Today the renderer is the bridge between vision results and PLC commands. Long-term, vision should drive fly-event timing and bin selection directly or via a documented protocol. Blocking item before splitting `AxisGroupSM` (P3 #15). | **Closed 2026-04-26** — phase 1 (as-is contract) shipped as [`vision_contract.md`](../2-contracts/vision_contract.md). Direct vision↔PLC integration **rejected** on the same generic-PLC grounds as W2: vision stays host-routed, PLC stays vision-blind. Open follow-on questions (trigger jitter budget, vision-slow timeout policy) tracked in vision_contract.md §"Open questions" — they no longer block P3 #15. |
 
 **Sequencing note:** these items are grouped into workstreams in
