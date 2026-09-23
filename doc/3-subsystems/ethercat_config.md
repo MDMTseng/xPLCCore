@@ -136,6 +136,18 @@ in the bus cycle task, and this project's PLC-level bus cycle task is a
 dangling reference (see RS-485 below). `PRG_EcatEsp` in `EtherCAT_Task`
 references `ecat_esp_*`, which puts their I/O update in that task.
 
+**Encoder.** A QY2204-IIC magnetic absolute encoder (AS5600 inside, I2C
+`0x36`, 4096 counts/turn) hangs off the ESP32. `PRG_EcatEsp` decodes it:
+`uiEncRaw`, `rEncDeg`, `diEncPos` (multi-turn, from ESP32 power-up, not
+retained), `rEncTurns`, `xMagnetOk`, `xEspAlive`. Byte layout in the
+[firmware README](../../firmware/easycat_esp32/README.md).
+
+**Status page:** `http://192.168.1.70:8126/`, served by the PLC itself
+(`PRG_EcatEspHttp`, Comm task, `create_ecat_esp_http.py`). `GET /s`
+returns the JSON the page polls every 200 ms. It deliberately does not use
+the machine UI's msgpack server on 8125, which takes one client and trips
+the FSM into Error after 5 s without a PING.
+
 **Vendors** (the numeric ids are what the project stores; the names come
 from the device descriptions):
 

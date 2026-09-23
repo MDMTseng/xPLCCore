@@ -46,17 +46,45 @@ The first ESP32 tried always booted into download mode (`boot:0x3`,
 GPIO0 low) even with nothing attached and no serial port open -- a board
 fault. A healthy boot prints `boot:0x13 (SPI_FAST_FLASH_BOOT)`.
 
+## Encoder
+
+QY2204-IIC (ACCNT) magnetic absolute encoder, AS5600 inside, I2C `0x36`,
+12-bit. The 3.3/5 V variant (`5E`) runs from 3V3.
+
+| Encoder (XH2.54) | ESP32 |
+|---|---|
+| Pin 1 GND | GND |
+| Pin 2 VCC | 3V3 |
+| Pin 3 OUT | -- (analog/PWM, unused) |
+| Pin 4 SCL | GPIO22 |
+| Pin 5 SDA | GPIO21 |
+| Pin 6 NC | -- |
+
+**Pin 1 is on the latch side** of the XH connector (the vendor manual:
+"左边倒钩起为 Pin1"). Counted from the other end the encoder gets no power
+and the boot scan finds nothing on either SDA/SCL order.
+
 ## Process data
 
 | Direction | Bytes | Content |
 |---|---|---|
-| Slave -> master (`BufferIn`) | 0 | Free-running counter, proves the slave is alive |
-| | 1-31 | Loopback of the master's output bytes 1-31 |
+| Slave -> master (`BufferIn`) | 0 | Heartbeat counter, +1 per cycle |
+| | 1 | Echo of output byte 1 |
+| | 2-3 | Encoder raw angle 0-4095 (UINT, little-endian) |
+| | 4 | AS5600 STATUS: bit5 magnet detected, bit4 too weak, bit3 too strong; bit0 = sensor not answering |
+| | 5-8 | Multi-turn position in counts (DINT, little-endian), from power-up |
+| | 9 | I2C error counter |
+| | 10 | AGC |
 | Master -> slave (`BufferOut`) | 0 | Bit 0 drives the ESP32's on-board LED (GPIO2) |
-| | 1-31 | Echoed back on the inputs |
+| | 1 | Echoed on input byte 1 |
 
-LED behaviour: blinking 1 Hz = `Init` failing and retrying; off or
-following output bit 0 = `Init` succeeded.
+On the PLC, `PRG_EcatEsp` decodes these and `http://192.168.1.70:8126/`
+shows them live.
+
+LED: blinking 1 Hz = EasyCAT `Init` failing and retrying; otherwise it
+follows output bit 0.
+
+Serial also prints one JSON status line every 100 ms.
 
 ## Sources
 

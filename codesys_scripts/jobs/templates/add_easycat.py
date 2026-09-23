@@ -13,8 +13,8 @@
 # not configured) keeps the master from reaching OP, which stops every
 # axis on the bus -- plug the cable in before downloading.
 #
-# Firmware (firmware/easycat_esp32): input byte 0 is a live counter,
-# input bytes 1-31 echo output bytes 1-31, output bit 0 drives the LED.
+# Firmware (firmware/easycat_esp32): input byte 0 heartbeat, 1 echo of
+# output byte 1, 2-10 the AS5600 encoder; output bit 0 drives the LED.
 #
 # Idempotent: an existing EasyCAT node is reused.
 
@@ -29,11 +29,14 @@ DEV_VERSION = "Revision=16#00005A00"
 # variable. Input and output channels share names (Byte0..Byte31), so the
 # channel type is part of the key.
 MAP = {
-    ("Input", "Byte0"): "ecat_esp_in0",
-    ("Input", "Byte1"): "ecat_esp_in1",
     ("Output", "Byte0"): "ecat_esp_out0",
     ("Output", "Byte1"): "ecat_esp_out1",
 }
+# Inputs 0..10 (firmware/easycat_esp32 layout): 0 heartbeat, 1 echo,
+# 2-3 encoder raw angle, 4 AS5600 status, 5-8 multi-turn position,
+# 9 I2C errors, 10 AGC.
+for _i in range(11):
+    MAP[("Input", "Byte%d" % _i)] = "ecat_esp_in%d" % _i
 
 
 def t(v):
