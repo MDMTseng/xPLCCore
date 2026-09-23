@@ -180,36 +180,72 @@ SmartBowlFeeder          (91, 0000 0001, 4.4.0.0)
 
 All three nodes are enabled.
 
-### Status: not working
+### Status: not working -- two causes found (2026-09-23)
 
 The bus has never been made to function, which is why the flexible
 feeder is currently driven from the PC over a USB-485 adapter instead
 (see [`../1-concepts/machine.md`](../1-concepts/machine.md#the-feeder-problem)).
-Candidate causes, in the order worth checking:
+
+**1. No bus cycle task (fixed).** The PLC-level bus cycle task
+(Device -> PLC Settings) pointed at task guid `d109705d-...`, which is
+none of `Comm` / `EtherCAT_Task` / `SoftMotion_PlanningTask` -- a dangling
+reference, probably from a task deleted and recreated. Every Modbus node
+inherited it. `set_modbus_bus_cycle.py` pins `Modbus_COM` and
+`Modbus_Client_COM_Port` to `Comm` explicitly; the PLC-level setting is
+left alone so the EtherCAT master does not move. Inspect with
+`probe_bus_cycle.py`.
+
+**2. SmartBowlFeeder has no channels (open).** Measured on the running
+controller with `PRG_MbProbe` (`create_mb_probe.py`), which runs
+`IoDrvModbus.ModbusChannel` against the slave through the master's own
+port:
+
+```
+channel 0, 1, 2   xError, ModbusError = UNDEFINED   -> index does not exist
+SmartBowlFeeder   xInitDone TRUE, xError FALSE, iChannelIndex -1
+COM port          uiNumberOfCommunicatingSlaves 0, xAllSlavesOk FALSE
+```
+
+The device also exposes no I/O-mapping parameters, which is what
+channels would create. With no channels the master initialises and then
+has nothing to send, so the wire stays silent. The application code
+never calls Modbus either.
+
+**Fix:** add channels in `SmartBowlFeeder -> Modbus Slave Channel`
+(function code, offset, length, trigger), which needs the feeder's
+register map -- the PC-side USB-485 software or the feeder manual has
+it. Channels are not reachable through the scripting API. Then:
+
+```bash
+python codesys_scripts/rpc.py exec --file codesys_scripts/jobs/templates/download_start_virtual.py
+python codesys_scripts/rpc.py write PRG_MbProbe.iChannel 0
+python codesys_scripts/rpc.py write PRG_MbProbe.xRun TRUE
+python codesys_scripts/rpc.py read  PRG_MbProbe.eErr
+```
+
+| `PRG_MbProbe` result | Conclusion |
+|---|---|
+| `xDone`, `udiDone` climbs | The feeder answered; the link works |
+| `xError`, `eErr` = timeout | Frame sent, no answer: wiring, A/B, termination, address, baud, RS-232/485 mode, or `ComPort = 3` not mapped to the transceiver (`[SysCom]` in `CODESYSControl.cfg`) |
+| `xError`, `eErr` = `UNDEFINED` | Channel index still does not exist |
+
+Remaining suspects once channels exist, in order:
 
 1. **`ComPort = 3` may not reach the physical port.** CODESYS COM
-   numbering is not hardware; on a Linux-based runtime it is a mapping
-   declared in `CODESYSControl.cfg` under `[SysCom]`
-   (`Linux.Devicefile.N=/dev/ttySx`). If the RS-485 transceiver sits on
-   a device node that is not mapped to 3, every setting looks correct
-   and nothing is ever transmitted.
-2. **The slave's channel list may be empty.** Modbus read/write channels
-   live in the device editor's own tab, not in the parameters this dump
-   can read, so their presence is unverified here. With no channels the
-   master sends nothing -- the same symptom as (1).
-3. **The port may be in RS-232 mode.** Shared-pin serial ports often
+   numbering is a runtime mapping, not hardware.
+2. **The port may be in RS-232 mode.** Shared-pin serial ports often
    need a jumper, DIP switch or runtime setting to become RS-485.
-4. **Line settings or address mismatch** against the feeder's own
+3. **Line settings or address mismatch** against the feeder's own
    configuration.
 
-### Splitting (1)+(2) from (3)+(4)
+### With a USB-485 listener
 
 Bridge the existing USB-485 adapter onto the bus as a listener (A/B in
 parallel, no extra termination) and watch at 19200 8N1:
 
 | On the wire | Conclusion |
 |---|---|
-| Nothing at all | The PLC is not transmitting -- cause 1 or 2 |
+| Nothing at all | The PLC is not transmitting -- no channels, or the COM mapping |
 | Requests, no replies | Port is right; wiring, A/B polarity, termination or feeder settings |
 | Requests and replies, wrong values | Link is fine; register map or data format |
 

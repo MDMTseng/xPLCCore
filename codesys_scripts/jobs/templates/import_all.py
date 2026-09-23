@@ -145,7 +145,8 @@ print("summary: applied={}  unchanged={}  missing={}".format(applied, unchanged,
 # Build
 print("\n== generate_code ==")
 try:
-    system.clear_messages("{97f48d64-a2a3-4856-b640-75c046e37ea9}")
+    from System import Guid
+    system.clear_messages(Guid("{97f48d64-a2a3-4856-b640-75c046e37ea9}"))
 except Exception:
     pass
 for app in list(proj.find("Application", True) or []):

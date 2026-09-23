@@ -23,7 +23,8 @@ if app_obj is None:
 
 # 3. Build first
 try:
-    system.clear_messages("{97f48d64-a2a3-4856-b640-75c046e37ea9}")
+    from System import Guid
+    system.clear_messages(Guid("{97f48d64-a2a3-4856-b640-75c046e37ea9}"))
 except Exception:
     pass
 app_obj.generate_code()
