@@ -180,7 +180,7 @@ SmartBowlFeeder          (91, 0000 0001, 4.4.0.0)
 
 All three nodes are enabled.
 
-### Status: not working -- two causes found (2026-09-23)
+### Status: not working -- parked (2026-09-23)
 
 The bus has never been made to function, which is why the flexible
 feeder is currently driven from the PC over a USB-485 adapter instead
@@ -195,48 +195,75 @@ inherited it. `set_modbus_bus_cycle.py` pins `Modbus_COM` and
 left alone so the EtherCAT master does not move. Inspect with
 `probe_bus_cycle.py`.
 
-**2. SmartBowlFeeder has no channels (open).** Measured on the running
-controller with `PRG_MbProbe` (`create_mb_probe.py`), which runs
-`IoDrvModbus.ModbusChannel` against the slave through the master's own
-port:
+**2. SmartBowlFeeder had no channels (fixed).** `PRG_MbProbe`
+(`create_mb_probe.py`, Comm task) runs `IoDrvModbus.ModbusChannel`
+through the master's own port; channels 0-2 all returned `xError` with
+`ModbusError = UNDEFINED` (index does not exist), and the device had no
+I/O-mapping parameters. With no channels the master has nothing to send.
+
+Channels are not in the scripting API. `create_mb_channels.py` adds them
+by driving the device editor plugin (`DeviceEditorModbus.plugin`,
+internal types, via reflection) the same way the "Add Channel" button
+does. Now configured:
 
 ```
-channel 0, 1, 2   xError, ModbusError = UNDEFINED   -> index does not exist
-SmartBowlFeeder   xInitDone TRUE, xError FALSE, iChannelIndex -1
-COM port          uiNumberOfCommunicatingSlaves 0, xAllSlavesOk FALSE
+rs485_cfg   FC03  read 0x0039 len 1  cyclic 1000 ms  -> mb_rs485_cfg[0]
+            (feeder's RS-485 baud/address; 0x0501 = 1281 expected)
 ```
 
-The device also exposes no I/O-mapping parameters, which is what
-channels would create. With no channels the master initialises and then
-has nothing to send, so the wire stays silent. The application code
-never calls Modbus either.
+The feeder's register map is in [`flex_feeder.md`](./flex_feeder.md).
 
-**Fix:** add channels in `SmartBowlFeeder -> Modbus Slave Channel`
-(function code, offset, length, trigger), which needs the feeder's
-register map -- the PC-side USB-485 software or the feeder manual has
-it. Channels are not reachable through the scripting API. Then:
+**3. `ComPort = 3` is probably not the RS-485 terminal (open).**
+Every request fails with `RESPONSE_CRC_FAIL`, and the failure does not
+depend on the bus:
+
+| Test | Result |
+|---|---|
+| Feeder connected, address 1 | `RESPONSE_CRC_FAIL` |
+| Address changed to 99 (nobody answers) | `RESPONSE_CRC_FAIL` |
+| Feeder unplugged | `RESPONSE_CRC_FAIL` (fresh on every run, not latched) |
+| Both wires removed from the PLC terminal | `RESPONSE_CRC_FAIL` |
+
+With nothing attached, bytes still come back, so they are produced on
+the PLC side: either COM3 is some other port that talks back, or the
+port reads its own transmission (RS-485 echo). The history points at
+the first: `ComPort = 3` matches the PC-side USB-485 adapter
+(`PluginHello.tsx` defaults to `'COM3'`), and the machine's previous PLC
+had no RS-485 at all. CODESYS COM numbers belong to the PLC runtime and
+have nothing to do with the PC's. The SCIPC runtime does not expose
+`CODESYSControl.cfg` (`plc_fetch_cfg.py` finds no `[SysCom]`), so the
+mapping cannot be read. The COM port device has no RS-485 mode or echo
+option.
+
+**Next:** with the feeder wired (PLC A = red, B = blue), scan `ComPort`
+with `set_mb_comport.py` (edit `COMPORT`), then `download_start_virtual.py`
+and fire `PRG_MbProbe`:
 
 ```bash
-python codesys_scripts/rpc.py exec --file codesys_scripts/jobs/templates/download_start_virtual.py
 python codesys_scripts/rpc.py write PRG_MbProbe.iChannel 0
 python codesys_scripts/rpc.py write PRG_MbProbe.xRun TRUE
 python codesys_scripts/rpc.py read  PRG_MbProbe.eErr
+python codesys_scripts/rpc.py read  "mb_rs485_cfg[0]"
 ```
 
-| `PRG_MbProbe` result | Conclusion |
+| Result | Conclusion |
 |---|---|
-| `xDone`, `udiDone` climbs | The feeder answered; the link works |
-| `xError`, `eErr` = timeout | Frame sent, no answer: wiring, A/B, termination, address, baud, RS-232/485 mode, or `ComPort = 3` not mapped to the transceiver (`[SysCom]` in `CODESYSControl.cfg`) |
-| `xError`, `eErr` = `UNDEFINED` | Channel index still does not exist |
+| `xDone`, `mb_rs485_cfg[0]` = 1281 | Right port: link, baud and address all good |
+| `RESPONSE_TIMEOUT` | A real port, not the one wired to the feeder |
+| `RESPONSE_CRC_FAIL` | Something else that talks back, like COM3 |
+| Port open error | That number does not exist |
 
-Remaining suspects once channels exist, in order:
+If no number works, ask the vendor (Intewell) which CODESYS COM number
+the A/B/GND terminal is, and whether RS-485 needs a jumper or a runtime
+setting for half-duplex (echo suppression). `set_mb_server_address.py`
+changes the slave address for the address-99 style test.
 
-1. **`ComPort = 3` may not reach the physical port.** CODESYS COM
-   numbering is a runtime mapping, not hardware.
-2. **The port may be in RS-232 mode.** Shared-pin serial ports often
-   need a jumper, DIP switch or runtime setting to become RS-485.
-3. **Line settings or address mismatch** against the feeder's own
-   configuration.
+Notes for whoever picks this up:
+
+- `SmartBowlFeeder.xError` latches; `xAcknowledge` clears it. Prefer
+  `PRG_MbProbe`, whose counters prove each result is fresh.
+- Online reads of the Modbus diagnostics once stalled the daemon for
+  minutes; a daemon restart cleared it.
 
 ### With a USB-485 listener
 

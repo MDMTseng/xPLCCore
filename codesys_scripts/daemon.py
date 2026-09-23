@@ -288,7 +288,10 @@ def get_online(login=True):
     if not found:
         raise RuntimeError("no Application object in project")
     oapp = online.create_online_application(found[0])
-    oapp.login(OnlineChangeOption.Try, False)
+    # Keep: attach to whatever runs on the controller. This session only
+    # serves read/write of symbols; Try would online-change the machine
+    # whenever the project differs, turning a read into a code push.
+    oapp.login(OnlineChangeOption.Keep, False)
     _online["app"] = oapp
     return oapp
 
