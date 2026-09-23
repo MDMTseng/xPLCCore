@@ -22,6 +22,11 @@ codesys_scripts/codesys_env.json
 # and regenerated on every mutating job -- never belongs in git.
 codesys_scripts/jobs/snapshots/
 
+# Artefacts pulled off the controller or exported from the project.
+# Machine-specific, regenerated on demand by the plc_* / export_* jobs.
+codesys_scripts/jobs/plc/
+codesys_scripts/jobs/modbus_export.xml
+
 # OS / editor
 Thumbs.db
 .DS_Store
