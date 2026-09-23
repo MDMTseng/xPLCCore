@@ -129,6 +129,18 @@ def codesys_exe():
     return _abspath(get("codesys_exe", required=True))
 
 
+def codesys_culture():
+    """UI/message language for CODESYS launches, e.g. "en-US".
+
+    Worth pinning rather than inheriting the OS locale: message category
+    descriptions and build output are localised, so a Chinese-locale
+    machine emits Chinese diagnostics that are harder to read, harder to
+    grep, and not comparable against a baseline captured elsewhere.
+    Empty string means "use the OS language".
+    """
+    return get("culture", default="en-US")
+
+
 def codesys_profile():
     return get("profile", required=True)
 
@@ -178,6 +190,7 @@ def describe():
         ("state_dir", state_dir),
         ("codesys_exe", codesys_exe),
         ("profile", codesys_profile),
+        ("culture", codesys_culture),
         ("rpc", lambda: "%s:%d" % (rpc_host(), rpc_port())),
         ("plc", lambda: "%s:%d" % (plc_host(), plc_port())),
     ]:

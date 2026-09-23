@@ -1,19 +1,15 @@
 {
   "_comment": "Copy to codesys_env.json and fill in. Relative paths resolve against the repo root. Override the file location with $XPLC_CONFIG.",
-
   "project": "<SET-ME: absolute path to the .project file>",
   "source_root": "codesys_code",
   "state_dir": "codesys_scripts/jobs",
-
   "codesys_exe": "C:/Program Files/CODESYS 3.5.22.30/CODESYS/Common/CODESYS.exe",
   "profile": "CODESYS V3.5 SP22 Patch 3",
-
+  "culture": "en-US",
   "rpc_host": "127.0.0.1",
   "rpc_port": 7420,
-
   "plc_host": "<SET-ME: PLC IP, e.g. 192.168.1.70>",
   "plc_port": 8125,
-
   "snapshot_keep": 40,
   "session_max_jobs": 150,
   "session_max_seconds": 14400,

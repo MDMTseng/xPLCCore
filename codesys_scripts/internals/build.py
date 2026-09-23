@@ -60,8 +60,22 @@ except Exception:
 log_lines = []
 
 def emit(line):
+    # CODESYS messages are localised; on a Chinese UI they are unicode
+    # with non-ascii characters. IronPython 2.7's print and file.write
+    # default to ascii and raise UnicodeEncodeError, which used to kill
+    # the build script partway through the message dump.
+    try:
+        if isinstance(line, unicode):
+            line = line.encode('ascii', 'replace')
+        else:
+            line = str(line)
+    except Exception:
+        line = repr(line)
     log_lines.append(line)
-    print(line)
+    try:
+        print(line)
+    except Exception:
+        pass
 
 emit("[codesys-build] project: " + project_path)
 
@@ -160,9 +174,9 @@ finally:
 # Flush to log file so the parent process can read it
 if log_path:
     try:
-        with open(log_path, "w") as f:
+        with open(log_path, "wb") as f:
             for line in log_lines:
-                f.write(line + "\n")
+                f.write((line + chr(10)).encode("utf-8", "replace"))
     except Exception as ex:
         print("[codesys-build] could not write log: " + str(ex))
 

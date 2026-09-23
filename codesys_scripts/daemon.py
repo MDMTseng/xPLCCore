@@ -344,7 +344,20 @@ def exec_job(code, label, readonly=False, want_snapshot=True):
         safe_logout(job_globals)
 
     elapsed = time.time() - t0
-    reply = {"ok": ok, "stdout": buf.getvalue(), "elapsed": elapsed}
+
+    # Jobs write UTF-8 bytes into the capture buffer, because IronPython's
+    # cStringIO raises on non-ascii unicode and CODESYS messages here are
+    # localised (Chinese on this machine). Decode on the way out so the
+    # JSON reply carries real text instead of '?' placeholders -- losing
+    # the text would mean losing the content of any build error.
+    out = buf.getvalue()
+    if not isinstance(out, unicode):
+        try:
+            out = out.decode("utf-8", "replace")
+        except Exception:
+            out = out.decode("latin-1", "replace")
+
+    reply = {"ok": ok, "stdout": out, "elapsed": elapsed}
     if snap_path:
         reply["snapshot"] = snap_path
     if not ok:

@@ -155,22 +155,20 @@ for app in list(proj.find("Application", True) or []):
         print("  exception:", ex)
 
 errs = 0; warns = 0
-for cat in system.get_message_categories():
-    try:
-        desc = system.get_message_category_description(cat)
-    except Exception:
-        desc = str(cat)
-    if "build" not in desc.lower():
-        continue
-    for m in system.get_message_objects(cat):
-        sev = str(getattr(m, "severity", ""))
-        txt = getattr(m, "text", None) or str(m)
-        pos = getattr(m, "position_text", "") or ""
-        if "error" in sev.lower():
-            errs += 1
-            print("  [ERR] {} {}".format(txt, pos))
-        elif "warning" in sev.lower():
-            warns += 1
+# Match the build category by GUID. get_message_category_description()
+# returns a LOCALISED string, so the old `"build" in desc.lower()` test
+# matched nothing on a non-English CODESYS and silently reported every
+# build as clean. Severity is safe as text: it is a .NET enum whose
+# ToString() gives the member name, not a translation.
+for m in system.get_message_objects("{97f48d64-a2a3-4856-b640-75c046e37ea9}"):
+    sev = str(getattr(m, "severity", ""))
+    txt = getattr(m, "text", None) or str(m)
+    pos = getattr(m, "position_text", "") or ""
+    if "error" in sev.lower():
+        errs += 1
+        print("  [ERR] {} {}".format(txt, pos))
+    elif "warning" in sev.lower():
+        warns += 1
 
 print("BUILD: errors={} warnings={}".format(errs, warns))
 print("(daemon will save this project when the job returns.)")

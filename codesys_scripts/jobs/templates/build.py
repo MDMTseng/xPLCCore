@@ -1,20 +1,60 @@
 # -*- coding: ascii -*-
-# build job -- run inside the watcher. Reuses the already-open project,
-# generates code for every Application, and dumps Build-category messages.
+# build job -- reuses the already-open project, generates code for every
+# Application, and dumps Build-category messages.
+#
+# Two things this has to survive on a localised CODESYS (this machine runs
+# a Chinese UI):
+#
+#   1. Output encoding. The daemon captures stdout through IronPython's
+#      cStringIO, which raises UnicodeEncodeError on non-ascii. Build
+#      messages and object names are not all ascii, so every print goes
+#      through p() below.
+#
+#   2. Category matching. get_message_category_description() returns a
+#      LOCALISED string, so the old `"build" in desc.lower()` test never
+#      matched on a non-English UI and silently filtered out every build
+#      message -- reporting a clean build no matter what. Match on the
+#      category GUID instead, which is stable across languages.
+#
+#      Severity is safe to compare as text: it is a .NET enum, and its
+#      ToString() yields the member name ("Error", "Warning"), not a
+#      translated string.
 
 import traceback
 
-PROJECT = config.project_path()   # was a hardcoded desktop path
+BUILD_CAT = "{97f48d64-a2a3-4856-b640-75c046e37ea9}"
+
+
+def p(s):
+    try:
+        if isinstance(s, unicode):
+            s = s.encode("utf-8", "replace")
+        print(s)
+    except Exception:
+        try:
+            print(repr(s))
+        except Exception:
+            pass
+
+
+def safe(v):
+    try:
+        if isinstance(v, unicode):
+            return v.encode("utf-8", "replace")
+        return str(v)
+    except Exception:
+        return "?"
+
+
+PROJECT = config.project_path()
 
 proj = projects.primary
 if proj is None:
-    print("[build] opening project: " + PROJECT)
+    p("[build] opening project: " + PROJECT)
     proj = projects.open(PROJECT)
 
-print("[build] project: " + proj.path)
+p("[build] project: %s" % safe(proj.path))
 
-# Clear prior build-category messages so we only see this run's output.
-BUILD_CAT = "{97f48d64-a2a3-4856-b640-75c046e37ea9}"
 try:
     system.clear_messages(BUILD_CAT)
 except Exception:
@@ -25,58 +65,52 @@ try:
     apps = list(proj.find("Application", True) or [])
 except Exception as ex:
     apps = []
-    print("[build] find(Application) failed: " + str(ex))
+    p("[build] find(Application) failed: %s" % safe(ex))
 
 if not apps:
-    print("[build] WARNING: no Application objects found")
+    p("[build] WARNING: no Application objects found")
 
 for app in apps:
-    try:
-        name = app.get_name()
-    except Exception:
-        name = "<app>"
+    name = safe(getattr(app, "get_name", lambda: "<app>")())
     try:
         ok = app.generate_code()
-        # generate_code returns False when nothing had to be regenerated --
-        # that is NOT a build failure. Rely on the Build-category messages
-        # for the real verdict.
-        print("[build] generate_code({}) -> {}".format(name, ok))
+        # generate_code returns False when nothing had to be regenerated.
+        # That is NOT a build failure -- the messages decide.
+        p("[build] generate_code(%s) -> %s" % (name, ok))
     except Exception as ex:
         overall_ok = False
-        print("[build] generate_code({}) -> exception: {}".format(name, ex))
+        p("[build] generate_code(%s) -> exception: %s" % (name, safe(ex)))
 
-# Real verdict: enumerate messages in the Build category.
-print("[build] ---- build messages ----")
+p("[build] ---- build messages ----")
 errors = 0
 warnings = 0
+shown = 0
+MAX_SHOWN = 200
+
 try:
-    for cat in system.get_message_categories():
-        try:
-            desc = system.get_message_category_description(cat)
-        except Exception:
-            desc = str(cat)
-        # Only surface the Build category (and anything flagged as error
-        # in other categories).
-        msgs = list(system.get_message_objects(cat))
-        if not msgs:
-            continue
-        for m in msgs:
-            sev = str(getattr(m, "severity", ""))
-            txt = getattr(m, "text", None) or str(m)
-            pos = getattr(m, "position_text", "") or ""
-            is_build = "build" in desc.lower()
-            is_err = "error" in sev.lower()
-            is_warn = "warning" in sev.lower()
-            if is_build or is_err or is_warn:
-                print("  [{}] [{}] {} {}".format(desc, sev, txt, pos))
-            if is_err:
-                errors += 1
-            if is_warn:
-                warnings += 1
+    msgs = list(system.get_message_objects(BUILD_CAT))
 except Exception:
-    print("[build] message enumeration failed:")
-    print(traceback.format_exc())
+    msgs = []
+    p("[build] could not read the build category directly:")
+    p(traceback.format_exc())
     overall_ok = False
 
-print("[build] summary: errors={} warnings={} overall={}".format(
-    errors, warnings, "OK" if (overall_ok and errors == 0) else "FAIL"))
+for m in msgs:
+    sev = safe(getattr(m, "severity", ""))
+    txt = safe(getattr(m, "text", None) or m)
+    pos = safe(getattr(m, "position_text", "") or "")
+    low = sev.lower()
+    if "error" in low:
+        errors += 1
+    elif "warning" in low:
+        warnings += 1
+    if shown < MAX_SHOWN:
+        p("  [%s] %s %s" % (sev, txt, pos))
+        shown += 1
+
+if len(msgs) > MAX_SHOWN:
+    p("  ... (%d more messages)" % (len(msgs) - MAX_SHOWN))
+
+p("[build] summary: errors=%d warnings=%d total_messages=%d overall=%s" % (
+    errors, warnings, len(msgs),
+    "OK" if (overall_ok and errors == 0) else "FAIL"))

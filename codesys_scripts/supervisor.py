@@ -80,6 +80,12 @@ def codesys_cmdline(script, scriptargs=None, noui=False):
     """
     parts = ['"%s"' % config.codesys_exe(),
              '--profile="%s"' % config.codesys_profile()]
+    culture = config.codesys_culture()
+    if culture:
+        # Pin the language so diagnostics are readable and comparable.
+        # Verified on 3.5.22.30: --culture="en-US" is honoured and uses
+        # the same embedded-quote convention as --profile.
+        parts.append('--culture="%s"' % culture)
     if noui:
         parts.append("--noUI")
     parts.append('--runscript="%s"' % script)
