@@ -81,6 +81,81 @@ side-projection inspection**. Per part:
    cover-NG). OK → place into first clear slot.
 8. **Reel advances** by the number of slots placed this cycle.
 
+### Stations, lighting and slot rules (operator's description, 2026-09-24)
+
+Top view. Lights are numbered as on the rig:
+
+```
+┌────────────────────────┐
+│  Flexible feeder       │  light 1: top, front light on the plate
+│       [1]              │  feeder cam: top-down
+└────────────────────────┘
+
+  [3]        [2]           Inspection station
+  side       bottom        side cam (light 3), bottom cam looking up (light 2)
+  light      light
+
+                   ┌──────────────┐
+═══════════════════│══[4]═════════│══════ carrier tape, wound right → left
+◀── tape travel    │ slots 0 1 2  │       tape station
+                   └──[5]─────────┘       high-magnification top cam
+```
+
+| Light | Where | Purpose |
+|---|---|---|
+| 1 | feeder, top | front light, locate parts on the plate |
+| 2 | inspection, bottom | underside, for the bottom cam |
+| 3 | inspection, side | outline, for the side cam |
+| 4 | tape station, side | side light |
+| 5 | tape station, front | front light, specular reflection |
+
+All strobes and camera triggers are PLC-controlled. The inspection
+station is stop-and-shoot.
+
+Per part, in the operator's words:
+
+1. Pick from the feeder while its locator still has a pickable part.
+2. Inspection: side shot (light 3) to tell which face is up -- the
+   feeder's top view cannot, and the angle is not yet precise; bottom
+   shot (light 2) for underside appearance and the precise angle;
+   rotate about Z to compensate (`A` of `G1`, axis group `SpiderR`;
+   the owner believes the physical axis is `EAXIS_A`, not verified);
+   side shot again for the precise outline dimensions. A part that
+   fails goes to an NG bin; there are several, one per reason.
+3. Tape station, using the **previous** cycle's tape inspection: place
+   into the **lowest-numbered slot that is not OK**; **place first, then
+   remove** any NG part from the tape. **No free slot**: drop the part
+   back onto the feeder, then go remove the NG part from the tape.
+4. On the Z rise after placing: advance the tape N slots, then shoot
+   light 4 and light 5; the two images together give present / absent
+   and good / bad per slot for the next cycle. If N ≥ 1 the shot is
+   taken when the advance finishes (assumed: the arm has left by then);
+   if N = 0 it must wait for the arm to leave the camera's view.
+
+Tape advance: slots 0, 1, 2 left to right; **advance by the number of
+consecutive OK slots counted from slot 0**, from the previous cycle's
+inspection only -- the part just placed has not been inspected yet.
+
+| Previous inspection | Advance |
+|---|---|
+| 0 and 1 OK | 2 |
+| only 0 OK | 1 |
+| only 1 OK (0 not) | 0 -- must be consecutive from 0 |
+
+> **Conflict with the list above, unresolved:** steps 7-8 say "place
+> into first clear slot" and "advance by the number of slots placed
+> this cycle"; the operator describes "lowest slot that is not OK,
+> place then remove NG" and "advance by consecutive OK from slot 0,
+> from the previous inspection". Check against `CalibPage.tsx` before
+> relying on either.
+
+Shot timing today is **fixed delays**, tuned until the arm is never in
+the picture. That comes from the first machine, where the tape unit was
+separate from the PLC and could only be told "advance". Here
+`reelpullmotor` is on the PLC's EtherCAT, so completion
+(`WAIT_FOR_REEL_STOP`) and arm position (fly events) could gate the
+shot instead -- see §Direction.
+
 ### The parallelism constraint (central design driver)
 
 **The robot arm is the only serialized resource and physically occludes
@@ -201,6 +276,28 @@ place decision)
 triggers a camera must *return the Promise* and let the caller
 `await` it later. See [`calibpage.md`](./calibpage.md) §Refactor
 rules for the renderer-side pattern + examples.
+
+### Timing-critical paths
+
+The goal is to overlap as much as possible. Two paths set the cycle
+time (owner's targets):
+
+- **Feeder refill, ~1 s.** When the last pickable part leaves the
+  feeder: force-stop the vibration (brake solenoid; the renderer drives
+  the `FlexVib_brake` pin through `M4`), light 1, feeder cam; if too
+  few parts are recognisable, vibrate to refill, settle, shoot again.
+  Overlaps the arm's trip through inspection and placement; the next
+  pick position must be ready when the arm is back.
+- **Tape advance + two-light shot, < 0.7 s.** From the Z rise after
+  placing: advance N, light 4 shot, light 5 shot. Overlaps the arm's
+  return to the feeder and inspection; the result must be in before the
+  next placement decision.
+
+The feeder's vibration itself is commanded from the PC over USB-RS485
+(Modbus), adding PC-side latency and jitter to the first path. Moving it
+to the PLC needs the RS-485 port working (see
+[`ethercat_config.md`](./ethercat_config.md#rs-485--modbus-rtu)) or the
+EasyCAT/ESP32 slave.
 
 ### Direction: composite commands (decided 2026-09-24)
 
