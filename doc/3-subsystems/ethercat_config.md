@@ -79,11 +79,62 @@ EtherCAT_Master_SoftMotion              1 ms
 │  ├─ EAXIS_A
 │  └─ SM_Drive_GenericDSP402
 ├─ ASDA_B3_E_CoE_Drive_2   1DD   → EAxis2
-└─ reel_pull_motor         A79   → reelpullmotor
+├─ reel_pull_motor         A79   → reelpullmotor
+└─ EasyCAT                 79A   EasyCAT PRO + ESP32, 32+32 bytes
 ```
 
 32 device nodes in total: 18 real devices plus the 14 empty module slots,
 which report as `(0, 0000 0000, 3.0.0.0)` and are not missing drivers.
+(EasyCAT, added 2026-09-23, makes 33.)
+
+### Tree order is not wire order
+
+The tree above is **not** the cabling. Physically the chain runs:
+
+```
+PLC → QEC → reel_pull_motor → delta ×3 → EC0808DN → EasyCAT
+```
+
+It works because every original slave is identified by **station
+alias**, not by position: `DeviceIdenticationMode = 1`, master
+`ScanForAliasAddress = TRUE`, all `Optional = True` except
+reel_pull_motor.
+
+| Slave | StationAlias |
+|---|---|
+| EC0808DN | 1006 |
+| ASDA_B3_E_CoE_Drive / _1 / _2 | 10000 / 10001 / 10002 |
+| QEC_R11MP3S_V | 10100 |
+| reel_pull_motor | 10200 |
+| EasyCAT | none -- identified by **position** |
+
+The alias lives in each slave's EEPROM. Swapping a drive means writing
+the same alias into the replacement, or the master will not find it.
+EasyCAT's EEPROM carries no alias, so it is found by position: it must
+stay the 7th device on the wire, which it is as long as it hangs off
+EC0808DN's OUT port at the end of the chain.
+
+### EasyCAT PRO + ESP32
+
+Custom slave, firmware in [`firmware/easycat_esp32`](../../firmware/easycat_esp32/README.md).
+Installed and wired by script:
+
+```bash
+python codesys_scripts/rpc.py exec --readonly --file codesys_scripts/jobs/templates/import_esi.py
+python codesys_scripts/rpc.py exec --file codesys_scripts/jobs/templates/add_easycat.py
+python codesys_scripts/rpc.py exec --file codesys_scripts/jobs/templates/create_ecat_esp_probe.py
+```
+
+Verified 2026-09-23: OP, input counter moving (`udiCounterSeen` in the
+thousands within seconds), `out1 = 0x5A` returned on `in1`, `out0 = 1`
+reached the ESP32.
+
+**Mapped variables only move if a task uses them.** With only the
+mapping in place the slave reached OP and every variable stayed 0 in
+both directions. "Always update variables" does not help here: it runs
+in the bus cycle task, and this project's PLC-level bus cycle task is a
+dangling reference (see RS-485 below). `PRG_EcatEsp` in `EtherCAT_Task`
+references `ecat_esp_*`, which puts their I/O update in that task.
 
 **Vendors** (the numeric ids are what the project stores; the names come
 from the device descriptions):

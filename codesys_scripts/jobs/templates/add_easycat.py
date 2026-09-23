@@ -93,6 +93,16 @@ for c in node.connectors:
 if mapped != len(MAP):
     print("WARNING: mapped %d of %d channels" % (mapped, len(MAP)))
 
+# The project leaves "Always update variables" Disabled everywhere: mapped
+# variables that no task references are then never copied to or from the
+# I/O image. The slave reaches OP and exchanges frames, but the variables
+# stay 0 and writes never reach the wire. The test variables above are
+# used by no program, so update them from the bus cycle task.
+di = node.driver_info
+mode = type(di.always_update_variables)
+di.always_update_variables = getattr(mode, "OnlyIfUnused")
+print("always update variables: %s" % node.driver_info.always_update_variables)
+
 B = Guid("{97f48d64-a2a3-4856-b640-75c046e37ea9}")
 system.clear_messages(B)
 proj.active_application.generate_code()
