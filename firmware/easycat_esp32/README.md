@@ -97,6 +97,55 @@ QY2204-IIC (ACCNT) magnetic absolute encoder, AS5600 inside, I2C `0x36`,
 "左边倒钩起为 Pin1"). Counted from the other end the encoder gets no power
 and the boot scan finds nothing on either SDA/SCL order.
 
+## Stepper (open-loop CSP)
+
+For rotating a picked part. STEP/DIR/EN to any step-direction driver:
+
+| Driver | ESP32 |
+|---|---|
+| STEP / PUL | GPIO25 |
+| DIR | GPIO26 |
+| EN / ENA | GPIO27 (active low by default, `EN_ACTIVE_LOW` in `stepper.h`) |
+| GND / COM | GND |
+
+Signals are 3.3 V. Opto-isolated drivers that want 5 V on their inputs
+need a level shifter or a common-anode wiring that works at 3.3 V.
+
+The PLC (`PRG_EcatStepper`, EtherCAT_Task) plans the move and sends an
+absolute step target every 1 ms; the ESP32 only interpolates. No stepper
+library on purpose: AccelStepper-style libraries plan their own ramps,
+which would fight the PLC's. `stepper.h` is a 100 kHz timer DDA:
+
+- each cycle moves `target - steps actually emitted`, so leftovers roll
+  into the next cycle instead of being lost;
+- a step is one 10 us tick high and at least one low: max 50 steps per
+  cycle (50 kHz). The PLC caps itself at 45;
+- DIR changes at the cycle start, >= 20 us before the next step.
+
+It stops and drops EN at once when the PLC clears enable, when the slave
+leaves OP or SYNC0 stops for 5 ms (fault 1), or when one cycle asks for
+more than 50 steps (fault 2 -- also what happens if enable comes with a
+target that is not the actual position). Faults latch until reset with
+enable off.
+
+On the PLC:
+
+```
+PRG_EcatStepper.xEnable     := TRUE;
+PRG_EcatStepper.rTargetDeg  := 90.0;    // goes there, trapezoidal profile
+PRG_EcatStepper.rMaxVelDeg  := 180.0;   // deg/s
+PRG_EcatStepper.rAccDeg     := 1800.0;  // deg/s^2
+// -> rActualDeg, xInPosition, xFault, byFault; xSetZero, xReset
+```
+
+`udiStepsPerRev` must match the driver: 6400 = 200-step motor at 32
+microsteps, 0.05625 deg per step, so any angle lands within +/-0.028 deg.
+16 microsteps (3200) is too coarse for 0.1 deg. For an exact 0.1 deg grid
+use a steps/rev divisible by 3600.
+
+Verified without a motor (step count read back): 90 deg -> 1600 steps,
+-45 deg -> -800, 0.1 deg -> 2 steps (0.1125 deg), no faults.
+
 ## Process data
 
 | Direction | Bytes | Content |
@@ -111,8 +160,13 @@ and the boot scan finds nothing on either SDA/SCL order.
 | | 11-12 | Max task interval over the last second, us |
 | | 13-14 | Min task interval, us |
 | | 15 | 1 = driven by SYNC0, 0 = polling fallback |
+| | 16-19 | Stepper actual position, steps emitted (DINT) |
+| | 20 | Stepper status: bit0 enabled, bit1 fault, bit2 moving |
+| | 21 | Stepper fault: 0 none, 1 comm lost, 2 setpoint jump |
 | Master -> slave (`BufferOut`) | 0 | Bit 0 drives the ESP32's on-board LED (GPIO2) |
 | | 1 | Echoed on input byte 1 |
+| | 2 | Stepper control: bit0 enable, bit1 fault reset |
+| | 4-7 | Stepper target position in steps (DINT) |
 
 On the PLC, `PRG_EcatEsp` decodes these and `http://192.168.1.70:8126/`
 shows them live.

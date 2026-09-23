@@ -22,6 +22,12 @@
 //   BufferOut (PLC -> slave)
 //     0      bit 0 drives the on-board LED
 //     1      echoed on BufferIn[1]
+//     2      stepper control: bit0 enable, bit1 fault reset (with enable off)
+//     4-7    stepper target position in steps, little-endian DINT (CSP)
+//   BufferIn, stepper (see stepper.h)
+//     16-19  stepper actual position in steps (DINT) -- steps emitted
+//     20     stepper status: bit0 enabled, bit1 fault, bit2 moving
+//     21     stepper fault: 0 none, 1 comm lost, 2 setpoint jump
 //
 // Synchronisation: DC_SYNC. The master runs distributed clocks on this
 // slave like on the servo drives (DC_Sync opmode, AssignActivate #x300,
@@ -41,6 +47,7 @@
 #include <SPI.h>
 #include <Wire.h>
 #include "EasyCAT.h"
+#include "stepper.h"
 
 static const uint8_t PIN_SCS = 5;
 static const uint8_t PIN_LED = 2;
@@ -247,6 +254,7 @@ void setup() {
   }
   Serial.println("EasyCAT Init OK");
   dumpEscConfig();
+  stepper::begin();
 
   // The library leaves INT push-pull active-high. Pick the edge away from
   // the idle level, so an inverted board (the Arduino shield has a MOSFET
@@ -282,9 +290,23 @@ static void ecatCycle() {
   in[13] = intervalMin & 0xFF;
   in[14] = intervalMin >> 8;
   in[15] = synced ? 1 : 0;
+  int32_t sp = stepper::position();
+  in[16] = sp & 0xFF;
+  in[17] = (sp >> 8) & 0xFF;
+  in[18] = (sp >> 16) & 0xFF;
+  in[19] = (sp >> 24) & 0xFF;
+  in[20] = stepper::status();
+  in[21] = stepper::fault;
 
   escState = EASYCAT.MainTask();
   digitalWrite(PIN_LED, EASYCAT.BufferOut.Byte[0] & 0x01);
+
+  // Fresh setpoint from this frame -> this cycle's interpolation segment.
+  const uint8_t *out = EASYCAT.BufferOut.Byte;
+  int32_t target = (int32_t)((uint32_t)out[4] | ((uint32_t)out[5] << 8) |
+                             ((uint32_t)out[6] << 16) | ((uint32_t)out[7] << 24));
+  bool inOp = synced && (escState & 0x0F) == 0x08;
+  stepper::newSetpoint(out[2], target, inOp);
 }
 
 static void ecatTaskFn(void *) {
@@ -317,14 +339,18 @@ static void ecatTaskFn(void *) {
 
 void loop() {
   static uint32_t lastPrint = 0;
+  // Stop the stepper even if the EtherCAT task stops being woken at all.
+  stepper::watchdog();
   uint32_t now = millis();
   if (now - lastPrint >= 100) {
     lastPrint = now;
     Serial.printf("{\"esc\":\"%s\",\"sync\":%d,\"irq\":%lu,\"int_min\":%u,\"int_max\":%u,"
-                  "\"angle\":%u,\"pos\":%ld,\"status\":%u,\"agc\":%u,\"err\":%u}\n",
+                  "\"angle\":%u,\"pos\":%ld,\"status\":%u,\"agc\":%u,\"err\":%u,"
+                  "\"step\":%ld,\"st_status\":%u,\"st_fault\":%u}\n",
                   escName(escState), synced ? 1 : 0, (unsigned long)irqCount,
                   intervalMin, intervalMax, rawAngle, (long)position,
-                  sensorStatus, agc, errCount);
+                  sensorStatus, agc, errCount,
+                  (long)stepper::position(), stepper::status(), stepper::fault);
   }
-  delay(5);
+  delay(2);
 }

@@ -51,6 +51,12 @@ MAP = {
 # 9 I2C errors, 10 AGC.
 for _i in range(11):
     MAP[("Input", "Byte%d" % _i)] = "ecat_esp_in%d" % _i
+# Stepper (firmware stepper.h): outputs 2 control, 4-7 target steps;
+# inputs 16-19 actual steps, 20 status, 21 fault.
+for _i in (2, 4, 5, 6, 7):
+    MAP[("Output", "Byte%d" % _i)] = "ecat_esp_out%d" % _i
+for _i in range(16, 22):
+    MAP[("Input", "Byte%d" % _i)] = "ecat_esp_in%d" % _i
 
 
 def t(v):
