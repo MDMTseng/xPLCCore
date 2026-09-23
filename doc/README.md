@@ -22,9 +22,10 @@ For the high-level "what is this project" overview, read
 
 1. [`../README.md`](../README.md) — quick start + wire cheat sheet
 2. [`../PROJECT.md`](../PROJECT.md) — full overview + capability matrix
-3. [`1-concepts/architecture.md`](1-concepts/architecture.md) — integrated component map
-4. [`1-concepts/solidification.md`](1-concepts/solidification.md) (skim §Workstreams) — what's been done, what's in flight
-5. [`2-contracts/protocol.md`](2-contracts/protocol.md) (skim) — the PLC wire surface
+3. [`1-concepts/machine.md`](1-concepts/machine.md) — the physical machine: what it builds, which axis moves what
+4. [`1-concepts/architecture.md`](1-concepts/architecture.md) — integrated component map
+5. [`1-concepts/solidification.md`](1-concepts/solidification.md) (skim §Workstreams) — what's been done, what's in flight
+6. [`2-contracts/protocol.md`](2-contracts/protocol.md) (skim) — the PLC wire surface
 
 You now know enough to follow conversations and find your way around.
 

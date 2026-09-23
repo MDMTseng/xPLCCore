@@ -101,7 +101,7 @@ def ident(o):
 
 def enabled(o):
     try:
-        return "enabled" if o.is_enabled else "DISABLED"
+        return "enabled" if o.is_enabled() else "** DISABLED **"
     except Exception:
         return "?"
 

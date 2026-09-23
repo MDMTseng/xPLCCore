@@ -152,6 +152,71 @@ SoftMotion rather than direct IO.
 
 ---
 
+## RS-485 / Modbus RTU
+
+Not on the EtherCAT bus, so `dump_ethercat.py` does not see it. Use:
+
+```bash
+python codesys_scripts/rpc.py exec --readonly \
+    --file codesys_scripts/jobs/templates/dump_serial.py
+```
+
+```
+Modbus_COM               (92, 0000 0001, 4.4.0.0)
+  ComPort              = 3          on the PLC, not the dev PC
+  Baudrate             = 19200      non-default
+  Parity / Data / Stop = NONE / 8 / 1
+
+Modbus_Client_COM_Port   (90, 0000 0002, 4.4.0.0)
+  Transmission         = RTU
+  ResponseTimeout      = 1000 ms
+  TimeBetweenFrames    = 10 ms
+  Auto-restart         = TRUE       non-default
+
+SmartBowlFeeder          (91, 0000 0001, 4.4.0.0)
+  ServerAddress        = 1
+  ResponseTimeout      = 1000 ms
+```
+
+All three nodes are enabled.
+
+### Status: not working
+
+The bus has never been made to function, which is why the flexible
+feeder is currently driven from the PC over a USB-485 adapter instead
+(see [`../1-concepts/machine.md`](../1-concepts/machine.md#the-feeder-problem)).
+Candidate causes, in the order worth checking:
+
+1. **`ComPort = 3` may not reach the physical port.** CODESYS COM
+   numbering is not hardware; on a Linux-based runtime it is a mapping
+   declared in `CODESYSControl.cfg` under `[SysCom]`
+   (`Linux.Devicefile.N=/dev/ttySx`). If the RS-485 transceiver sits on
+   a device node that is not mapped to 3, every setting looks correct
+   and nothing is ever transmitted.
+2. **The slave's channel list may be empty.** Modbus read/write channels
+   live in the device editor's own tab, not in the parameters this dump
+   can read, so their presence is unverified here. With no channels the
+   master sends nothing -- the same symptom as (1).
+3. **The port may be in RS-232 mode.** Shared-pin serial ports often
+   need a jumper, DIP switch or runtime setting to become RS-485.
+4. **Line settings or address mismatch** against the feeder's own
+   configuration.
+
+### Splitting (1)+(2) from (3)+(4)
+
+Bridge the existing USB-485 adapter onto the bus as a listener (A/B in
+parallel, no extra termination) and watch at 19200 8N1:
+
+| On the wire | Conclusion |
+|---|---|
+| Nothing at all | The PLC is not transmitting -- cause 1 or 2 |
+| Requests, no replies | Port is right; wiring, A/B polarity, termination or feeder settings |
+| Requests and replies, wrong values | Link is fine; register map or data format |
+
+One measurement eliminates half the list.
+
+---
+
 ## Things worth knowing
 
 **`bVirtual` is pinned in the device tree, not just at runtime.**
