@@ -26,6 +26,7 @@ codesys_scripts/jobs/snapshots/
 # Machine-specific, regenerated on demand by the plc_* / export_* jobs.
 codesys_scripts/jobs/plc/
 codesys_scripts/jobs/modbus_export.xml
+codesys_scripts/jobs/device_tree.xml
 
 # OS / editor
 Thumbs.db
