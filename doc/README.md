@@ -33,9 +33,10 @@ You now know enough to follow conversations and find your way around.
 1. Path A first
 2. [`1-concepts/coupling_invariants.md`](1-concepts/coupling_invariants.md) — what must move together across layers
 3. [`3-subsystems/plc.md`](3-subsystems/plc.md) — source map, FSM, timing, items P0–P3 / A1–A6
-4. [`4-dev/scripting.md`](4-dev/scripting.md) — how to push code via the daemon
-5. [`3-subsystems/ringbuf-bugs.md`](3-subsystems/ringbuf-bugs.md) — pitfalls when touching the ring buffers
-6. [`2-contracts/msgpack.md`](2-contracts/msgpack.md) — PLC-side msgpack lib review
+4. [`3-subsystems/ethercat_config.md`](3-subsystems/ethercat_config.md) — the bus as configured: master, slaves, axis scaling, IO map
+5. [`4-dev/scripting.md`](4-dev/scripting.md) — how to push code via the daemon
+6. [`3-subsystems/ringbuf-bugs.md`](3-subsystems/ringbuf-bugs.md) — pitfalls when touching the ring buffers
+7. [`2-contracts/msgpack.md`](2-contracts/msgpack.md) — PLC-side msgpack lib review
 
 ### Path C — "I'm working on the renderer / UI"
 
