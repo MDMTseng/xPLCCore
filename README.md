@@ -269,3 +269,25 @@ manually before merging anything that touches the PLC dispatcher,
 ## License
 
 MIT. See [`package.json`](package.json).
+
+## Running the UI without the plugin host
+
+```bash
+npm ci
+npm run standalone          # Vite dev server + a minimal Electron window, hot reload
+XPLC_DEVTOOLS=1 npm run standalone
+```
+
+`standalone/` mounts `PluginHello` with the host props filled in locally
+(data under `standalone/data/`, git-ignored). The Electron window runs
+with Node integration, which the UI needs for its TCP sockets, and with
+Chromium's background throttling switched off: with the defaults a 50 ms
+timer ran 6 times in 5 s once the window was minimised (1 s gaps); with
+the harness settings it runs ~100 times. The old host only worked
+properly in the foreground for this reason.
+
+If the Electron binary download hangs, fetch it from a mirror:
+`ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ node node_modules/electron/install.js`.
+
+Self-checks: `XPLC_THROTTLE_TEST=1 npm run standalone` (timer test while
+minimised), `XPLC_SNAPSHOT=out.png npm run standalone` (render check).
