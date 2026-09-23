@@ -329,6 +329,12 @@ Rules for each one:
 - Every wait has a timeout. It can be aborted and stops in a safe state.
 - It is documented in [`protocol.md`](../2-contracts/protocol.md) like
   any other command.
+- It must **not** wait at the tail of the inbound queue the way
+  `BLOCK_FOR_*` / `WAIT_FOR_REEL_STOP` do today -- that blocks every
+  packet behind it, arm moves included, for the whole sequence. Follow
+  the `WAIT_FOR_TRIGGER` shape: validate, take it off the queue, ack,
+  then advance a sequence block every scan. See
+  [`code_review_2026-09-24.md`](../../doc_review/code_review_2026-09-24.md).
 
 Order:
 
@@ -336,7 +342,9 @@ Order:
    paths before changing them: feeder refill (target ~1 s) and tape
    advance + two-light shot (target < 0.7 s).
 2. Renderer-side: replace fixed delays with `WAIT_FOR_REEL_STOP` and
-   fly events (no PLC change). The tape timing today is delay-based, a
+   fly events (no PLC change). **Blocked** until the queue-tail
+   blocking is fixed (review P0-3): today `WAIT_FOR_REEL_STOP` would hold
+   the arm's moves behind the reel. The tape timing today is delay-based, a
    leftover from the first machine, where the tape unit was separate
    from the PLC and could only be told "advance".
 3. `TAPE_CYCLE`: advance N, wait for reel stop and arm clear, light 4
