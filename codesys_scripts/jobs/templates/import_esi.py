@@ -17,8 +17,11 @@
 
 import System
 
-ESI_PATH = r"C:\Users\PC\Documents\workspace\codesys_dev\xPLCCore\firmware\easycat_esp32\esi\EasyCAT_PRO.xml"
-MATCH = "00DEFEDE"   # product code; ESI names are often generic ("Generic 32+32 bytes")
+ESI_PATH = r"C:\Users\PC\Documents\workspace\codesys_dev\xPLCCore\firmware\easycat_esp32\esi\EasyCAT_V2_0.xml"
+MATCH = "00DEFEDE00005A01"   # product code + revision; ESI names are often generic
+# EasyCAT_V2_0.xml (from EasyConfigurator) is the DC-capable ESI: revision
+# 0x5A01, <Dc> with a DC_Sync opmode. The website's EasyCAT_PRO.xml is the
+# older 0x5A00 without DC.
 ETHERCAT_CONVERTER = System.Guid("3992c588-7bdb-4a7c-908d-f444808d8cd2")
 
 

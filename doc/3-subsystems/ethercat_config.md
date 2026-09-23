@@ -80,7 +80,7 @@ EtherCAT_Master_SoftMotion              1 ms
 │  └─ SM_Drive_GenericDSP402
 ├─ ASDA_B3_E_CoE_Drive_2   1DD   → EAxis2
 ├─ reel_pull_motor         A79   → reelpullmotor
-└─ EasyCAT                 79A   EasyCAT PRO + ESP32, 32+32 bytes
+└─ EasyCAT                 79A   EasyCAT PRO + ESP32, 32+32 bytes rev 1, DC
 ```
 
 32 device nodes in total: 18 real devices plus the 14 empty module slots,
@@ -141,6 +141,19 @@ references `ecat_esp_*`, which puts their I/O update in that task.
 `uiEncRaw`, `rEncDeg`, `diEncPos` (multi-turn, from ESP32 power-up, not
 retained), `rEncTurns`, `xMagnetOk`, `xEspAlive`. Byte layout in the
 [firmware README](../../firmware/easycat_esp32/README.md).
+
+**Distributed clocks.** EasyCAT runs DC like the drives (SYNC0 1000 us,
+`DCSetting = 1` = "DC_Sync"). That needs the rev `0x5A01` ESI
+(`esi/EasyCAT_V2_0.xml`); the rev `0x5A00` one from the website has no
+`<Dc>`. `add_easycat.py` updates the node in place (`update()` keeps the
+I/O mappings) and sets the DC parameters. Details and measurements in the
+[firmware README](../../firmware/easycat_esp32/README.md#distributed-clocks).
+
+**Unplugging it takes the bus down.** EasyCAT is identified by position
+and not optional. With it unplugged the master stops at startup with
+`Read of product or vendor ID not successfull, more slaves in config as
+real?` (`EtherCAT_Master_SoftMotion.LastMessage`) and every slave,
+including both real axes, stays in INIT.
 
 **Status page:** `http://192.168.1.70:8126/`, served by the PLC itself
 (`PRG_EcatEspHttp`, Comm task, `create_ecat_esp_http.py`). `GET /s`

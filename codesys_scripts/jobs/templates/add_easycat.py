@@ -22,8 +22,22 @@ from System import Guid
 
 NAME = "EasyCAT"
 DEV_TYPE = 65
-DEV_ID = "79A_00DEFEDE00005A00"
-DEV_VERSION = "Revision=16#00005A00"
+# Revision 0x5A01 ("EasyCAT 32+32 rev 1", EasyCAT_V2_0.xml) is the one with
+# a <Dc> section. The board's EEPROM already carries the matching config
+# (0x0151 = 0x6E: SYNC0 output on, SYNC0 -> AL event), read back by the
+# firmware at boot. 0x5A00 (EasyCAT_PRO.xml from the website) has no DC.
+DEV_ID = "79A_00DEFEDE00005A01"
+DEV_VERSION = "Revision=16#00005A01"
+
+# Distributed clocks, like every other slave on this bus: SYNC0 every
+# 1000 us. DCSetting is the index into the ESI's OpMode list:
+# 0 "SM_Sync or Async", 1 "DC_Sync" (AssignActivate #x300).
+DC_PARAMS = {
+    "DC enable": "TRUE",
+    "DC sync0 enable": "TRUE",
+    "DC sync0 cycletime": "1000",
+    "DCSetting": "1",
+}
 
 # (channel_type, channel name as the ESI declares it) -> new global
 # variable. Input and output channels share names (Byte0..Byte31), so the
@@ -73,6 +87,11 @@ if node is None:
     print("added %s" % NAME)
 else:
     print("%s already present" % NAME)
+    di = node.get_device_identification()
+    if t(di.id) != DEV_ID:
+        node.update(DEV_TYPE, DEV_ID, DEV_VERSION)  # keeps the I/O mappings
+        node = child(master, NAME)
+        print("updated %s -> %s" % (t(di.id), DEV_ID))
 
 print("bus order: %s" % ", ".join(t(c.get_name()) for c in master.get_children()))
 
@@ -105,6 +124,16 @@ di = node.driver_info
 mode = type(di.always_update_variables)
 di.always_update_variables = getattr(mode, "OnlyIfUnused")
 print("always update variables: %s" % node.driver_info.always_update_variables)
+
+for c in node.connectors:
+    for prm in c.host_parameters:
+        want = DC_PARAMS.get(t(prm.name))
+        if want is not None and t(prm.value) != want:
+            prm.value = want
+for c in node.connectors:
+    for prm in c.host_parameters:
+        if t(prm.name) in DC_PARAMS:
+            print("  %-20s = %s" % (t(prm.name), t(prm.value)))
 
 B = Guid("{97f48d64-a2a3-4856-b640-75c046e37ea9}")
 system.clear_messages(B)

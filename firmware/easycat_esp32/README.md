@@ -1,9 +1,42 @@
 # EasyCAT PRO + ESP32 -- EtherCAT slave
 
-An ESP32 behind an AB&T EasyCAT PRO (LAN9252) as a custom EtherCAT slave.
-Standard 32+32 byte process image, matching the PRO's stock EEPROM and
-`esi/EasyCAT_PRO.xml` (vendor `0x079A` AB&T, product `0x00DEFEDE`
-"EasyCAT 32+32").
+An ESP32 behind an AB&T EasyCAT PRO (LAN9252) as a custom EtherCAT slave,
+synchronised to the bus by distributed clocks (DC). Standard 32+32 byte
+process image: vendor `0x079A` AB&T, product `0x00DEFEDE`, **revision
+`0x5A01`** "EasyCAT 32+32 rev 1", ESI `esi/EasyCAT_V2_0.xml`.
+
+## Distributed clocks
+
+The master drives SYNC0 every 1000 us on this slave exactly as on the
+servo drives (CODESYS: DC enable, SYNC0 enable, `DCSetting = 1` =
+"DC_Sync" opmode, AssignActivate `#x300`). The LAN9252 maps SYNC0 to its
+AL event and raises INT (GPIO17); the ISR wakes a high-priority task that
+samples the encoder and runs `MainTask()`. Measured: 1 kHz interrupts,
+task interval 939-1061 us.
+
+Three things have to agree, and two of them were wrong at first:
+
+| Piece | Needed | Notes |
+|---|---|---|
+| EEPROM config, ESC `0x0151` | `0x6E` (SYNC0 output, SYNC0 -> AL event) | Already on this board. The firmware prints it at boot (`dumpEscConfig`), so no EEPROM rewrite was needed |
+| ESI in CODESYS | rev `0x5A01` with `<Dc>` | `EasyCAT_V2_0.xml` from EasyConfigurator. The website's `EasyCAT_PRO.xml` is rev `0x5A00` **without** DC -- installing that one is why DC was not offered at first |
+| Firmware | `EasyCAT(PIN_SCS, DC_SYNC)` | |
+
+Per-cycle work must stay well under 1 ms or SYNC0s are skipped: with
+three I2C reads at 100 kHz the task ran every 2 ms. Now I2C runs at
+400 kHz, the angle is read every cycle and STATUS/AGC every 64th.
+
+Input bytes 11-14 report the max/min task interval over the last second
+(us) and byte 15 is 1 while cycles are driven by SYNC0 (0 = polling
+fallback, e.g. before the master starts DC).
+
+**Unplugging the EasyCAT stops the whole bus.** It is identified by
+position (no station alias in its EEPROM) and not optional, so a missing
+EasyCAT fails the master's startup check ("more slaves in config as
+real?") and every axis stays down. Reflashing the ESP32 also resets the
+LAN9252; restart EtherCAT afterwards. Making it optional needs a station
+alias written into the EEPROM (EasyConfigurator, Extra -> Alias address,
+with the board cabled straight to a PC).
 
 ## Wiring
 
@@ -15,8 +48,8 @@ Standard 32+32 byte process image, matching the PRO's stock EEPROM and
 | MO | GPIO23 | VSPI MOSI |
 | SCK | GPIO18 | VSPI SCK |
 | SCS | GPIO5 | Chip select |
-| INT | GPIO17 | Interrupt (unused, ASYNC) |
-| SYN0 | GPIO16 | DC SYNC0 (unused, ASYNC) |
+| INT | GPIO17 | Interrupt: SYNC0 via the AL event |
+| SYN0 | GPIO16 | DC SYNC0 pin (unused; SYNC0 arrives on INT) |
 | SYN1 | GPIO4 | DC SYNC1 (unused) |
 
 Unplug USB before rewiring: hot-plugging wires once left the CP210x
@@ -75,6 +108,9 @@ and the boot scan finds nothing on either SDA/SCL order.
 | | 5-8 | Multi-turn position in counts (DINT, little-endian), from power-up |
 | | 9 | I2C error counter |
 | | 10 | AGC |
+| | 11-12 | Max task interval over the last second, us |
+| | 13-14 | Min task interval, us |
+| | 15 | 1 = driven by SYNC0, 0 = polling fallback |
 | Master -> slave (`BufferOut`) | 0 | Bit 0 drives the ESP32's on-board LED (GPIO2) |
 | | 1 | Echoed on input byte 1 |
 
@@ -88,7 +124,8 @@ Serial also prints one JSON status line every 100 ms.
 
 ## Sources
 
-`lib/EasyCAT` is AB&T's EasyCAT library V2.1 (examples removed) and
-`esi/EasyCAT_PRO.xml` the EasyCAT PRO ESI, both from
-https://www.bausano.net/en/download-2. The library runs on ESP32 through
+`lib/EasyCAT` is AB&T's EasyCAT library V2.1 (examples removed),
+`esi/EasyCAT_V2_0.xml` the DC-capable ESI shipped with EasyConfigurator
+V4.3, and `esi/EasyCAT_PRO.xml` the older website ESI (kept for
+reference, no DC), all from https://www.bausano.net/en/download-2. The library runs on ESP32 through
 its generic Arduino path (`SPI.transfer`, `digitalWrite`).
