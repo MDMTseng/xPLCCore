@@ -9,7 +9,7 @@
 //   BufferIn (slave -> PLC)
 //     0      heartbeat counter, +1 per MainTask cycle
 //     1      echo of BufferOut[1] (round-trip check)
-//     2-3    raw angle 0..4095, little-endian UINT
+//     2-3    angle 0..4095, little-endian UINT (AS5600 ANGLE: filtered, 2 LSB hysteresis)
 //     4      AS5600 STATUS: bit5 MD magnet detected, bit4 ML too weak,
 //            bit3 MH too strong; bit0 set by us = sensor not answering
 //     5-8    multi-turn position in counts, little-endian DINT; unwrapped
@@ -57,8 +57,17 @@ static const uint8_t PIN_INT = 17;
 
 static const uint8_t AS5600_ADDR = 0x36;
 static const uint8_t REG_STATUS = 0x0B;
-static const uint8_t REG_RAW_ANGLE = 0x0C;
+static const uint8_t REG_CONF = 0x07;       // 0x07 high byte, 0x08 low byte
+static const uint8_t REG_ANGLE = 0x0E;      // filtered + hysteresis (RAW_ANGLE 0x0C is neither)
 static const uint8_t REG_AGC = 0x1A;
+
+// AS5600 CONF, volatile (reset on power-up; nothing is burned to OTP):
+//   SF   bits 9:8   = 00   slow filter 16x -- least noise, ~2.2 ms step response
+//   FTH  bits 12:10 = 001  fast filter above 6 LSB -- real motion is not lagged
+//   HYST bits 3:2   = 10   2 LSB output hysteresis -- no 864/865 flicker
+// Hysteresis only acts on ANGLE, so that is the register read each cycle;
+// with ZPOS/MPOS/MANG at their defaults it spans the same 0..4095.
+static const uint16_t AS5600_CONF = (0x1 << 10) | (0x0 << 8) | (0x2 << 2);
 
 static const uint8_t STATUS_NO_SENSOR = 0x01;
 
@@ -67,9 +76,12 @@ EasyCAT EASYCAT(PIN_SCS, DC_SYNC);
 static TaskHandle_t ecatTask = nullptr;
 static volatile uint32_t irqCount = 0;
 static uint16_t intervalMax = 0, intervalMin = 0;   // last full second, us
+static uint32_t workMaxUs = 0;                      // longest cycle, last second
 static bool synced = false;
 
 static void ecatTaskFn(void *);
+static void encTaskFn(void *);
+static TaskHandle_t encTask;
 
 static void IRAM_ATTR onEcatIrq() {
   irqCount++;
@@ -150,7 +162,7 @@ static void sampleEncoder() {
   // every 64th cycle so the per-cycle I2C time stays well inside 1 ms.
   static uint8_t slow = 0;
   uint8_t b[2];
-  if (!readRegs(REG_RAW_ANGLE, b, 2)) {
+  if (!readRegs(REG_ANGLE, b, 2)) {
     errCount++;
     sensorStatus = STATUS_NO_SENSOR;
     sensorPresent = false;
@@ -246,6 +258,18 @@ void setup() {
   uint8_t st;
   sensorPresent = readRegs(REG_STATUS, &st, 1);
   Serial.printf("AS5600 at 0x36: %s\n", sensorPresent ? "yes" : "NOT FOUND");
+  if (sensorPresent) {
+    Wire.beginTransmission(AS5600_ADDR);
+    Wire.write(REG_CONF);
+    Wire.write((uint8_t)(AS5600_CONF >> 8));
+    Wire.write((uint8_t)(AS5600_CONF & 0xFF));
+    Wire.endTransmission();
+    uint8_t c[2] = {0, 0};
+    readRegs(REG_CONF, c, 2);
+    uint16_t got = ((uint16_t)(c[0] & 0x3F) << 8) | c[1];
+    Serial.printf("AS5600 CONF 0x%04X (wanted 0x%04X): SF 16x, FTH 6 LSB, HYST 2 LSB %s\n",
+                  got, AS5600_CONF, got == AS5600_CONF ? "ok" : "MISMATCH");
+  }
 
   while (!EASYCAT.Init()) {
     Serial.println("EasyCAT Init FAILED -- retrying");
@@ -262,16 +286,36 @@ void setup() {
   pinMode(PIN_INT, INPUT);
   int idle = digitalRead(PIN_INT);
   Serial.printf("INT idle level %d -> interrupt on %s edge\n", idle, idle ? "falling" : "rising");
+  xTaskCreatePinnedToCore(encTaskFn, "enc", 4096, nullptr, configMAX_PRIORITIES - 2, &encTask, 0);
   xTaskCreatePinnedToCore(ecatTaskFn, "ecat", 4096, nullptr, configMAX_PRIORITIES - 1, &ecatTask, 1);
   attachInterrupt(digitalPinToInterrupt(PIN_INT), onEcatIrq, idle ? FALLING : RISING);
 }
 
-// One EtherCAT cycle: sample, fill the inputs, then exchange. MainTask()
-// copies BufferIn to the LAN9252, so filling it first sends this cycle's
-// sample; filling it after would add a cycle of latency.
+// Encoder on core 0. The Arduino I2C driver costs hundreds of us per
+// transaction; inside the EtherCAT task (core 1) the cycles with the
+// periodic STATUS/AGC reads took 1071 us -- longer than the 1 ms cycle.
+// The EtherCAT task now only wakes this task at SYNC0 and publishes the
+// last completed sample: the sample instant stays locked to the DC clock,
+// the value reaches the PLC one cycle later (fixed latency).
+static volatile uint32_t encWorkMaxUs = 0;
+
+static void encTaskFn(void *) {
+  uint32_t winStart = micros(), mx = 0;
+  for (;;) {
+    if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100)) == 0) continue;
+    uint32_t t0 = micros();
+    sampleEncoder();
+    uint32_t w = micros() - t0;
+    if (w > mx) mx = w;
+    if (t0 - winStart >= 1000000) { encWorkMaxUs = mx; mx = 0; winStart = t0; }
+  }
+}
+
+// One EtherCAT cycle: fill the inputs, then exchange. MainTask() copies
+// BufferIn to the LAN9252, so filling it first sends the freshest values.
 static void ecatCycle() {
   static uint8_t counter = 0;
-  sampleEncoder();
+  if (encTask) xTaskNotifyGive(encTask);   // sample the encoder now, on core 0
 
   uint8_t *in = EASYCAT.BufferIn.Byte;
   in[0] = counter++;
@@ -311,7 +355,7 @@ static void ecatCycle() {
 
 static void ecatTaskFn(void *) {
   uint32_t last = 0, winStart = micros();
-  uint32_t mx = 0, mn = 0xFFFFFFFF;
+  uint32_t mx = 0, mn = 0xFFFFFFFF, wmx = 0;
   for (;;) {
     // Frame interrupt, or a 100 ms timeout -> poll so INIT->OP can happen.
     bool irq = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100)) > 0;
@@ -331,9 +375,14 @@ static void ecatTaskFn(void *) {
     if (now - winStart >= 1000000) {
       intervalMax = mx > 65535 ? 65535 : mx;
       intervalMin = mn == 0xFFFFFFFF ? 0 : mn;
-      mx = 0; mn = 0xFFFFFFFF; winStart = now;
+      workMaxUs = wmx;
+      mx = 0; mn = 0xFFFFFFFF; wmx = 0; winStart = now;
     }
     ecatCycle();
+    // CPU time of one cycle (encoder read, process data, stepper setup):
+    // with the pulses in RMT this is all the CPU spends per millisecond.
+    uint32_t w = micros() - now;
+    if (w > wmx) wmx = w;
   }
 }
 
@@ -346,11 +395,13 @@ void loop() {
     lastPrint = now;
     Serial.printf("{\"esc\":\"%s\",\"sync\":%d,\"irq\":%lu,\"int_min\":%u,\"int_max\":%u,"
                   "\"angle\":%u,\"pos\":%ld,\"status\":%u,\"agc\":%u,\"err\":%u,"
-                  "\"step\":%ld,\"st_status\":%u,\"st_fault\":%u}\n",
+                  "\"step\":%ld,\"st_cmd\":%ld,\"st_status\":%u,\"st_fault\":%u,\"work_max_us\":%lu,"
+                  "\"enc_max_us\":%lu}\n",
                   escName(escState), synced ? 1 : 0, (unsigned long)irqCount,
                   intervalMin, intervalMax, rawAngle, (long)position,
                   sensorStatus, agc, errCount,
-                  (long)stepper::position(), stepper::status(), stepper::fault);
+                  (long)stepper::position(), (long)stepper::cmdPos, stepper::status(),
+                  stepper::fault, (unsigned long)workMaxUs, (unsigned long)encWorkMaxUs);
   }
   delay(2);
 }

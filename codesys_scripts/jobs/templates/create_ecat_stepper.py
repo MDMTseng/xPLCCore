@@ -21,8 +21,9 @@
 # Resolution: udiStepsPerRev must match the driver. 0.1 deg needs at least
 # 3600 steps/rev, i.e. 200-step motor at 32 microsteps = 6400.
 #
-# Velocity is capped at 45 steps per cycle, under the firmware's 50: with
-# 6400 steps/rev that is 45 000 steps/s = 2531 deg/s = 7 rev/s.
+# Velocity is capped at 135 steps per cycle, under the firmware's 150 (RMT
+# hardware pulses, 3 us high): with 6400 steps/rev that is 135 000 steps/s
+# = 7594 deg/s = 21 rev/s -- above what a stepper holds torque at anyway.
 #
 # Idempotent. Builds; downloading is a separate step.
 
@@ -35,7 +36,7 @@ BUILD = Guid("{97f48d64-a2a3-4856-b640-75c046e37ea9}")
 DECL = """PROGRAM PRG_EcatStepper
 VAR CONSTANT
     CYCLE_S             : LREAL := 0.001;   // EtherCAT_Task cycle, s (DT is a keyword)
-    MAX_STEPS_PER_CYCLE : LREAL := 45.0;    // firmware faults above 50
+    MAX_STEPS_PER_CYCLE : LREAL := 135.0;   // firmware faults above 150
 END_VAR
 VAR
     // --- interface ---

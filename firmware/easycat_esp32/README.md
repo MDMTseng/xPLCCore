@@ -93,13 +93,21 @@ QY2204-IIC (ACCNT) magnetic absolute encoder, AS5600 inside, I2C `0x36`,
 | Pin 5 SDA | GPIO21 |
 | Pin 6 NC | -- |
 
+The AS5600's CONF register is set at every boot (volatile, nothing is
+burned to OTP): slow filter 16x, fast filter above 6 LSB so real motion
+is not lagged, 2 LSB hysteresis. The firmware reads ANGLE (0x0E), which
+the hysteresis applies to, instead of RAW ANGLE. At rest the reading
+used to flicker 864/865 and the multi-turn position 0/1; now it holds.
+
 **Pin 1 is on the latch side** of the XH connector (the vendor manual:
 "左边倒钩起为 Pin1"). Counted from the other end the encoder gets no power
 and the boot scan finds nothing on either SDA/SCL order.
 
 ## Stepper (open-loop CSP)
 
-For rotating a picked part. STEP/DIR/EN to any step-direction driver:
+For rotating a picked part. STEP/DIR/EN to any step-direction driver.
+Pulses come from hardware (RMT), and the STEP pin is counted back by
+hardware (PCNT) -- see "Hardware pulses" below.
 
 | Driver | ESP32 |
 |---|---|
@@ -114,17 +122,44 @@ need a level shifter or a common-anode wiring that works at 3.3 V.
 The PLC (`PRG_EcatStepper`, EtherCAT_Task) plans the move and sends an
 absolute step target every 1 ms; the ESP32 only interpolates. No stepper
 library on purpose: AccelStepper-style libraries plan their own ramps,
-which would fight the PLC's. `stepper.h` is a 100 kHz timer DDA:
+which would fight the PLC's.
 
-- each cycle moves `target - steps actually emitted`, so leftovers roll
-  into the next cycle instead of being lost;
-- a step is one 10 us tick high and at least one low: max 50 steps per
-  cycle (50 kHz). The PLC caps itself at 45;
-- DIR changes at the cycle start, >= 20 us before the next step.
+### Hardware pulses
+
+- **RMT** generates them. Each cycle the move (`target - scheduled`)
+  becomes N RMT items spread evenly over 900 us at 0.1 us resolution;
+  the peripheral plays them with no CPU involvement. Pulse 3 us high,
+  first pulse 5 us into the sequence (DIR setup), at most 150 steps per
+  cycle (150 kHz). The PLC caps itself at 135.
+- **PCNT** counts them: the STEP pin's input buffer is routed back to
+  pulse counter 0 with DIR as direction control. The reported actual
+  position is what the hardware emitted, not what software intended, and
+  it stays exact when a sequence is aborted.
+- DIR only flips after the previous sequence has finished.
+- The first version was a 100 kHz timer interrupt stepping a DDA:
+  100 000 interrupts per second, a 10 us timing grid, 50 kHz ceiling.
+
+Routing order matters because the IDF drivers undo each other: PCNT is
+configured without pins, RMT then claims STEP as output, and only then are
+the STEP/DIR input buffers enabled and connected to PCNT.
+
+### CPU and timing (measured)
+
+| | |
+|---|---|
+| EtherCAT task per cycle (core 1) | 421-495 us |
+| Encoder task per sample (core 0) | ~700 us |
+| SYNC0-to-task interval | 999-1001 us |
+
+The AS5600's I2C reads used to run inside the EtherCAT task and cost up to
+1071 us -- longer than the cycle -- which also showed up as +/-60 us of
+SYNC0 jitter. They now run in their own task on core 0, woken at SYNC0,
+so the sample instant stays on the DC clock and the value arrives one
+cycle later (fixed latency).
 
 It stops and drops EN at once when the PLC clears enable, when the slave
 leaves OP or SYNC0 stops for 5 ms (fault 1), or when one cycle asks for
-more than 50 steps (fault 2 -- also what happens if enable comes with a
+more than 150 steps (fault 2 -- also what happens if enable comes with a
 target that is not the actual position). Faults latch until reset with
 enable off.
 
@@ -143,8 +178,10 @@ microsteps, 0.05625 deg per step, so any angle lands within +/-0.028 deg.
 16 microsteps (3200) is too coarse for 0.1 deg. For an exact 0.1 deg grid
 use a steps/rev divisible by 3600.
 
-Verified without a motor (step count read back): 90 deg -> 1600 steps,
--45 deg -> -800, 0.1 deg -> 2 steps (0.1125 deg), no faults.
+Verified without a motor (PCNT hardware count read back): 90 deg -> 1600
+steps, -45 deg -> -800, 0.1 deg -> 2 steps (0.1125 deg), 1800 deg at
+3000 deg/s (53 steps/ms, above the old 50 kHz ceiling) -> 32000, back to
+0 -> 0. No faults.
 
 ## Process data
 
@@ -152,7 +189,7 @@ Verified without a motor (step count read back): 90 deg -> 1600 steps,
 |---|---|---|
 | Slave -> master (`BufferIn`) | 0 | Heartbeat counter, +1 per cycle |
 | | 1 | Echo of output byte 1 |
-| | 2-3 | Encoder raw angle 0-4095 (UINT, little-endian) |
+| | 2-3 | Encoder angle 0-4095 (UINT, little-endian), filtered |
 | | 4 | AS5600 STATUS: bit5 magnet detected, bit4 too weak, bit3 too strong; bit0 = sensor not answering |
 | | 5-8 | Multi-turn position in counts (DINT, little-endian), from power-up |
 | | 9 | I2C error counter |

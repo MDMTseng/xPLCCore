@@ -1,7 +1,7 @@
 PROGRAM PRG_EcatStepper
 VAR CONSTANT
     CYCLE_S             : LREAL := 0.001;   // EtherCAT_Task cycle, s (DT is a keyword)
-    MAX_STEPS_PER_CYCLE : LREAL := 45.0;    // firmware faults above 50
+    MAX_STEPS_PER_CYCLE : LREAL := 135.0;   // firmware faults above 150
 END_VAR
 VAR
     // --- interface ---
