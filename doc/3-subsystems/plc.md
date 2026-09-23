@@ -79,7 +79,8 @@ side-projection inspection**. Per part:
    `is_clear[]` / `is_OK[]` arrays for multi-slot look-ahead.
 7. NG → toss to one of three bins (object-NG / feeder-return /
    cover-NG). OK → place into first clear slot.
-8. **Reel advances** by the number of slots placed this cycle.
+8. **Reel advances** by the number of consecutive OK slots from slot 0,
+   as seen by the previous tape inspection (see below).
 
 ### Stations, lighting and slot rules (operator's description, 2026-09-24)
 
@@ -142,12 +143,13 @@ inspection only -- the part just placed has not been inspected yet.
 | only 0 OK | 1 |
 | only 1 OK (0 not) | 0 -- must be consecutive from 0 |
 
-> **Conflict with the list above, unresolved:** steps 7-8 say "place
-> into first clear slot" and "advance by the number of slots placed
-> this cycle"; the operator describes "lowest slot that is not OK,
-> place then remove NG" and "advance by consecutive OK from slot 0,
-> from the previous inspection". Check against `CalibPage.tsx` before
-> relying on either.
+Checked against `CalibPage.tsx` (2026-09-24): the advance count is
+the run of slots from 0 with `is_OK==1 && is_clear==0`, stopping at the
+first that is not (around line 1238). The place slot is the first
+**empty** slot (`is_clear==1`, line 1253), so an NG-occupied slot is
+skipped; the first occupied-but-not-OK slot is then picked out and
+tossed (`targetPickSlotIdx`, `tossLocation_1`). "Lowest slot that is
+not OK" in the operator's wording means the lowest empty one.
 
 Shot timing today is **fixed delays**, tuned until the arm is never in
 the picture. That comes from the first machine, where the tape unit was
