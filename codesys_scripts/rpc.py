@@ -251,9 +251,9 @@ def _wait_for_release(timeout, quiet=False):
         if phase == "stopped":
             if not quiet:
                 print("  %-18s done" % phase)
-            return True, phase
+            return True, phase, snap
         time.sleep(0.4)
-    return False, last_phase
+    return False, last_phase, read_status_file()
 
 
 def cmd_yield(args):
@@ -272,9 +272,29 @@ def cmd_yield(args):
         return E_PROTO
 
     print("releasing the IDE (%s)..." % (args.reason or cmd))
-    done, phase = _wait_for_release(args.wait)
+    done, phase, snap = _wait_for_release(args.wait)
     if done:
-        print("IDE released. CODESYS stays open with the project saved.")
+        # Never claim the project was saved without checking. A save can
+        # fail without raising -- a dismissed modal reports back as
+        # "Operation cancelled by user" -- and the daemon publishes the
+        # verdict through the heartbeat because the RPC reply is sent
+        # before teardown even starts.
+        saved = (snap or {}).get("save", "-")
+        if saved == "FAILED":
+            print("", file=sys.stderr)
+            print("IDE released, but THE SAVE FAILED.", file=sys.stderr)
+            print("Your changes are still only in the IDE. Save manually",
+                  file=sys.stderr)
+            print("(Ctrl+S) before closing CODESYS or killing it.",
+                  file=sys.stderr)
+            print("See: %s" % os.path.join(config.state_dir(),
+                                           "daemon.rpc.log"), file=sys.stderr)
+            return E_JOB
+        if saved == "ok":
+            print("IDE released. CODESYS stays open with the project saved.")
+        else:
+            print("IDE released. CODESYS stays open.")
+            print("(no save was needed)")
         return E_OK
     print("", file=sys.stderr)
     print("STILL WEDGED after %ds, stuck in phase: %s"

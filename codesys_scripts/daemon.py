@@ -97,8 +97,20 @@ state = {
     "started": time.time(),
     "last_save": 0.0,
     "dirty": False,
+    # Outcome of the save performed during release. The client cannot
+    # learn this from the RPC reply -- that is sent before teardown
+    # starts -- so it is published through the heartbeat instead.
+    "release_save": "-",
 }
 state_lock = threading.Lock()
+
+# setDaemon(True) only guarantees the thread dies when the PROCESS exits,
+# and CODESYS does not exit when a script ends. Without an explicit stop
+# every daemon run leaves its heartbeat thread behind, and the next run
+# adds another: several threads then overwrite daemon.status once a
+# second with their own stale snapshots, so readers see the rpc_count and
+# uptime flicker between runs. Stop the thread when the script ends.
+_hb_stop = threading.Event()
 
 # A single cached online session reused across read/write RPCs. Logging
 # in is slow, and paying it per symbol read would push people back to
@@ -130,15 +142,16 @@ def heartbeat_loop():
     dict -- so it is safe off the IDE main thread, and critically it keeps
     publishing while the main thread is blocked inside a CODESYS call.
     That is what makes a wedged teardown diagnosable."""
-    while True:
+    while not _hb_stop.is_set():
         try:
             snap = snapshot_state()
             elapsed = time.time() - snap["since"]
             line = ("%s phase=%s elapsed=%.1fs rpc_count=%d pid=%s "
-                    "uptime=%.0fs dirty=%s job=%s\n") % (
+                    "uptime=%.0fs dirty=%s save=%s job=%s\n") % (
                 time.strftime("%Y-%m-%d %H:%M:%S"),
                 snap["phase"], elapsed, snap["rpc_count"], os.getpid(),
                 time.time() - snap["started"], snap["dirty"],
+                snap["release_save"],
                 str(snap["job"]).replace("\n", " ")[:80])
             f = open(STATUS_PATH, "w")
             try:
@@ -147,7 +160,7 @@ def heartbeat_loop():
                 f.close()
         except Exception:
             pass
-        time.sleep(1.0)
+        _hb_stop.wait(1.0)
 
 
 def log_rpc(entry):
@@ -422,6 +435,17 @@ def release_ide(reason):
     set_state("release:save", reason)
     ok, detail = save_project()
     steps.append(("save", ok, detail))
+    # Publish the verdict so the client can tell the truth about whether
+    # the project actually made it to disk. A save can fail here for
+    # reasons that are not exceptions -- a modal the user dismissed comes
+    # back as "Operation cancelled by user" -- and reporting "released,
+    # project saved" in that case is precisely the lie this daemon exists
+    # to prevent.
+    state_lock.acquire()
+    try:
+        state["release_save"] = "ok" if ok else "FAILED"
+    finally:
+        state_lock.release()
 
     set_state("release:drop-refs", reason)
     try:
@@ -749,9 +773,11 @@ finally:
     log_rpc("daemon-stop pid=%s reason=%s restart=%s" % (
         os.getpid(), _exit.get("reason"), _exit.get("restart")))
 
-    # Let the heartbeat publish the final 'stopped' line before the
-    # script returns and CODESYS tears the scope down.
+    # Let the heartbeat publish the final 'stopped' line, then stop it.
+    # CODESYS keeps running after the script returns, so a thread left
+    # alive here would fight the next run's heartbeat over the file.
     time.sleep(1.2)
+    _hb_stop.set()
 
     print("[daemon] released. IDE is yours. reason=%s"
           % (_exit.get("reason") or "shutdown"))
