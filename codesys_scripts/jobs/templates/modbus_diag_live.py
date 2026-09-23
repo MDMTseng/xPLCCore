@@ -19,7 +19,7 @@
 #                                                polarity, termination or
 #                                                the feeder's own settings
 #
-# Read-only: login uses OnlineChangeOption.Never so a code difference is
+# Read-only: login uses OnlineChangeOption.Keep so a code difference is
 # refused rather than pushed into the machine, and nothing is written,
 # forced, started or stopped.
 
@@ -87,8 +87,8 @@ if not devices:
 apps = list(proj.find("Application", True) or [])
 oapp = online.create_online_application(apps[0])
 
-p("logging in (Never, read-only)...")
-oapp.login(OnlineChangeOption.Never, False)
+p("logging in (Keep, read-only)...")
+oapp.login(OnlineChangeOption.Keep, False)
 
 try:
     p("application_state: %s" % t(oapp.application_state))
@@ -118,7 +118,8 @@ try:
                         continue
                     name = t(getattr(prm, "name", "?"))
                     try:
-                        live = prm.read_online_value()
+                        # read_online_value(nTimeOut) -- milliseconds.
+                        live = prm.read_online_value(2000)
                     except Exception as ex:
                         live = "<%s>" % t(ex).replace(chr(10), " ")[:44]
                     if not printed:

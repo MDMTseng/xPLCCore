@@ -8,10 +8,13 @@
 # motion command -- the FSM comes up in UnInited exactly as it does after
 # a manual start.
 #
-# login(OnlineChangeOption.Never, False):
-#   Never (0) so a code difference is refused rather than silently
-#   pushed into the machine as an online change. delete_foreign_apps
-#   False so no other application is removed.
+# login(OnlineChangeOption.Keep, False):
+#   Keep (3) attaches to whatever is already on the controller and
+#   leaves it running. Never (0) does NOT mean "change nothing" -- it
+#   means "never online-change", so it performs a FULL DOWNLOAD and
+#   stops the application. Verified here: login(Never) stopped a running
+#   app every time. delete_foreign_apps False so no other application on
+#   the controller is removed.
 #
 # Precondition this script checks and refuses to proceed without: every
 # delta arm drive must be virtual in the device tree. EAXIS_A (drive 6)
@@ -96,8 +99,8 @@ apps = list(proj.find("Application", True) or [])
 oapp = online.create_online_application(apps[0])
 
 p("")
-p("logging in (Never, no online change)...")
-oapp.login(OnlineChangeOption.Never, False)
+p("logging in (Keep, leaves the app running)...")
+oapp.login(OnlineChangeOption.Keep, False)
 try:
     p("state before: %s" % t(oapp.application_state))
     if t(oapp.application_state) == "run":
