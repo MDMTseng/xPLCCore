@@ -155,6 +155,40 @@ def _stats(name, xs, target=None):
     return s
 
 
+def shot_distances(events):
+    """Arm XY distance (mm) from above the middle tape slot at each top-camera
+    trigger -- is the arm out of the camera's view when it shoots?"""
+    mid = (41.7 + 8.0, -79.752)          # CalibPage SLOT_LOCATION + 8 mm
+    poses, cur = [], {}
+    for e in events:
+        if e[2] in (POSE_X, POSE_Y):
+            cur[e[2]] = signed(e[3])
+            if e[2] == POSE_Y and POSE_X in cur:
+                poses.append((e[1], cur[POSE_X], cur[POSE_Y]))
+
+    def xy_at(t):
+        # Samples are logged every 50 ms only while the arm moves, so a
+        # longer gap means it stood still at the earlier sample until the
+        # last 50 ms before the later one.
+        for (t0, x0, y0), (t1, x1, y1) in zip(poses, poses[1:]):
+            if t0 <= t <= t1:
+                if t1 - t0 > 75:
+                    if t <= t1 - 50:
+                        return x0, y0
+                    t0 = t1 - 50
+                f = (t - t0) / max(1, t1 - t0)
+                return x0 + (x1 - x0) * f, y0 + (y1 - y0) * f
+        return None
+
+    dists = []
+    for e in events:
+        if e[2] == OUT_ON and e[3] == 14:
+            p = xy_at(e[1])
+            if p:
+                dists.append(((p[0] - mid[0]) ** 2 + (p[1] - mid[1]) ** 2) ** 0.5)
+    return dists
+
+
 def analyze(events, out=print):
     is_out_on = lambda bit: (lambda e: e[2] == OUT_ON and e[3] == bit)
     is_mark = lambda code: (lambda e: e[2] == HOST and e[3] == code)
@@ -179,37 +213,7 @@ def analyze(events, out=print):
     gaps = [events[b][1] - events[a][1] for a, b in zip(anchors, anchors[1:])]
     out(_stats("place to next place", gaps))
 
-    # Is the arm out of the top camera's view when it shoots? XY distance
-    # from above the middle slot (CalibPage SLOT_LOCATION + 8 mm) at each
-    # top-camera trigger, from the pose samples (kinds 11/12).
-    mid = (41.7 + 8.0, -79.752)
-    poses, cur = [], {}
-    for e in events:
-        if e[2] in (POSE_X, POSE_Y):
-            cur[e[2]] = signed(e[3])
-            if e[2] == POSE_Y and POSE_X in cur:
-                poses.append((e[1], cur[POSE_X], cur[POSE_Y]))
-
-    def xy_at(t):
-        # Between the samples around t. Samples are logged every 50 ms only
-        # while the arm moves, so a longer gap means it stood still at the
-        # earlier sample until the last 50 ms before the later one.
-        for (t0, x0, y0), (t1, x1, y1) in zip(poses, poses[1:]):
-            if t0 <= t <= t1:
-                if t1 - t0 > 75:
-                    if t <= t1 - 50:
-                        return x0, y0
-                    t0 = t1 - 50
-                f = (t - t0) / max(1, t1 - t0)
-                return x0 + (x1 - x0) * f, y0 + (y1 - y0) * f
-        return None
-
-    dists = []
-    for e in events:
-        if e[2] == OUT_ON and e[3] == 14:
-            p = xy_at(e[1])
-            if p:
-                dists.append(((p[0] - mid[0]) ** 2 + (p[1] - mid[1]) ** 2) ** 0.5)
+    dists = shot_distances(events)
     if dists:
         near = sum(1 for d in dists if d < 30)
         out("  arm XY distance from the tape at a top shot: min %.0f  median %.0f mm  (%d of %d shots under 30 mm)"

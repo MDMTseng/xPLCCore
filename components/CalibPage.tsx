@@ -750,8 +750,13 @@ export const CalibPage: React.FC<{
       //    moment the old output-6 pulses fired, so the tape never moves
       //    under a nozzle that is still placing), then waits for the reel
       //    to stop -- PLC-confirmed, not a fixed delay.
+      // Wait for the last queued move (the Z rise after placing) to start
+      // even when the tape does not advance: the place moves are queued, not
+      // done, when this runs, so the arm may still be on its way *to* the
+      // tape -- and the distance-gated shots below would fire at once, into
+      // the arriving arm (regression test, 2026-09-24).
+      await sendTcpMsgPack(cmd.WaitForTriggerMotionProgress(trig));
       if(nxt_adv_count>0){
-        await sendTcpMsgPack(cmd.WaitForTriggerMotionProgress(trig));
         await sendTcpMsgPack(cmd.ReelGo({Distance:nxt_adv_count*REEL_CELL_DISTANCE,...REEL_ADV_MOVE}));
         await sendTcpMsgPack(cmd.WaitForReelStop({timeout_ms:REEL_STOP_TIMEOUT_MS}));
       }
@@ -803,6 +808,9 @@ export const CalibPage: React.FC<{
 
     await runinng_checkpoint("go ready",{time:Date.now()});
     let nxt_adv_count=0;
+    // Parts put in the tape but not yet counted (the count drops when the
+    // tape advances past them). Drives the end-of-plan lookahead below.
+    let placedUncounted=0;
     let isZinSafeZone=false;
 
 
@@ -1056,6 +1064,7 @@ export const CalibPage: React.FC<{
 
         if(nxt_adv_count>2)nxt_adv_count=2;
         packCounter+=nxt_adv_count;
+        placedUncounted=Math.max(0,placedUncounted-nxt_adv_count);
         console.log("nxt_adv_count",nxt_adv_count,"packCounter",packCounter);
         // Tape step: may start as soon as the last queued move (the Z rise
         // after placing, or the end of a toss) starts.
@@ -1071,6 +1080,47 @@ export const CalibPage: React.FC<{
       }
       await runinng_checkpoint("_PACK_INFO_",{packCounter:packCounter});
       slotCheckPromise_BK=slotCheckPromise;
+      // Plan done? The pack count drops when the tape advances, which is the
+      // tape step just started -- so check again here, before picking. It
+      // used to pick one more part, inspect it and toss it back ("place
+      // count hit"), then pick and toss another ("plan is empty"): two
+      // wasted cycles at the end of every batch. Let the last advance and
+      // top check finish, then stop.
+      if((_this.production_plan ?? []).length==0){
+        if(slotCheckPromise) await slotCheckPromise;
+        break;
+      }
+      // Near the end the tape may already hold the last parts, placed but
+      // not yet counted (a part goes into slot 2 before slot 1 advances).
+      // When enough parts have been placed to finish the plan, look at this
+      // cycle's top check before picking another one; if the OK parts in a
+      // row from slot 1 finish it, advance them and stop. Only that last
+      // cycle waits for the result; the rest keep it overlapped with the
+      // pick (waiting on every one of the last 3 cost ~100 ms per part).
+      {
+        const planNow=_this.production_plan ?? [];
+        if(planNow.length==1 && planNow[0]>0 && placedUncounted>=planNow[0] && slotCheckPromise){
+          // The top shots fire only once the arm has left the tape, and no
+          // move is queued while we wait here: clear the view first (it
+          // deadlocked into a 10 s vision timeout otherwise). The feeder
+          // standby point is on the way to the next pick anyway.
+          await sendTcpMsgPack(cmd.G1({ "Z": safe_z}));
+          await sendTcpMsgPack(cmd.G1({X:wait_flexfeeder_location.X,Y:wait_flexfeeder_location.Y }));
+          const st=await slotCheckPromise;
+          let okRun=0;
+          while(okRun<st.is_OK.length && st.is_OK[okRun]==1 && st.is_clear[okRun]==0) okRun++;
+          if(okRun>=planNow[0]){
+            const adv=planNow[0];
+            packCounter+=adv;
+            await runinng_checkpoint("[STEP][REEL ADV]",{adv_count:adv,type:"pack",packCounter:packCounter});
+            await runinng_checkpoint("_PACK_INFO_",{packCounter:packCounter});
+            placedUncounted=Math.max(0,placedUncounted-adv);
+            await checkSlot_and_reelAdv(adv,undefined,{motion_id_offset:0,motion_progress:0});
+            slotCheckPromise_BK=undefined;
+            break;
+          }
+        }
+      }
 
       if(feederCheckPromise!=undefined){
         await sendTcpMsgPack(cmd.G1({ "Z": safe_z}))
@@ -1504,6 +1554,7 @@ export const CalibPage: React.FC<{
           
           
           evtMark(EVT.PLACE);
+          placedUncounted++;
           await runinng_checkpoint("place object",i);
 
           let x_place_offset=targetPlaceSlotIdx*slotDist;
