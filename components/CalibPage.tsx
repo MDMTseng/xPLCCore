@@ -668,6 +668,7 @@ export const CalibPage: React.FC<{
     }
     _this.isRunning=true;
     if(calibParams == null){
+      _this.isRunning=false;
       return;
     }
     // COMCtrlObj.regTcpMsgCB(134500,undefined);
@@ -881,9 +882,24 @@ export const CalibPage: React.FC<{
       let prevFc:number[]=new Array(16).fill(0);
       let ReelLackingCounter=0;
       let isFirstCycle=true;
+      let readFailures=0;
       while(_this.run_cycle_stop!=true){
 
-        let {raw,fc}=await getDigitalInputFlipCount();
+        // A failed read used to throw out of this loop: the watchdog died
+        // silently and the cycle ran on unguarded (review 2026-09-24).
+        let raw:number, fc:number[];
+        try{
+          ({raw,fc}=await getDigitalInputFlipCount());
+          readFailures=0;
+        }catch(e:any){
+          readFailures++;
+          console.error("input watchdog: read failed",readFailures,e?.message??e);
+          if(readFailures>=3){
+            _this.current_error={errorString:"輸入讀取失敗 (input read failed): "+(e?.message??e)};
+          }
+          await delay(400);
+          continue;
+        }
 
         // flip delta: how many transitions happened on each bit since last poll
         // catches glitches that reset before the next poll (PLC counts every scan ~1ms)

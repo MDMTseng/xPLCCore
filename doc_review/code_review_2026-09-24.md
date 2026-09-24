@@ -83,6 +83,12 @@ keyed on received packets. `tools/sim/queue_test.py` covers it.
 ### Renderer
 
 **R-P0-1. The input watchdog stops the cycle within ~400 ms**
+*Fixed 2026-09-24:* the inputs are read now (P0-2: coupler bytes, or
+`GVL.SimDigitalInput` in the virtual scene), so the watchdog sees real
+states; verified end to end (press roller forced "not in place" stops
+the cycle with 冷封氣缸沒壓到). A failed input read no longer kills the
+watchdog silently: 3 in a row stop the cycle. **Still to verify on the
+machine:** that the coupler's bit order matches `IO_Pins.I`.
 - `inputWatchdog` (`CalibPage.tsx:888-948`) reads the always-zero
   inputs (P0-2) as faults: `PackedReelNoProtrusion == false` (905,
   929), `ReelPressRollerInPlace == 0` (906, 931). Its first pass skips

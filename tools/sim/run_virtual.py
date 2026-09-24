@@ -18,6 +18,17 @@ Order matters and is encoded here:
 
 Everything started here is stopped on exit (Ctrl+C included). Logs go to
 standalone/data/sim_logs/.
+
+Stall detection: each phase has a limit derived from measured timings
+(2026-09-24, all-virtual scene). Past it, the run stops at once with
+diagnostics and exit code 2 -- no waiting out a blanket timeout.
+
+  phase                               typical      limit
+  UI answering the harness            3 s          45 s
+  each link (PLC, vision, feeder)     1-5 s        20 s
+  FSM to Ready                        1-6 s        40 s
+  RUN -> first top-camera check       ~3 s         25 s
+  between two top-camera checks       ~1 s (<=3)   12 s  (vision reply timeout is 10 s)
 """
 
 import argparse
@@ -34,6 +45,17 @@ sys.path.insert(0, SCRIPTS)
 import rpc  # noqa: E402  (daemon client)
 
 HARNESS = "http://127.0.0.1:8127"
+
+# Stall limits in seconds, see the table in the module docstring.
+LIMIT_UI_UP = 45
+LIMIT_LINK = 20
+LIMIT_READY = 40
+LIMIT_FIRST_CHECK = 25
+LIMIT_BETWEEN_CHECKS = 12
+
+
+class Stall(RuntimeError):
+    pass
 LOGS = os.path.join(REPO, "standalone", "data", "sim_logs")
 NODE_DIR = r"C:\Program Files\nodejs"
 
@@ -81,7 +103,7 @@ def wait_for(what, fn, timeout=30.0, period=0.5):
         except Exception as e:
             last = e
         time.sleep(period)
-    raise RuntimeError("timed out waiting for %s (last: %r)" % (what, last))
+    raise Stall("no %s within %.0f s (last: %r)" % (what, timeout, last))
 
 
 # E_RobotEvent values the host may post (protocol.md, SYS GA_EV).
@@ -103,7 +125,7 @@ def bring_to_ready(home):
     the delta trio is simulated (AxisSimMask & 7 = 7). --home go does real
     homing instead.
     """
-    end = time.time() + 120
+    end = time.time() + LIMIT_READY
     last = None
     while time.time() < end:
         st, reply = ga_ev(EV_NONE)
@@ -118,7 +140,7 @@ def bring_to_ready(home):
             ga_ev(ev)
         time.sleep(0.5)
     else:
-        raise RuntimeError("FSM did not reach Ready (last %s)" % last)
+        raise Stall("FSM did not reach Ready within %d s (last %s)" % (LIMIT_READY, last))
     # What init_plc_motion does once Ready: coordinate system, then a move to
     # the start pose (A swings to 90 and back -- EAXIS_A is real and cleared).
     for pkt in ({"type": "M", "cmd": "SetCoord1"},
@@ -152,6 +174,34 @@ def start(name, argv, env=None):
     return p
 
 
+def top_checks():
+    """Top-camera results the mock has sent (one per tape check)."""
+    try:
+        with open(os.path.join(LOGS, "vision_mock.log"), encoding="utf-8", errors="replace") as f:
+            # "HH:MM:SS push 134500 ..." -- not "MUTED push" (fault injection)
+            return sum(1 for l in f if l[8:21] == " push 134500")
+    except OSError:
+        return 0
+
+
+def diagnose(why):
+    log("STALL:", why)
+    print("  UI, last checkpoints:")
+    for l in [l for l in tail("ui", 400) if "checkpoint" in l or "error" in l.lower()][-8:]:
+        print("   ", l[:200])
+    print("  vision mock, last lines:")
+    for l in tail("vision_mock", 6):
+        print("   ", l[:200])
+    try:
+        with urllib.request.urlopen("http://%s:8126/v" % PLC_HOST[0], timeout=2) as r:
+            print("  PLC /v:", r.read().decode()[:160])
+    except Exception as e:
+        print("  PLC /v: NOT ANSWERING (%s)" % e)
+
+
+PLC_HOST = ["192.168.1.70"]
+
+
 def tail(name, n=5):
     try:
         with open(os.path.join(LOGS, name + ".log"), encoding="utf-8", errors="replace") as f:
@@ -170,7 +220,9 @@ def main():
     ap.add_argument("--no-ui-start", action="store_true", help="UI already running with XPLC_HARNESS=1")
     a = ap.parse_args()
 
+    PLC_HOST[0] = a.plc
     procs = []
+    stalled = False
     try:
         plc_prepare()
         procs.append(start("remote_harness", [sys.executable, os.path.join(SCRIPTS, "internals", "remote_harness.py")]))
@@ -183,23 +235,23 @@ def main():
             env["XPLC_CONSOLE"] = "1"
             procs.append(start("ui", [os.path.join(NODE_DIR, "node.exe"), os.path.join(REPO, "standalone", "run.cjs")], env))
 
-        wait_for("UI to poll the harness", lambda: push("ping", timeout=5), timeout=90)
+        wait_for("UI answering the harness", lambda: push("ping", timeout=5), timeout=LIMIT_UI_UP)
         log("UI up:", push("get_state"))
 
         def link_plc():
             push("connect_tcp", {"host": a.plc, "port": 8125})
-            wait_for("PLC link", lambda: push("get_state")["tcpConnected"], timeout=20)
+            wait_for("PLC link", lambda: push("get_state")["tcpConnected"], timeout=LIMIT_LINK)
 
         def link_vision():
             push("connect_vision", {"host": "localhost", "port": 7950})
-            wait_for("vision link", lambda: push("get_state")["visionStatus"] == 2, timeout=20)
+            wait_for("vision link", lambda: push("get_state")["visionStatus"] == 2, timeout=LIMIT_LINK)
 
         # Either order must work (review 2026-09-24 R-P0-2); --vision-first
         # exercises the one that used to drop every vision reply.
         for step in ((link_vision, link_plc) if a.vision_first else (link_plc, link_vision)):
             step()
         push("connect_feeder", {"port": "MOCK"})
-        wait_for("feeder bridge", lambda: push("get_state")["feederStatus"] == 2, timeout=20)
+        wait_for("feeder bridge", lambda: push("get_state")["feederStatus"] == 2, timeout=LIMIT_LINK)
         log("links up:", push("get_state"))
 
         bring_to_ready(a.home)
@@ -207,15 +259,16 @@ def main():
         log("plan:", push("set_plan", {"plan": [a.cycles + 5]}, timeout=10))
         log("run_cycle:", push("run_cycle", timeout=10))
 
-        checks = 0
-        seen = 0
-        while checks < a.cycles:
-            time.sleep(2.0)
+        base = top_checks()                 # the mock log is per run, but be safe
+        t_run = time.time()
+        last_count, t_last = 0, None
+        while True:
+            time.sleep(1.0)
             rs = push("get_running_state", timeout=10)
-            lines = tail("vision_mock", 200)
-            checks = sum(1 for l in lines if "push 134500" in l)
-            if len(lines) != seen:
-                seen = len(lines)
+            checks = top_checks() - base
+            now = time.time()
+            if checks != last_count:
+                last_count, t_last = checks, now
             log("running=%s state=%r err=%r tape_checks=%d pack=%r" % (
                 rs.get("isRunning"), rs.get("runningState"), rs.get("currentError"),
                 checks, rs.get("packInfoString")))
@@ -224,8 +277,21 @@ def main():
                 for l in tail("vision_mock", 8):
                     print("   ", l)
                 break
+            if checks >= a.cycles:
+                break
+            if t_last is None and now - t_run > LIMIT_FIRST_CHECK:
+                raise Stall("no tape check within %d s of RUN" % LIMIT_FIRST_CHECK)
+            if t_last is not None and now - t_last > LIMIT_BETWEEN_CHECKS:
+                raise Stall("no new tape check for %d s (after %d)" % (LIMIT_BETWEEN_CHECKS, checks))
         push("stop_cycle", timeout=15)
         log("stop_cycle sent")
+    except Stall as e:
+        stalled = True
+        diagnose(str(e))
+        try:
+            push("stop_cycle", timeout=5)
+        except Exception:
+            pass
     finally:
         for p in reversed(procs):
             try:
@@ -233,7 +299,8 @@ def main():
             except Exception:
                 pass
         log("stopped helpers; logs in", LOGS)
+    return 2 if stalled else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
