@@ -1,12 +1,14 @@
 
 let spawn: any = null;
 let path: any = null;
+let fs: any = null;
 
 if (typeof window !== 'undefined' && (window as any).require) {
   try {
     const childProcess = (window as any).require('child_process');
     spawn = childProcess.spawn;
     path = (window as any).require('path');
+    fs = (window as any).require('fs');
   } catch (error) {
     console.error("Failed to load Node.js modules. Make sure you're in an Electron environment.", error);
   }
@@ -34,6 +36,13 @@ export class ModbusRTU {
     this.venv_path = venv_path;
   }
 
+  // The bridge's venv if there is one, else whatever `python` is on PATH.
+  // The standalone harness has no venv; the MOCK port needs no packages.
+  private pythonExecutable(): string {
+    const venvPython = path.join(this.venv_path, 'Scripts', 'python.exe');
+    return fs && fs.existsSync(venvPython) ? venvPython : 'python';
+  }
+
   get isOpen(): boolean {
     return this._isOpen;
   }
@@ -44,7 +53,7 @@ export class ModbusRTU {
         return reject(new Error("Required Node.js modules are not available."));
       }
 
-      const pythonExecutable = path.join(this.venv_path, 'Scripts', 'python.exe');
+      const pythonExecutable = this.pythonExecutable();
       const process = spawn(pythonExecutable, [this.script_path, 'list_ports']);
       
       let portData = '';
@@ -79,7 +88,7 @@ export class ModbusRTU {
         return;
     }
 
-    const pythonExecutable = path.join(this.venv_path, 'Scripts', 'python.exe');
+    const pythonExecutable = this.pythonExecutable();
     this.childProcess = spawn(pythonExecutable, [this.script_path, port, baudRate.toString()]);
 
     this.childProcess.stdout.on('data', (chunk: Buffer) => this.handleData(chunk));
