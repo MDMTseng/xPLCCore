@@ -5,7 +5,9 @@
 Runs tools/sim/run_virtual.py once per scenario (same seed, so runs are
 comparable), saves each under sim_logs/runs/reg_<name>, and checks the
 run from its PLC event log and renderer log. Prints a table and exits
-non-zero if any check fails. ~1 min per scenario.
+non-zero if any check fails. ~1 min per scenario. The plan scenarios run a
+production plan, optionally with STOP/RUN at random moments, and check the
+tape cell by cell against it (plan_check.py).
 
 Needs what run_virtual.py needs: PLC app running with the delta arms
 virtual, CODESYS daemon up, the UI not connected elsewhere.
@@ -21,6 +23,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import event_log as E  # noqa: E402
 import gantt  # noqa: E402
+import plan_check  # noqa: E402
 
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 RUNS = os.path.join(REPO, "standalone", "data", "sim_logs", "runs")
@@ -37,6 +40,16 @@ SCENARIOS = [
 ]
 SEED = 7
 
+# Production plan under STOP/RUN at random moments: the tape must come out
+# cell for cell as planned (plan_check.py). name, label, stops, chaos seed.
+PLAN = "4,-5,3,-3,2"
+PLAN_NG = 0.1
+PLAN_SCENARIOS = [
+    ("plan", "計畫 %s，不停" % PLAN, 0, 0),
+    ("chaos5", "計畫 + 隨機停 5 次", 5, 11),
+    ("chaos8", "計畫 + 隨機停 8 次", 8, 21),
+]
+
 # Limits for the virtual scene (mock vision answers in ~40-250 ms).
 CYCLE_MEDIAN_MAX_MS = 1400        # place to place, median
 TOP_RESULT_SLOW_MS = 700          # plc.md target for the tape path
@@ -51,6 +64,27 @@ def run_scenario(name, rates, drops, a):
     env = dict(os.environ, VISION_MOCK_DROP=drops)
     p = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
     return p.returncode, p.stdout + p.stderr
+
+
+def run_plan_scenario(name, stops, seed, a):
+    cmd = [sys.executable, os.path.join(HERE, "run_virtual.py"), "--plc", a.plc, "--plan", PLAN,
+           "--ng-side", str(PLAN_NG), "--ng-btm", str(PLAN_NG), "--ng-tape", str(PLAN_NG),
+           "--seed", str(SEED), "--save-as", "reg_" + name]
+    if stops:
+        cmd += ["--chaos", str(stops), "--chaos-seed", str(seed)]
+    p = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    return p.returncode, p.stdout + p.stderr
+
+
+def check_plan(name, rc, output):
+    results = [("run finished", rc == 0 and "STALL" not in output and "gave up" not in output,
+                "exit %d" % rc)]
+    try:
+        ok, exp, act = plan_check.check(os.path.join(RUNS, "reg_" + name), [int(x) for x in PLAN.split(",")])
+        results.append(("tape matches the plan", ok, "expected %s, got %s" % (exp, act)))
+    except (OSError, ValueError, IndexError) as e:
+        results.append(("logs readable", False, str(e)))
+    return results
 
 
 def check_stop_on_timeout(folder, output, add, results):
@@ -124,7 +158,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--plc", default="192.168.1.70")
     ap.add_argument("--parts", type=int, default=10)
-    ap.add_argument("--only", default=None, help="comma-separated scenario names (high,5,0p5,0)")
+    ap.add_argument("--only", default=None, help="comma-separated scenario names (high,5,0p5,0,drop,plan,chaos5,chaos8)")
     a = ap.parse_args()
 
     chosen = [s for s in SCENARIOS if not a.only or s[0] in a.only.split(",")]
@@ -133,6 +167,14 @@ def main():
         print("== %s (%s)" % (label, name), flush=True)
         rc, out = run_scenario(name, rates, drops, a)
         for what, ok, detail in check(name, a, rc, out, drops):
+            failed += 0 if ok else 1
+            print("  %s %-40s %s" % ("PASS" if ok else "FAIL", what, detail), flush=True)
+    for name, label, stops, seed in PLAN_SCENARIOS:
+        if a.only and name not in a.only.split(","):
+            continue
+        print("== %s (%s)" % (label, name), flush=True)
+        rc, out = run_plan_scenario(name, stops, seed, a)
+        for what, ok, detail in check_plan(name, rc, out):
             failed += 0 if ok else 1
             print("  %s %-40s %s" % ("PASS" if ok else "FAIL", what, detail), flush=True)
     print("RESULT:", "PASS" if not failed else "FAIL (%d checks)" % failed)

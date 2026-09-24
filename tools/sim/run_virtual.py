@@ -219,6 +219,41 @@ def tail(name, n=5):
         return []
 
 
+def chaos(a):
+    """STOP at random moments (a.chaos times), RUN again after each, then let
+    the plan finish. Each STOP waits for the loop to really end. Seeded, so
+    a failing sequence can be replayed with the same --chaos-seed."""
+    import random
+    rng = random.Random(a.chaos_seed)
+    stops = 0
+    t_run = time.time()
+    wait = rng.uniform(2.0, 6.0)
+    end = time.time() + 600
+    while time.time() < end:
+        time.sleep(0.25)
+        rs = push("get_running_state", timeout=10)
+        if rs.get("currentError") or "errorString" in str(rs.get("runningState")):
+            log("chaos: error", rs.get("currentError") or rs.get("runningState"))
+            return
+        if not rs.get("isRunning"):
+            left = push("get_plan", timeout=10).get("plan")
+            if not left:
+                log("chaos: plan done after %d stops" % stops)
+                return
+        if stops < a.chaos and rs.get("isRunning") and time.time() - t_run > wait:
+            r = push("stop_cycle", timeout=16)
+            left = push("get_plan", timeout=10).get("plan")
+            stops += 1
+            log("chaos: STOP #%d -> %s, plan left %s" % (stops, r, left))
+            time.sleep(rng.uniform(0.3, 2.0))
+            if left:
+                push("run_cycle", timeout=10)
+                log("chaos: RUN again")
+            t_run = time.time()
+            wait = rng.uniform(2.0, 6.0)
+    log("chaos: gave up after 10 min")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--plc", default="192.168.1.70")
@@ -231,6 +266,11 @@ def main():
     ap.add_argument("--ng-btm", type=float, default=None, help="vision mock NG rate, bottom camera")
     ap.add_argument("--ng-tape", type=float, default=None, help="vision mock NG rate, parts in the tape")
     ap.add_argument("--seed", type=int, default=None, help="vision mock random seed")
+    ap.add_argument("--plan", default=None,
+                    help='production plan, e.g. "3,-2,4" (pack 3, leave 2 empty, pack 4); overrides --parts')
+    ap.add_argument("--chaos", type=int, default=0,
+                    help="press STOP at a random moment this many times, RUN again each time, then let the plan finish")
+    ap.add_argument("--chaos-seed", type=int, default=1)
     ap.add_argument("--stop-after", type=int, default=None,
                     help="press STOP after this many tape checks and report how the loop stops")
     ap.add_argument("--save-as", default=None,
@@ -284,18 +324,23 @@ def main():
 
         bring_to_ready(a.home)
         push("set_tab", {"tab": "Calib"}, timeout=10)
-        plan = [a.parts] if a.parts else [a.cycles + 5]
-        if a.parts:
+        if a.plan:
+            plan = [int(x) for x in a.plan.split(",")]
+        else:
+            plan = [a.parts] if a.parts else [a.cycles + 5]
+        if a.parts or a.plan:
             a.cycles = 10 ** 6            # run until the plan completes
         log("plan:", push("set_plan", {"plan": plan}, timeout=10))
         open(events_csv + ".start", "w").close()      # vision_mock starts collecting
         collector = events_csv
         log("run_cycle:", push("run_cycle", timeout=10))
+        if a.chaos:
+            chaos(a)                        # runs the plan to its end itself
 
         base = top_checks()                 # the mock log is per run, but be safe
         t_run = time.time()
         last_count, t_last = 0, None
-        while True:
+        while not a.chaos:
             time.sleep(1.0)
             rs = push("get_running_state", timeout=10)
             checks = top_checks() - base

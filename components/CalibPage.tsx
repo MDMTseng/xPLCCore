@@ -2113,6 +2113,12 @@ export const CalibPage: React.FC<{
     return { plan: _this.production_plan };
   }, []);
 
+  useHarnessAction('get_plan', async () => ({
+    plan: _this.production_plan ?? [],
+    original: _this.production_plan_original ?? [],
+    stage: _this.production_plan_stageIndex ?? 0,
+  }), []);
+
   type PlanSegmentType = 'pack' | 'empty';
   type PlanSegment = { type: PlanSegmentType; count: number; key: string };
 
@@ -2726,9 +2732,15 @@ export const CalibPage: React.FC<{
 
 
             
-            if(_this.run_cycle_stop==true&&
-              (checkpoint_name=="cycle_start"||checkpoint_name=="ERROR"||true)
-            )
+            // STOP takes effect only at the start of a cycle, when the part in
+            // hand has been placed or tossed and the plan / pack bookkeeping
+            // is complete. It used to reject at *any* checkpoint ("||true"),
+            // including "[STEP][REEL ADV]": the reel had already moved but
+            // the plan was not decremented, so after RUN the empty (or pack)
+            // segment was done again -- 2 extra empty cells in a chaos test,
+            // the owner's "+2 after stop" (2026-09-24). It could also stop
+            // with a part on the nozzle.
+            if(_this.run_cycle_stop==true && checkpoint_name=="cycle_start")
             {
               reject();
               return;
