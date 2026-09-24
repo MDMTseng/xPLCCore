@@ -25,6 +25,7 @@ Commands
     supervisor.py ps               show CODESYS processes
 """
 
+import re
 import sys
 import os
 import time
@@ -142,13 +143,20 @@ def cmd_start(args):
     # IDE back with `rpc.py yield` and keep working in the same window.
     cmd = codesys_cmdline(DAEMON, noui=False)
     print("launching: %s" % cmd)
+    launched = time.time()
     subprocess.Popen(cmd, close_fds=True)
 
-    deadline = time.time() + args.wait
+    deadline = launched + args.wait
     print("waiting for the daemon to report idle...")
     while time.time() < deadline:
         snap = read_status()
-        if snap and snap.get("phase") == "idle" and snap["_age"] < 10:
+        # Only a daemon started by *this* launch counts. Right after a kill
+        # the heartbeat file still holds the dead daemon's last line --
+        # fresh enough and "idle" -- and was taken as "up" (2026-09-24).
+        # A new daemon's uptime cannot exceed the time since launch.
+        m = re.search(r"uptime=(\d+)s", snap["_raw"]) if snap else None
+        fresh = m is not None and int(m.group(1)) <= time.time() - launched + 2
+        if snap and fresh and snap.get("phase") == "idle" and snap["_age"] < 10:
             print("daemon up: %s" % snap["_raw"])
             return 0
         time.sleep(1.0)

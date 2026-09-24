@@ -47,7 +47,7 @@
 #   {"cmd":"exec","code":"...","label":"tag","readonly":false}\n
 #   -> {"ok":true,"stdout":"...","elapsed":1.23,"saved":true,...}\n
 
-import os, sys, time, json, socket, threading, traceback, shutil
+import os, sys, time, json, socket, select, threading, traceback, shutil
 
 try:
     from cStringIO import StringIO  # IronPython 2.7 fast path
@@ -666,6 +666,24 @@ if ensure_project():
 else:
     print("[daemon] WARN: no project open and reopen failed")
 
+# Headless prompts. With the default (PromptHandling.None) every CODESYS
+# message box -- "Error while downloading ... continue with the remaining
+# items?" -- waits on screen for a person, and the daemon's job blocks with
+# it. CODESYS runs elevated, so nothing outside can click it either; on
+# 2026-09-24 that meant killing CODESYS mid-download, which left the PLC's
+# application stuck in "exit" until the controller was power-cycled.
+# ProcessScriptPrompts answers from system.prompt_answers (else the
+# prompt's default); the Log* flags record prompts and their message keys
+# in the message view, so an answer can be pinned later if a default is
+# wrong.
+try:
+    system.prompt_handling = (PromptHandling.ProcessScriptPrompts
+                              | PromptHandling.LogSimplePrompts
+                              | PromptHandling.LogMessageKeys)
+    print("[daemon] prompt handling: %s" % system.prompt_handling)
+except Exception as ex:
+    print("[daemon] WARN: could not set prompt handling: %s" % ex)
+
 srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 try:
@@ -675,7 +693,11 @@ except Exception as ex:
     print("[daemon] another daemon already running? Try `rpc.py yield`.")
     raise
 srv.listen(4)
-srv.settimeout(0.5)  # short accept timeout keeps Ctrl+C responsive
+# Blocking listen socket, woken by select() with a 0.5 s timeout (keeps
+# Ctrl+C and exit requests responsive). A socket *timeout* on the listening
+# socket is what made IronPython's accept() fail with WSAEINVAL after dense
+# back-to-back connections.
+srv.settimeout(None)
 set_state("idle", "")
 log_rpc("daemon-start pid=%s project=%s" % (os.getpid(), PROJECT_PATH))
 print("[daemon] listening. Ctrl+C here, or `rpc.py yield`, to hand back the IDE.")
@@ -701,15 +723,43 @@ def rebind_listen_socket():
     new_srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     new_srv.bind((HOST, PORT))
     new_srv.listen(4)
-    new_srv.settimeout(0.5)
+    new_srv.settimeout(None)
     srv = new_srv
     return new_srv
+
+
+def listen_socket_works():
+    """Connect to ourselves and check the connection reaches *this*
+    listening socket. After a WSAEINVAL rebind on 2026-09-24 the port kept
+    accepting connections that nothing ever served -- the daemon looked
+    alive and answered no one for 11 minutes."""
+    probe = None
+    try:
+        probe = socket.create_connection((HOST, PORT), 2)
+        r, _, _ = select.select([srv], [], [], 2.0)
+        if not r:
+            return False
+        c, _ = srv.accept()
+        c.close()
+        return True
+    except Exception:
+        return False
+    finally:
+        if probe is not None:
+            try:
+                probe.close()
+            except Exception:
+                pass
 
 
 try:
     while not _exit["requested"]:
         try:
+            readable, _, _ = select.select([srv], [], [], 0.5)
+            if not readable:
+                continue
             client, _addr = srv.accept()
+            client.settimeout(None)
             accept_err_streak = 0
         except socket.timeout:
             continue
@@ -728,7 +778,13 @@ try:
             if is_wsaeinval:
                 try:
                     srv = rebind_listen_socket()
-                    log_rpc("accept-rebound after WSAEINVAL streak=%d"
+                    if not listen_socket_works():
+                        log_rpc("loop-exit reason=rebind-not-serving")
+                        print("[daemon] listening socket rebound but not "
+                              "serving -- exiting instead of hanging")
+                        request_exit("rebind-not-serving", True)
+                        break
+                    log_rpc("accept-rebound after WSAEINVAL streak=%d (verified)"
                             % accept_err_streak)
                     accept_err_streak = 0
                     continue
