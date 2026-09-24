@@ -231,6 +231,8 @@ def main():
     ap.add_argument("--ng-btm", type=float, default=None, help="vision mock NG rate, bottom camera")
     ap.add_argument("--ng-tape", type=float, default=None, help="vision mock NG rate, parts in the tape")
     ap.add_argument("--seed", type=int, default=None, help="vision mock random seed")
+    ap.add_argument("--stop-after", type=int, default=None,
+                    help="press STOP after this many tape checks and report how the loop stops")
     ap.add_argument("--save-as", default=None,
                     help="copy this run's logs to sim_logs/runs/<name>/ (for gantt.py --run)")
     ap.add_argument("--vision-first", action="store_true", help="connect vision before the PLC")
@@ -309,6 +311,12 @@ def main():
                     print("   ", l)
                 break
             if checks >= a.cycles:
+                break
+            if a.stop_after and checks >= a.stop_after:
+                log("STOP pressed after %d tape checks" % checks)
+                r = push("stop_cycle", timeout=16)
+                rs = push("get_running_state", timeout=10)
+                log("stop_cycle ->", r, "| running=%s state=%r" % (rs.get("isRunning"), rs.get("runningState")))
                 break
             if t_last is None and now - t_run > LIMIT_FIRST_CHECK:
                 raise Stall("no tape check within %d s of RUN" % LIMIT_FIRST_CHECK)

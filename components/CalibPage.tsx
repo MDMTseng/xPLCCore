@@ -1735,6 +1735,18 @@ export const CalibPage: React.FC<{
     }
     //setLatestObjArr(newLatestObjArr);
 
+    // Leave the cell quiet, whatever ended the loop (plan done, STOP, an
+    // error): feeder vibration and feeder light off; if the PLC still takes
+    // motion, let the queued moves finish and lift to safe Z. The nozzle is
+    // left as it is -- releasing a held part would drop it. Best effort:
+    // nothing here may throw.
+    try { FlexVibCtrl.voff(0x1D); FlexVibCtrl.voff(10); FlexVibCtrl.top_light_off(); } catch {}
+    try {
+      await sendTcpMsgPack(cmd.WaitForMotionStop({timeout_ms:5000}));
+      await sendTcpMsgPack(cmd.G1({"Z": safe_z}));
+    } catch {}
+    if(_this.run_cycle_stop==true && _this.current_error==undefined) setRunningState("stopped");
+
     _this.isRunning=false;
     // _this.run_cycle_stop=true;
   });
@@ -2069,12 +2081,20 @@ export const CalibPage: React.FC<{
     return { started: true };
   }, []);
 
-  useHarnessAction('stop_cycle', async () => {
+  // Stop after the part in hand (the loop checks the flag at the start of
+  // each cycle), then wait for the loop to really end. isRunning is only
+  // cleared by the loop itself: it used to be forced false after 3 s, so a
+  // RUN during a long vision wait started a second loop next to the first.
+  useHarnessAction('stop_cycle', async (payload: any) => {
+    const t0 = Date.now();
     _this.run_cycle_stop = true;
     _this.stepMode_resolve?.();
     _this.stepMode_resolve = undefined;
-    setTimeout(() => { _this.isRunning = false; }, 3000);
-    return { stop_requested: true };
+    const limit = typeof payload?.wait_ms === 'number' ? payload.wait_ms : 14000;
+    while (_this.isRunning === true && Date.now() - t0 < limit) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return { stopped: _this.isRunning !== true, ms: Date.now() - t0 };
   }, []);
 
   // payload.plan: same encoding as the plan editor -- positive = pack that
@@ -2882,13 +2902,15 @@ export const CalibPage: React.FC<{
 
 
       <button style={{backgroundColor:"#b91c1c",color:"white", border: 'none', borderRadius: 8, padding: '10px 14px', fontWeight: 700}} onClick={async() =>{
+        // While running: ask the loop to stop after the part in hand; it
+        // clears isRunning itself once it has (see runAllObjects' end).
+        // While idle: the branch below unloads the nozzle to the feeder.
+        const wasRunning=_this.isRunning==true;
         _this.run_cycle_stop=true;
-        
+        if(wasRunning) setRunningState("stopping");
+
         _this.stepMode_resolve?.();
         _this.stepMode_resolve=undefined;
-        setTimeout(()=>{
-          _this.isRunning=false;
-        },3000);
 
         if(_this.isRunning==false){
           await sendTcpMsgPack(cmd.G1({"Z": safe_z,"A":0 }))
