@@ -28,6 +28,19 @@ Three layers, each enough on its own:
 ### PLC
 
 **1. Homing cannot finish on real axes** *(verify live)*
+*Tested 2026-09-24 on the virtual arms* with a simulated home switch
+(`GVL.SimHomeSwitchEnable`, `tools/sim/homing_test.py`): HOME_GO
+completes in ~4 s (search, back off, return to joint 0), Ready's group
+reset works, a G1 is accepted, and the supervisor did **not** trip on
+GroupErrorStop. Fixed: `FB_Homing` now aborts when `bExecute` drops
+and restarts its timer on every start (a retry used to fail at once).
+Found: EV_RESET mid-homing leaves the delta axes in errorstop with no
+error ID; the next power-up trips `Supervisor:GroupErrorStop`, and one
+more EV_RESET recovers (a power cycle clears it; MC_Reset cannot).
+`SMC_Homing` reads `bReferenceSwitch = FALSE` as "switch reached", so
+`IOHUB_motN_limit = 0` assumes a sensor that reads 1 when hit.
+**Still to verify on the machine:** switch polarity, and whether real
+drives put the group in ErrorStop after per-axis homing.
 - Per-axis `SMC_Homing` puts the group into ErrorStop -- the code says
   so itself (`Update.st:171-176`, `FB_Homing.st:26-29`).
 - The supervisor (bb350d3, 2026-06-23) fires `EV_ERROR` on
@@ -50,6 +63,9 @@ Three layers, each enough on its own:
   the device-tree mapping.
 
 **2. Digital inputs are never read**
+*Fixed 2026-09-24:* `AxisGroupSM` reads `InputCHs[1]` (or
+`GVL.SimDigitalInput` in the virtual scene); bit order vs `IO_Pins.I`
+still to verify on the machine.
 - The wiring line is commented out (`AxisGroupSM.st:859`), so
   `DigitalInputPointer` stays 0.
 - `getDigitalInputFlipCount.raw` and `GET_DIGITAL_INPUT` always return

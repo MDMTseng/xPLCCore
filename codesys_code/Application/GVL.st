@@ -533,6 +533,13 @@ VAR_GLOBAL
 	   bit 9 ReelTapeHTension = 0, bit 8 ReelLacking = 0.
 	   Not retained: a download or restart returns to the real inputs. *)
 	SimDigitalInputEnable : BOOL := FALSE;
+	(* Simulated home switches for FB_Homing, virtual axes only: the switch
+	   of EAxisN reads "hit" while its position is >= SimHomeSwitchPos
+	   (see FB_Homing for SMC_Homing's polarity).
+	   Lets the full homing sequence run in the all-virtual scene. A real
+	   axis always uses its IOHUB_motN_limit input. Not retained. *)
+	SimHomeSwitchEnable   : BOOL := FALSE;
+	SimHomeSwitchPos      : LREAL := 10.0;
 	SimDigitalInput       : ARRAY[0..1] OF USINT := [16#00, 16#0C];
 
 END_VAR

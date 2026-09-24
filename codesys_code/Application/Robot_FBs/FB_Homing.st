@@ -43,6 +43,17 @@ VAR
     // single-motion-FB-per-axis rule).
     bExecHoming : BOOL;
     bExecZero   : BOOL;
+
+    // Home switch per axis: IOHUB_motN_limit (active low), or the
+    // simulated switch for a virtual axis (GVL.SimHomeSwitchEnable).
+    // SMC_Homing reads bReferenceSwitch = FALSE as "switch reached"
+    // (observed 2026-09-24 in the virtual scene: with TRUE at the switch,
+    // axes ran past it at search speed; with FALSE away from it, they
+    // backed off slowly). The real mapping IOHUB_motN_limit = 0 therefore
+    // assumes a sensor that reads 1 when hit -- verify on the machine.
+    bRef0 : BOOL;
+    bRef1 : BOOL;
+    bRef2 : BOOL;
 END_VAR
 
 // --- Local Constants for Homing Parameters ---
@@ -75,6 +86,18 @@ END_VAR
 // Reel and A axis are not homed (per spec); they remain in whatever
 // state EV_GROUP_ENABLE left them.
 
+// Abort: the caller dropped bExecute mid-sequence (Homing state left
+// on timeout, EV_ERROR, EV_RESET). Without this the FB stayed in 20/40
+// with its timer running, and the next homing attempt inherited the
+// expired timer and failed at once (review 2026-09-24 P0-1).
+IF NOT bExecute AND (iHomingState >= 10) AND (iHomingState <= 40) THEN
+    bExecHoming := FALSE;
+    bExecZero := FALSE;
+    bBusy := FALSE;
+    fbTimeoutTimer(IN:=FALSE);
+    iHomingState := 0;
+END_IF
+
 CASE iHomingState OF
     0: // Idle
         bBusy := FALSE;
@@ -90,6 +113,7 @@ CASE iHomingState OF
     10: // Phase A start: kick off SMC_Homing on all three.
         bBusy := TRUE;
         bExecHoming := TRUE;
+        fbTimeoutTimer(IN:=FALSE);   // fresh timer, whatever came before
         fbTimeoutTimer(IN:=TRUE, PT:=UDINT_TO_TIME(udiTimeout));
         iHomingState := 20;
 
@@ -110,6 +134,7 @@ CASE iHomingState OF
         END_IF
 
     30: // Phase B start: kick off MC_MoveAbsolute on all three.
+        fbTimeoutTimer(IN:=FALSE);
         // bExecHoming already FALSE from state 20 transition; this scan
         // is the rising edge of bExecZero so the three MC_MoveAbsolute
         // FBs latch their Position parameter and begin the move.
@@ -148,6 +173,13 @@ CASE iHomingState OF
         END_IF
 END_CASE;
 
+bRef0 := SEL(GVL.SimHomeSwitchEnable AND IoConfig_Globals.EAxis0.bVirtual,
+             IOHUB_mot0_limit = 0, IoConfig_Globals.EAxis0.fActPosition < GVL.SimHomeSwitchPos);
+bRef1 := SEL(GVL.SimHomeSwitchEnable AND IoConfig_Globals.EAxis1.bVirtual,
+             IOHUB_mot1_limit = 0, IoConfig_Globals.EAxis1.fActPosition < GVL.SimHomeSwitchPos);
+bRef2 := SEL(GVL.SimHomeSwitchEnable AND IoConfig_Globals.EAxis2.bVirtual,
+             IOHUB_mot2_limit = 0, IoConfig_Globals.EAxis2.fActPosition < GVL.SimHomeSwitchPos);
+
 // --- Phase A: SMC_Homing instances ---
 // bReturnToZero := FALSE so each axis stops at the home switch with
 // encoder set to fHomePosition; the synchronized return-to-zero is
@@ -163,7 +195,7 @@ fbHome_Axis0(
     fDeceleration:=Speed*10,
     fJerk:=Speed*100,
     nDirection:=SM3_Basic.MC_DIRECTION.positive,
-    bReferenceSwitch:=IOHUB_mot0_limit=0,
+    bReferenceSwitch:=bRef0,
     fSignalDelay:=0,
     nHomingMode:=SM3_Basic.SMC_HOMING_MODE.FAST_BSLOW_S_STOP,
     bReturnToZero:=FALSE,
@@ -180,7 +212,7 @@ fbHome_Axis1(
     fDeceleration:=Speed*10,
     fJerk:=Speed*100,
     nDirection:=SM3_Basic.MC_DIRECTION.positive,
-    bReferenceSwitch:=IOHUB_mot1_limit=0,
+    bReferenceSwitch:=bRef1,
     fSignalDelay:=0,
     nHomingMode:=SM3_Basic.SMC_HOMING_MODE.FAST_BSLOW_S_STOP,
     bReturnToZero:=FALSE,
@@ -197,7 +229,7 @@ fbHome_Axis2(
     fDeceleration:=Speed*10,
     fJerk:=Speed*100,
     nDirection:=SM3_Basic.MC_DIRECTION.positive,
-    bReferenceSwitch:=IOHUB_mot2_limit=0,
+    bReferenceSwitch:=bRef2,
     fSignalDelay:=0,
     nHomingMode:=SM3_Basic.SMC_HOMING_MODE.FAST_BSLOW_S_STOP,
     bReturnToZero:=FALSE,
