@@ -98,6 +98,12 @@ IF fbMyServer.PKT_IDX > TMP_PKT_IDX THEN
 	// 'missing_type_field'.
 	IF (fbMyServer.BUFFER_LEN > GVL.MAX_SLOT_PAYLOAD) THEN
 		GVL.OverlenDropCount := GVL.OverlenDropCount + 1;
+		// It used to vanish without a reply, leaving the host to time out.
+		IF NOT GVL.OverlenNakPending THEN
+			RouteUnpacker.Init(ADR(fbMyServer.BUFFER_PTR[0]), DINT_TO_UDINT(fbMyServer.BUFFER_LEN));
+			GVL.OverlenNakId := TO_DINT(RouteUnpacker.TryReadINT64('id', 0));
+			GVL.OverlenNakPending := GVL.OverlenNakId <> 0;
+		END_IF;
 	ELSE
 		// Order-free SYS commands take their own ring so they never queue
 		// behind a motion packet the PLC cannot take yet. Everything else
@@ -111,7 +117,8 @@ IF fbMyServer.PKT_IDX > TMP_PKT_IDX THEN
 		RouteToSys := (RouteType = 'SYS') AND (
 			RouteCmd = 'PING' OR RouteCmd = 'GA_EV' OR RouteCmd = 'GET_MACHINE_STATE'
 			OR RouteCmd = 'GET_DIAG' OR RouteCmd = 'VERSION' OR RouteCmd = 'RESET_DBG_INFO'
-			OR RouteCmd = 'SET_AXIS_SIM' OR RouteCmd = 'GET_COORD1_DEBUG' OR RouteCmd = 'EVT_MARK');
+			OR RouteCmd = 'SET_AXIS_SIM' OR RouteCmd = 'GET_COORD1_DEBUG' OR RouteCmd = 'EVT_MARK'
+			OR RouteCmd = 'PLAN_GET');
 		IF RouteToSys AND (GVL.sysinfo_buf_ridx.Space() > 0) THEN
 			tmp_ptr:=ADR(GVL.sysinfo_buf[GVL.sysinfo_buf_ridx.GetHead()][0]);
 			tmp_ptr[0]:=DINT_TO_BYTE(fbMyServer.BUFFER_LEN);

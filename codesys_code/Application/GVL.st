@@ -167,6 +167,12 @@ VAR_GLOBAL
 	   oversized packets. *)
 	MAX_SLOT_PAYLOAD : DINT := 255;
 	OverlenDropCount : UDINT := 0;
+	(* Overlength packet NAK hand-off: the Comm task records the dropped
+	   packet's id here and the EC task sends the NAK (it is the only
+	   producer of the reply ring). One pending id; a second overlength
+	   packet before it is sent only bumps OverlenDropCount. *)
+	OverlenNakId      : DINT := 0;
+	OverlenNakPending : BOOL := FALSE;
 	ReMpDropCount    : UDINT := 0;
 
 	(* Per-type drop breakdown (added 2026-04-28). With seq stamping, the UI
@@ -588,6 +594,30 @@ VAR_GLOBAL RETAIN
 	   stale. Cold reset wipes both to 0 -- renderer treats
 	   SchemaVersion=0 as "invalid, cold-start". *)
 	BootEpochCount : UDINT;
+
+	(* Production plan, kept by the PLC so a renderer crash or PC restart
+	   can resume where the tape actually is (owner, 2026-09-25).
+	   The PLC only remembers the whole plan and how many tape cells have
+	   been advanced since it was set; where that puts the job (which
+	   segment, how much of it is left) is derived by the renderer
+	   (lib/production/plan.ts remainingPlan). Segment n > 0 packs n
+	   cells, n < 0 leaves |n| cells empty; either way the tape moves |n|.
+	   PlanCellsDone grows only when a TAPE_CYCLE carrying `cells` has
+	   actually moved the reel, so it can never run ahead of the tape.
+	   The renderer also says what the cells are (`kind`: 1 packed, 2 left
+	   empty); the PLC counts them apart and checks the kind and size
+	   against the segment the plan puts at PlanCellsDone. A disagreement
+	   bumps PlanMismatchCount and the TAPE_CYCLE reply carries plan_err
+	   (the tape has moved either way: the count stays true to the tape).
+	   PlanRev bumps on every change. *)
+	PlanSeg       : ARRAY[0..31] OF DINT;
+	PlanSegCount  : INT;
+	PlanId        : DINT;
+	PlanRev       : UDINT;
+	PlanCellsDone : UDINT;
+	PlanCellsPacked   : UDINT;
+	PlanCellsEmpty    : UDINT;
+	PlanMismatchCount : UDINT;
 END_VAR
 
 VAR_GLOBAL

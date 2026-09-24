@@ -264,6 +264,13 @@ def chaos(a):
             stops += 1
             log("chaos: STOP #%d -> %s, plan left %s" % (stops, r, left))
             time.sleep(rng.uniform(0.3, 2.0))
+            if left and a.forget_at_stop:
+                # What a renderer crash/restart loses: its plan. RUN must
+                # then resume from the plan the PLC keeps.
+                plc = push("get_plc_plan", timeout=10)
+                push("forget_plan", timeout=10)
+                log("chaos: renderer plan forgotten; PLC has %s at cell %s -> %s" % (
+                    plc.get("seg"), plc.get("cells_done"), plc.get("remaining")))
             if left:
                 push("run_cycle", timeout=10)
                 log("chaos: RUN again")
@@ -290,6 +297,8 @@ def main():
     ap.add_argument("--chaos", type=int, default=0,
                     help="press STOP at a random moment this many times, RUN again each time, then let the plan finish")
     ap.add_argument("--chaos-seed", type=int, default=1)
+    ap.add_argument("--forget-at-stop", action="store_true",
+                    help="after each chaos STOP, drop the renderer's plan so RUN resumes from the PLC's")
     ap.add_argument("--chaos-in-empty", action="store_true",
                     help="with --chaos: press STOP only inside an empty-cell segment of the plan")
     ap.add_argument("--stop-after", type=int, default=None,
@@ -390,6 +399,12 @@ def main():
                 raise Stall("no new tape check for %d s (after %d)" % (LIMIT_BETWEEN_CHECKS, checks))
         push("stop_cycle", timeout=15)
         log("stop_cycle sent")
+        try:
+            plc = push("get_plc_plan", timeout=10)
+            log("PLC plan: seg %s cells_done %s -> remaining %s" % (
+                plc.get("seg"), plc.get("cells_done"), plc.get("remaining")))
+        except Exception as e:                    # older PLC program: no PLAN_GET
+            log("PLC plan: unavailable (%s)" % e)
     except Stall as e:
         stalled = True
         diagnose(str(e))

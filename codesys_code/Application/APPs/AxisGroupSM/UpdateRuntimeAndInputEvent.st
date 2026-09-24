@@ -47,6 +47,14 @@ IF TO_INT(AxisGroupManagerFb._eState) <> PrevAxisGroupState THEN
             RecentCmdMoveIds[DupeLoopIdx] := 0;
         END_FOR;
         RecentCmdRingHead := 0;
+        // Fly events belong to the session that just faulted: they are not
+        // processed outside Ready (their TTLs stop), so without this a
+        // stale distance/progress trigger could fire after recovery.
+        // Outputs are left as they are on purpose -- they include the
+        // nozzle vacuum, and dropping it here would drop a held part.
+        FOR DupeLoopIdx := 0 TO TO_INT(FlyEventBufferSize) - 1 DO
+            FlyEventBuffer[DupeLoopIdx].TriggerType := FlyEventTriggerType.NOP;
+        END_FOR;
     END_IF;
 
     PrevAxisGroupState := TO_INT(AxisGroupManagerFb._eState);

@@ -251,6 +251,13 @@ PROGRAM AxisGroupSM
         TapeOk          : BOOL;
         TapeErr         : STRING(31);
         TapeIdx         : INT;
+        TapeSlotIdx     : INT := -1;   // FlyEventBuffer slot reserved at TAPE_CYCLE accept
+        TapePlanCells   : DINT;        // cells this TAPE_CYCLE advances, counted into GVL.PlanCellsDone once the reel has moved
+        TapePlanKind    : INT;         // what they are: 1 packed, 2 left empty, 0 not said
+        TapePlanErr     : BOOL;        // kind/size disagreed with the plan at PlanCellsDone
+        TapePlanAt      : UDINT;       // scratch: cells walked while locating the segment
+        TapePlanSegIdx  : INT;         // scratch: segment index at PlanCellsDone (-1 past the end)
+        TapePlanLeft    : UDINT;       // scratch: cells left in that segment
         TapeOffset      : DINT;
         TAPE_DEFAULT_TIMEOUT_MS : LINT := 6000;
 
@@ -1023,30 +1030,84 @@ PROGRAM AxisGroupSM
                     TapeState := 3;
                 END_IF;
             END_IF;
+        ELSIF TapeState = 4 THEN
+            // shots armed, the reply is still waiting for a free slot
+            TapeDone := TRUE;
+            TapeOk := TRUE;
         ELSIF TapeState = 2 THEN
             // reelGoRequest* covers the scan before MC_MoveRelative reports Busy
             IF NOT (reelGoRequest OR reelGoRequest2 OR reelMoveRelative.Busy OR reelMoveRelative2.Busy) THEN
                 TapeT2 := RuntimeMs;
                 TapeState := 3;
+                // The tape has moved: count it for the plan, here and only
+                // here, so the retained count always matches the tape.
+                TapePlanErr := FALSE;
+                IF TapePlanCells > 0 THEN
+                    // Which segment does the plan put at PlanCellsDone?
+                    TapePlanSegIdx := -1;
+                    TapePlanAt := 0;
+                    TapePlanLeft := 0;
+                    FOR TapeIdx := 0 TO MIN(GVL.PlanSegCount, 32) - 1 DO
+                        IF GVL.PlanCellsDone < TapePlanAt + DINT_TO_UDINT(ABS(GVL.PlanSeg[TapeIdx])) THEN
+                            TapePlanSegIdx := TapeIdx;
+                            TapePlanLeft := TapePlanAt + DINT_TO_UDINT(ABS(GVL.PlanSeg[TapeIdx])) - GVL.PlanCellsDone;
+                            EXIT;
+                        END_IF;
+                        TapePlanAt := TapePlanAt + DINT_TO_UDINT(ABS(GVL.PlanSeg[TapeIdx]));
+                    END_FOR;
+                    IF TapePlanKind > 0 THEN
+                        IF (TapePlanSegIdx < 0)
+                           OR ((TapePlanKind = 1) <> (GVL.PlanSeg[MAX(TapePlanSegIdx, 0)] > 0))
+                           OR (DINT_TO_UDINT(TapePlanCells) > TapePlanLeft) THEN
+                            TapePlanErr := TRUE;
+                            GVL.PlanMismatchCount := GVL.PlanMismatchCount + 1;
+                        END_IF;
+                    END_IF;
+                    IF TapePlanKind = 1 THEN
+                        GVL.PlanCellsPacked := GVL.PlanCellsPacked + DINT_TO_UDINT(TapePlanCells);
+                    ELSIF TapePlanKind = 2 THEN
+                        GVL.PlanCellsEmpty := GVL.PlanCellsEmpty + DINT_TO_UDINT(TapePlanCells);
+                    END_IF;
+                    GVL.PlanCellsDone := GVL.PlanCellsDone + DINT_TO_UDINT(TapePlanCells);
+                    GVL.PlanRev := GVL.PlanRev + 1;
+                END_IF;
             END_IF;
         END_IF;
         IF TapeActive AND NOT TapeDone AND (TapeState = 3) THEN
+            // Arm the shots in the slot reserved when the command was
+            // accepted: the reel has already moved, so there must be no
+            // "buffer full" left to hit here (it used to search for a free
+            // slot now, and a full buffer meant tape moved, no top shots).
             TapeDone := TRUE;
-            TapeErr := 'flyevent_buffer_full';
-            FOR TapeIdx := 0 TO TO_INT(FlyEventBufferSize - 1) DO
-                IF FlyEventBuffer[TapeIdx].TriggerType = 0 THEN
-                    FlyEventBuffer[TapeIdx] := TapeFly;
-                    TapeOk := TRUE;
-                    TapeErr := '';
-                    EXIT;
+            IF (TapeSlotIdx >= 0) AND (TapeSlotIdx < TO_INT(FlyEventBufferSize))
+               AND (FlyEventBuffer[TapeSlotIdx].TriggerType = FlyEventTriggerType.Reserved) THEN
+                FlyEventBuffer[TapeSlotIdx] := TapeFly;
+                TapeSlotIdx := -1;
+                TapeState := 4;
+                TapeOk := TRUE;
+            ELSE
+                TapeErr := 'tape_slot_lost';
+            END_IF;
+        END_IF;
+        // Release a reservation the sequence never used (error, timeout,
+        // host gone): otherwise the slot stays out of the pool forever.
+        IF (TapeDone AND NOT TapeOk) OR NOT TapeActive THEN
+            IF (TapeSlotIdx >= 0) AND (TapeSlotIdx < TO_INT(FlyEventBufferSize)) THEN
+                IF FlyEventBuffer[TapeSlotIdx].TriggerType = FlyEventTriggerType.Reserved THEN
+                    FlyEventBuffer[TapeSlotIdx].TriggerType := FlyEventTriggerType.NOP;
                 END_IF;
-            END_FOR;
+            END_IF;
+            TapeSlotIdx := -1;
         END_IF;
         IF TapeDone THEN
             IF TryAcquireReplySlot(ADR(GVL.ReMpDropCount_Reply)) THEN
                 IF TapeOk THEN
                     MessagePackerFb.PackKvLint(ADR('wait_ms'), TapeT1 - TapeStartMs);
                     MessagePackerFb.PackKvLint(ADR('reel_ms'), TapeT2 - TapeT1);
+                    IF TapePlanCells > 0 THEN
+                        MessagePackerFb.PackKvLint(ADR('cells_done'), UDINT_TO_LINT(GVL.PlanCellsDone));
+                        MessagePackerFb.PackKvBool(ADR('plan_err'), TapePlanErr);
+                    END_IF;
                 ELSE
                     MessagePackerFb.PackKvStr(ADR('err'), ADR(TapeErr));
                     MessagePackerFb.PackKvDint(ADR('state'), TapeState);
@@ -1054,6 +1115,15 @@ PROGRAM AxisGroupSM
                 CommitReplySlotAck(TapeCmdId, TapeOk);
                 TapeActive := FALSE;
             END_IF;
+        END_IF;
+    END_IF;
+
+    // NAK an overlength packet the Comm task had to drop (see GVL).
+    IF GVL.OverlenNakPending THEN
+        IF TryAcquireReplySlot(ADR(GVL.ReMpDropCount_Reply)) THEN
+            MessagePackerFb.PackKvStr(ADR('err'), ADR('packet_too_long'));
+            CommitReplySlotAck(GVL.OverlenNakId, FALSE);
+            GVL.OverlenNakPending := FALSE;
         END_IF;
     END_IF;
 

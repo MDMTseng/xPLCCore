@@ -54,3 +54,12 @@ jobs:
         run: |
           find codesys_scripts -name '*.py' -not -path '*/_archive/*' -print0 \
             | xargs -0 -n1 python -m py_compile
+
+      - name: Offline Python tests
+        # The login guard and layout check are safety-critical (a PLC that
+        # needed a power cycle, 2026-09-25) and need no hardware: the
+        # online application is faked. --noconftest skips the live
+        # harness fixtures in codesys_scripts/tests/conftest.py.
+        run: |
+          python -m pip install --quiet pytest
+          python -m pytest --noconftest -p no:cacheprovider -q codesys_scripts/tests/test_plc_guard.py

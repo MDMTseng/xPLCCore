@@ -19,6 +19,13 @@ VAR
     // EVT_MARK: event-log slot being written.
     EvSlot : UDINT;
 
+    // PLAN_SET / PLAN_GET scratch.
+    PlanIdx   : INT;
+    PlanN     : INT;
+    PlanOkIn  : BOOL;
+    PlanNew   : ARRAY[0..31] OF DINT;
+    PlanCellsDoneIn : LINT;
+
     // TRUE while the packet being handled came from GVL.sysinfo_buf
     // (order-free SYS ring), FALSE for GVL.minfo_buf.
     SrcSys : BOOL;
@@ -392,6 +399,75 @@ END_IF;
                 CommandAck := TRUE;
                 ResponsePacketPointer^.ele_count := 0;
                 MessagePackerFb.PackKvBool(ADR('reset'), TRUE);
+            ELSIF (CommandType = 'PLAN_SET') THEN
+                // Store the production plan in retained memory (GVL.PlanSeg).
+                // seg: array of 1..32 non-zero DINTs; plan_id: host's label.
+                // Validated into PlanNew first so a bad plan never replaces a
+                // good one. Ordered SYS: it stays FIFO with TAPE_CYCLE.
+                ShouldReturn := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                PlanOkIn := FALSE;
+                PlanN := 0;
+                IF MessageUnpackerFb.TryReadObject('seg', ADR(fbPinOpSeqUnpacker)) THEN
+                    fbPinOpSeqUnpacker.UnpackNext();
+                    PlanN := TO_INT(fbPinOpSeqUnpacker.uiLastCount);
+                    PlanOkIn := (PlanN >= 1) AND (PlanN <= 32);
+                    IF PlanOkIn THEN
+                        FOR PlanIdx := 0 TO PlanN - 1 DO
+                            fbPinOpSeqUnpacker.UnpackNext();
+                            PlanNew[PlanIdx] := fbPinOpSeqUnpacker.diLastDINT;
+                            IF PlanNew[PlanIdx] = 0 THEN
+                                PlanOkIn := FALSE;
+                            END_IF;
+                        END_FOR;
+                    END_IF;
+                END_IF;
+                IF PlanOkIn THEN
+                    FOR PlanIdx := 0 TO 31 DO
+                        IF PlanIdx < PlanN THEN
+                            GVL.PlanSeg[PlanIdx] := PlanNew[PlanIdx];
+                        ELSE
+                            GVL.PlanSeg[PlanIdx] := 0;
+                        END_IF;
+                    END_FOR;
+                    GVL.PlanSegCount := PlanN;
+                    GVL.PlanId := TO_DINT(MessageUnpackerFb.TryReadINT64('plan_id', 0));
+                    // cells_done lets the host re-set a plan part-way through.
+                    PlanCellsDoneIn := MessageUnpackerFb.TryReadINT64('cells_done', 0);
+                    IF PlanCellsDoneIn < 0 THEN
+                        PlanCellsDoneIn := 0;
+                    END_IF;
+                    GVL.PlanCellsDone := LINT_TO_UDINT(PlanCellsDoneIn);
+                    GVL.PlanCellsPacked := 0;
+                    GVL.PlanCellsEmpty := 0;
+                    GVL.PlanMismatchCount := 0;
+                    GVL.PlanRev := GVL.PlanRev + 1;
+                    CommandAck := TRUE;
+                    MessagePackerFb.PackKvLint(ADR('plan_rev'), UDINT_TO_LINT(GVL.PlanRev));
+                ELSE
+                    CommandAck := FALSE;
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('bad_plan'));
+                END_IF;
+            ELSIF (CommandType = 'PLAN_GET') THEN
+                // The whole plan plus the cells advanced since PLAN_SET; the
+                // renderer derives the remaining plan from the two.
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                MessagePackerFb.PackKvDint(ADR('plan_id'), GVL.PlanId);
+                MessagePackerFb.PackKvLint(ADR('plan_rev'), UDINT_TO_LINT(GVL.PlanRev));
+                MessagePackerFb.PackKvLint(ADR('cells_done'), UDINT_TO_LINT(GVL.PlanCellsDone));
+                MessagePackerFb.PackKvLint(ADR('cells_packed'), UDINT_TO_LINT(GVL.PlanCellsPacked));
+                MessagePackerFb.PackKvLint(ADR('cells_empty'), UDINT_TO_LINT(GVL.PlanCellsEmpty));
+                MessagePackerFb.PackKvLint(ADR('mismatch'), UDINT_TO_LINT(GVL.PlanMismatchCount));
+                IF (GVL.PlanSegCount > 0) AND (GVL.PlanSegCount <= 32) THEN
+                    MessagePackerFb.PackKvArray(ADR('seg'), TO_UINT(GVL.PlanSegCount));
+                    FOR PlanIdx := 0 TO GVL.PlanSegCount - 1 DO
+                        MessagePackerFb.PackElemDint(GVL.PlanSeg[PlanIdx]);
+                    END_FOR;
+                ELSE
+                    MessagePackerFb.PackKvArray(ADR('seg'), 0);
+                END_IF;
             ELSIF (CommandType = 'VERSION') THEN
                 // Build provenance: lets an external tool verify the running
                 // PLC matches a repo commit without IDE assistance. Stamped by

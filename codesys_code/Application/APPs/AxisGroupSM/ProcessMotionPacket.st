@@ -56,6 +56,14 @@
                 MessagePackerFb.PackKvStr(ADR('err'), ADR('wait_busy'));
                 ShouldReturn := TRUE;
                 CommandAck := FALSE;
+            ELSIF (WaitKind = WAIT_KIND_DIN)
+                  AND (MessageUnpackerFb.TryReadINT64('group', 0) < 0
+                       OR MessageUnpackerFb.TryReadINT64('group', 0) > 1) THEN
+                // DigitalInputPointer[group] reads 2 bytes (SimDigitalInput
+                // / InputCHs); a larger host index read past them.
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('bad_group'));
+                ShouldReturn := TRUE;
+                CommandAck := FALSE;
             ELSE
                 WaitActive[WaitKind]    := TRUE;
                 WaitCmdId[WaitKind]     := CommandId;
@@ -243,6 +251,10 @@
                 TapeReelDec  := MessageUnpackerFb.TryReadREAL('DEA',  reelGoDecel);
                 TapeReelJerk := MessageUnpackerFb.TryReadREAL('JERK', reelGoJerk);
                 TapeTimeoutMs := MessageUnpackerFb.TryReadINT64('timeout_ms', 0);
+                // Plan tracking: cells this step advances, added to
+                // GVL.PlanCellsDone once the reel has actually moved.
+                TapePlanCells := TO_DINT(MessageUnpackerFb.TryReadINT64('cells', 0));
+                TapePlanKind  := TO_INT(MessageUnpackerFb.TryReadINT64('kind', 0));
                 IF TapeTimeoutMs <= 0 THEN
                     TapeTimeoutMs := TAPE_DEFAULT_TIMEOUT_MS;
                 END_IF;
@@ -293,31 +305,55 @@
                     END_FOR;
                 END_IF;
 
-                TapeCmdId := CommandId;
-                TapeStartMs := RuntimeMs;
-                TapeState := 1;
-                TapeActive := TRUE;
-                // no reply now: it comes when the shots are armed
+                // Reserve the shots' slot now, before the reel moves, so a
+                // full buffer is refused here instead of after the advance.
+                TapeSlotIdx := -1;
+                FOR TapeIdx := 0 TO TO_INT(FlyEventBufferSize - 1) DO
+                    IF FlyEventBuffer[TapeIdx].TriggerType = FlyEventTriggerType.NOP THEN
+                        FlyEventBuffer[TapeIdx].TriggerType := FlyEventTriggerType.Reserved;
+                        TapeSlotIdx := TapeIdx;
+                        EXIT;
+                    END_IF;
+                END_FOR;
+                IF TapeSlotIdx < 0 THEN
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('flyevent_buffer_full'));
+                    ShouldReturn := TRUE;
+                    CommandAck := FALSE;
+                ELSE
+                    TapeCmdId := CommandId;
+                    TapeStartMs := RuntimeMs;
+                    TapeState := 1;
+                    TapeActive := TRUE;
+                    // no reply now: it comes when the shots are armed
+                END_IF;
             END_IF;
             GVL.minfo_buf_ridx.ConsumeTail();
 
         ELSIF (CommandType = 'ReelGo') THEN
-            reelGoDistance := MessageUnpackerFb.TryReadREAL('Distance', reelGoDistance);
-            reelGoVelocity := MessageUnpackerFb.TryReadREAL('F',        reelGoVelocity);
-            reelGoAccel    := MessageUnpackerFb.TryReadREAL('ACC',      reelGoAccel);
-            reelGoDecel    := MessageUnpackerFb.TryReadREAL('DEA',      reelGoDecel);
-            reelGoJerk     := MessageUnpackerFb.TryReadREAL('JERK',     reelGoJerk);
-
-            // Dispatch to whichever FB instance is not currently busy.
-            // If both are busy (active + queued), drop the command.
-            IF NOT reelMoveRelative.Busy THEN
-                reelGoRequest  := TRUE;
-            ELSIF NOT reelMoveRelative2.Busy THEN
-                reelGoRequest2 := TRUE;
+            // NAK instead of acking a move that will not happen: while a
+            // TAPE_CYCLE owns the reel (it moves through the same reelGo*
+            // parameters, which this would overwrite), or when both FB
+            // instances are busy (active + queued). Both used to ack TRUE.
+            IF TapeActive THEN
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('tape_busy'));
+                CommandAck := FALSE;
+            ELSIF reelMoveRelative.Busy AND reelMoveRelative2.Busy THEN
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('reel_busy'));
+                CommandAck := FALSE;
+            ELSE
+                reelGoDistance := MessageUnpackerFb.TryReadREAL('Distance', reelGoDistance);
+                reelGoVelocity := MessageUnpackerFb.TryReadREAL('F',        reelGoVelocity);
+                reelGoAccel    := MessageUnpackerFb.TryReadREAL('ACC',      reelGoAccel);
+                reelGoDecel    := MessageUnpackerFb.TryReadREAL('DEA',      reelGoDecel);
+                reelGoJerk     := MessageUnpackerFb.TryReadREAL('JERK',     reelGoJerk);
+                IF NOT reelMoveRelative.Busy THEN
+                    reelGoRequest  := TRUE;
+                ELSE
+                    reelGoRequest2 := TRUE;
+                END_IF;
+                CommandAck := TRUE;
             END_IF;
-
             ShouldReturn := TRUE;
-            CommandAck := TRUE;
             GVL.minfo_buf_ridx.ConsumeTail();
 
         ELSIF (CommandType = 'M4') THEN

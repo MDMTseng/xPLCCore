@@ -192,6 +192,27 @@ export interface TapeCycleArgs {
   event_id: number;
   ttl_ms?: number;        // shots: arm-clear wait after arming (default 3000)
   timeout_ms?: number;    // whole sequence up to arming (default 6000)
+  /** Cells this step advances. The PLC adds them to its retained
+   *  PlanCellsDone once the reel has actually moved (plan tracking). */
+  cells?: number;
+  /** What the advanced cells are: packed, or left empty. The PLC counts
+   *  them apart and checks them against its plan (reply plan_err). */
+  kind?: 'pack' | 'empty';
+}
+
+/** The production plan as the PLC keeps it (SYS PLAN_GET). The remaining
+ *  plan is derived: lib/production/plan.ts remainingPlan(seg, cells_done). */
+export interface PlanState {
+  plan_id: number;
+  plan_rev: number;
+  /** The whole plan as set (n > 0 pack n cells, n < 0 leave |n| empty). */
+  seg: number[];
+  /** Tape cells advanced since PLAN_SET, and how many were packed / empty. */
+  cells_done: number;
+  cells_packed: number;
+  cells_empty: number;
+  /** Advances whose kind or size disagreed with the plan on the PLC. */
+  mismatch: number;
 }
 
 export interface ReelGoArgs {
@@ -491,7 +512,14 @@ export const cmd = {
     tx: a.x, ty: a.y, tz: a.z, td: a.radius, tin: 0,
     pin_op_seq: a.pin_op_seq, event_id: a.event_id,
     ttl_ms: a.ttl_ms ?? 3000, timeout_ms: a.timeout_ms ?? 6000,
+    ...(a.cells && a.cells > 0 ? { cells: a.cells, kind: a.kind === 'empty' ? 2 : a.kind === 'pack' ? 1 : 0 } : {}),
   }),
+  // Production plan kept by the PLC (GVL.PlanSeg + PlanCellsDone, retained):
+  // set at the start of a batch; read back after a renderer restart to
+  // resume. cells_done > 0 re-sets a plan part-way through.
+  PlanSet: (seg: number[], plan_id: number, cells_done: number = 0) =>
+    env<AckReply & { plan_rev: number }>({ type: 'SYS', cmd: 'PLAN_SET', seg, plan_id, cells_done }),
+  PlanGet: () => env<PlanState>({ type: 'SYS', cmd: 'PLAN_GET' }),
   // Host timestamp mark in the PLC event log (GVL.EvHead, GET /e on :8126).
   // Send without tracking (no id): the PLC then sends no reply. Codes:
   // tools/sim/event_log.py MARKS.
