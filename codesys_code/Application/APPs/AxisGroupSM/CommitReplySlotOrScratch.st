@@ -11,8 +11,8 @@ END_VAR
 // + class-specific drop counters.
 MessagePackerFb.PackKvDint(ADR('id'), diCmdId);
 MessagePackerFb.PackKvBool(ADR('ack'), bAck);
-MsgPakInfoWrapup(ResponsePacketPointer^);
-IF SlotAvailable THEN
+// Not pushed when Wrapup failed (see CommitReplySlotAck).
+IF MsgPakInfoWrapup(ResponsePacketPointer^) AND SlotAvailable THEN
     GVL.reMP_info_ridx.PushHead();
 ELSE
     GVL.ReMpDropCount := GVL.ReMpDropCount + 1;

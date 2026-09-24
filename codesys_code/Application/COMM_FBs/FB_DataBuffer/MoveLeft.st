@@ -4,6 +4,7 @@ VAR_INPUT
 END_VAR
 VAR_INST
     udiBytesToMove : DINT;
+    diByte         : DINT;
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
 IF pBuffer <> 0 THEN
@@ -12,10 +13,12 @@ IF pBuffer <> 0 THEN
         // Calculate the number of bytes remaining after the consumption index.
         udiBytesToMove := udiCurrentSize - udiIndex;
         
-        // Use MEMMOVE to shift the data.
-        //MEM.MemMove(pBuffer + udiIndex, pBuffer, UDINT_TO_UINT(udiBytesToMove));//memory overlap is allowed
-		
-		MEMUtils.MemCpy(pBuffer, pBuffer + udiIndex, UDINT_TO_UINT(udiBytesToMove));
+        // Shift the rest to the front. Source and destination overlap, and
+        // MemCpy does not promise to handle that (review 2026-09-24): copy
+        // forward byte by byte, which is correct for a move to the left.
+        FOR diByte := 0 TO udiBytesToMove - 1 DO
+            pBuffer[diByte] := pBuffer[diByte + udiIndex];
+        END_FOR
         
         
         // Update the new size of the buffer.

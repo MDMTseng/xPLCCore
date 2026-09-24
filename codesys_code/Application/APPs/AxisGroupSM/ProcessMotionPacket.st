@@ -289,7 +289,7 @@
                             EXIT;
                         END_IF;
                         fbPinOpSeqUnpacker.UnpackNext();
-                        StageDelayTemp := TO_INT(fbPinOpSeqUnpacker.diLastDINT);
+                        StageDelayTemp := LIMIT(0, fbPinOpSeqUnpacker.diLastDINT, 600000);  // ms; TO_INT wrapped past 32767
                         fbPinOpSeqUnpacker.UnpackNext();
                         IF fbPinOpSeqUnpacker.diLastDINT < 0 THEN StagePinMaskTemp := 0;
                         ELSE StagePinMaskTemp := DINT_TO_ULINT(fbPinOpSeqUnpacker.diLastDINT); END_IF;
@@ -484,7 +484,7 @@
 							
 							(* Read delay value (signed integer) - sequential read *)
 							fbPinOpSeqUnpacker.UnpackNext();
-							StageDelayTemp := TO_INT(fbPinOpSeqUnpacker.diLastDINT);
+							StageDelayTemp := LIMIT(0, fbPinOpSeqUnpacker.diLastDINT, 600000);  // ms; TO_INT wrapped past 32767
 							
 							(* Read pin mask value (unsigned integer) - sequential read *)
 							(* UnpackNext reads integers into diLastDINT; convert to ULINT for unsigned values *)
@@ -824,10 +824,10 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
 
             MessagePackerFb.PackKvBool(ADR('ack'), CommandAck);
 
-            MsgPakInfoWrapup(ResponsePacketPointer^);
-            // Only commit the slot if we actually reserved one above.
-            // SlotAvailable=FALSE means the pack wrote to the scratch slot.
-            IF SlotAvailable THEN
+            // Only commit the slot if we actually reserved one above
+            // (SlotAvailable=FALSE: the pack wrote to the scratch slot) and
+            // Wrapup produced a valid packet (see CommitReplySlotAck).
+            IF MsgPakInfoWrapup(ResponsePacketPointer^) AND SlotAvailable THEN
                 GVL.reMP_info_ridx.PushHead();
             END_IF;
         END_IF;

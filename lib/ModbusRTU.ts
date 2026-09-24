@@ -23,6 +23,9 @@ export class ModbusRTU {
   private _isOpen = false;
   private pendingRequests = new Map<string, { resolve: (value: any) => void, reject: (reason?: any) => void }>();
   private requestIdCounter = 0;
+  /** Text after the last newline: the start of a message whose rest comes
+   *  in the next chunk. */
+  private rxRest = '';
 
   public onConnect: (() => void) | null = null;
   public onDisconnect: (() => void) | null = null;
@@ -89,6 +92,7 @@ export class ModbusRTU {
     }
 
     const pythonExecutable = this.pythonExecutable();
+    this.rxRest = '';
     this.childProcess = spawn(pythonExecutable, [this.script_path, port, baudRate.toString()]);
 
     this.childProcess.stdout.on('data', (chunk: Buffer) => this.handleData(chunk));
@@ -173,7 +177,10 @@ export class ModbusRTU {
   }
 
   private handleData(chunk: Buffer): void {
-    const messages = chunk.toString().split('\n').filter((msg: string) => msg.trim() !== '');
+    // stdout chunks do not end on message boundaries: a message split over
+    // two chunks used to be parsed as two broken halves and lost.
+    const { lines: messages, rest } = splitLines(this.rxRest, chunk.toString());
+    this.rxRest = rest;
     messages.forEach((message: string) => {
       try {
         const parsed = JSON.parse(message);
@@ -216,4 +223,12 @@ export class ModbusRTU {
       console.log('Serial connection process terminated.');
     }
   }
+}
+
+/** Newline-delimited framing over a byte stream: the complete lines of
+ *  `rest + chunk`, and the unterminated tail to keep for the next chunk. */
+export function splitLines(rest: string, chunk: string): { lines: string[]; rest: string } {
+  const parts = (rest + chunk).split('\n');
+  const tail = parts.pop() ?? '';
+  return { lines: parts.filter((l) => l.trim() !== ''), rest: tail };
 }

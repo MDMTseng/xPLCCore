@@ -11,6 +11,10 @@ END_VAR
 // Events without `id` / `ack` use CommitReplySlotEvent instead.
 MessagePackerFb.PackKvDint(ADR('id'), diCmdId);
 MessagePackerFb.PackKvBool(ADR('ack'), bAck);
-MsgPakInfoWrapup(ResponsePacketPointer^);
-GVL.reMP_info_ridx.PushHead();
+// A reply whose Wrapup failed (a Pack* overran the slot) has no valid
+// header: pushing it sent the host garbage. Drop it instead; Wrapup
+// counted it in ReMpOverflowDropCount and the host sees a reply timeout.
+IF MsgPakInfoWrapup(ResponsePacketPointer^) THEN
+    GVL.reMP_info_ridx.PushHead();
+END_IF;
 CommitReplySlotAck := TRUE;
