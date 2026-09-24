@@ -36,10 +36,13 @@ VAR
 	// SEND_MAX_RETRIES consecutive cycles and count it. See
 	// doc/3-subsystems/ringbuf-bugs.md #7.
 	send_retry_count: UDINT := 0;
-	// Comm task is 5ms; 20 cycles ~= 100ms before head-drop. Keeps the
+	// A reply that cannot be sent for SEND_STALL_TIME is dropped. Keeps the
 	// ring from filling up behind one stuck packet during a half-open TX
 	// stall (xActive=TRUE but Send returns FALSE). See ringbuf-bugs.md #7.
-	SEND_MAX_RETRIES: UDINT := 20;
+	// It was 20 Comm scans (100 ms at 5 ms); a timer keeps it 100 ms
+	// whatever the Comm period (1 ms since 2026-09-25).
+	SEND_STALL_TIME: TIME := T#100MS;
+	sendStallTimer: Standard.TON;
 
 	// TX-side half-open escalation: count consecutive head-drops with no
 	// successful Send between them. After the threshold, signal
@@ -149,6 +152,7 @@ IF GVL.reMP_info_ridx.Size()>0 THEN
 			GVL.reMP_info_ridx.ConsumeTail();
 		END_WHILE;
 		send_retry_count := 0;
+		sendStallTimer(IN := FALSE);
 		consecutive_stall_drops := 0;
 	ELSE
 		tmp_MsgPakInfo_ptr:=ADR(GVL.reMP_info_arr[GVL.reMP_info_ridx.GetTail()]);
@@ -158,6 +162,7 @@ IF GVL.reMP_info_ridx.Size()>0 THEN
 		IF fbMyServer.Send(BUFFER_PTR := tmp_MsgPakInfo_ptr^.buf, BUFFER_LEN := tmp_MsgPakInfo_ptr^.buf_size) THEN
 			GVL.reMP_info_ridx.ConsumeTail();
 			send_retry_count := 0;
+			sendStallTimer(IN := FALSE);
 			// Successful Send proves the TX path is alive; clear the
 			// half-open escalation counter.
 			consecutive_stall_drops := 0;
@@ -169,10 +174,12 @@ IF GVL.reMP_info_ridx.Size()>0 THEN
 			// pure backpressure where Write reported NO_ERROR but the
 			// socket isn't draining.) See doc/3-subsystems/ringbuf-bugs.md #7.
 			send_retry_count := send_retry_count + 1;
-			IF send_retry_count >= SEND_MAX_RETRIES THEN
+			sendStallTimer(IN := TRUE, PT := SEND_STALL_TIME);
+			IF sendStallTimer.Q THEN
 				GVL.reMP_info_ridx.ConsumeTail();
 				GVL.SendStallDropCount := GVL.SendStallDropCount + 1;
 				send_retry_count := 0;
+				sendStallTimer(IN := FALSE);
 				// TX-side half-open escalation. Each head-drop = ~100ms of
 				// stall. Once we accumulate TX_STALL_DROP_THRESHOLD in a
 				// row, the socket is genuinely dead from our side; raise

@@ -278,7 +278,8 @@ PROGRAM AxisGroupSM
         PendingMoveDoneId: ULINT := 0;
         // Audit-fix: cap retries so a permanently-stuck reMP ring (e.g.,
         // UI hung but socket alive) eventually drops the pending event
-        // instead of holding it forever. Comm task is 5ms; 600 scans = 3s.
+        // instead of holding it forever. These are EC_Task scans (1 ms):
+        // 600 scans = 0.6 s (this said 3 s, counting Comm scans).
         // Drop bumps GVL.PendingMoveDoneDropCount for telemetry.
         PendingMoveDoneRetryScans: UDINT := 0;
         PENDING_RETRY_MAX_SCANS: UDINT := 600;
