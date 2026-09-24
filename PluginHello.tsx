@@ -939,6 +939,8 @@ export const PluginHello: React.FC<{
           tcpPort,
           build: __UI_BUILD_TAG__,
           pendingRequests: Object.keys(_this.RX_lookup).length,
+          visionStatus: tcp2Status,        // 2 = connected
+          feederStatus: FVibStatus,        // 2 = connected
         };
       case 'connect_tcp':
         if (typeof payload.host === 'string') setTcpHost(payload.host);
@@ -948,6 +950,25 @@ export const PluginHello: React.FC<{
       case 'disconnect_tcp':
         setTcpClientEnabled(false);
         return { requested: true };
+      // Vision (TCP2) and feeder (Modbus bridge), so a driver can set up the
+      // all-virtual scene (tools/sim) without clicking. Connect the PLC first:
+      // vision callbacks only register while the PLC socket exists
+      // (review 2026-09-24 R-P0-2).
+      case 'connect_vision':
+        if (typeof payload.host === 'string') setTcp2Host(payload.host);
+        if (payload.port !== undefined) setTcp2Port(parseInt(String(payload.port)));
+        setConnectTCP2(true);
+        return { requested: true };
+      case 'disconnect_vision':
+        setConnectTCP2(false);
+        return { requested: true };
+      case 'connect_feeder': {
+        const port = typeof payload.port === 'string' ? payload.port : 'MOCK';
+        const baud = payload.baud !== undefined ? parseInt(String(payload.baud)) : 19200;
+        setModbusPort(port);
+        _this.flexVibCtrl?.connect(port, baud);
+        return { requested: true, port, baud };
+      }
       case 'send_tcp_msgpack': {
         const data = payload.data ?? payload;
         const awaitTracking = payload.await_tracking !== false;
@@ -963,7 +984,7 @@ export const PluginHello: React.FC<{
         return { waited_ms: Number(payload.ms ?? 0) };
       case 'list_actions':
         return {
-          builtins: ['ping', 'get_state', 'connect_tcp', 'disconnect_tcp', 'send_tcp_msgpack', 'wait_ms', 'list_actions', 'reload'],
+          builtins: ['ping', 'get_state', 'connect_tcp', 'disconnect_tcp', 'connect_vision', 'disconnect_vision', 'connect_feeder', 'send_tcp_msgpack', 'wait_ms', 'list_actions', 'reload'],
           registered: listHarnessActions(),
         };
       case 'reload':
@@ -975,7 +996,7 @@ export const PluginHello: React.FC<{
         }
         throw new Error(`unknown harness action: ${action}`);
     }
-  }, [tcpConnected, tcpHost, tcpPort, sendTcpMsgPack]);
+  }, [tcpConnected, tcpHost, tcpPort, sendTcpMsgPack, tcp2Status, FVibStatus]);
 
   useEffect(() => {
     if (!harnessEnabled) return;

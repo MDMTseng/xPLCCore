@@ -41,6 +41,14 @@ function createWindow() {
   // Keep the OS from suspending the process while the machine runs.
   powerSaveBlocker.start('prevent-app-suspension');
   win.loadURL(process.env.XPLC_UI_URL || 'http://localhost:5199/');
+  // XPLC_CONSOLE=1: mirror the renderer console to stdout, so a headless
+  // driver (tools/sim/run_virtual.py) gets it in its log.
+  if (process.env.XPLC_CONSOLE === '1') {
+    win.webContents.on('console-message', (_e, level, message, line, source) => {
+      const tag = ['log', 'warn', 'error', 'info'][level] || 'log';
+      console.log(`[renderer:${tag}] ${message}` + (level >= 2 ? `  (${source}:${line})` : ''));
+    });
+  }
   if (process.env.XPLC_DEVTOOLS === '1') win.webContents.openDevTools({ mode: 'detach' });
 
   // XPLC_SNAPSHOT=<file.png>: save the window's content ~6 s after load and

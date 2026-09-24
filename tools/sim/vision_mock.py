@@ -264,11 +264,14 @@ def poll_plc(server, world, url, period):
     top_pending = False
     while True:
         try:
-            with urllib.request.urlopen(url, timeout=1.0) as r:
+            with urllib.request.urlopen(url, timeout=0.5) as r:
                 v = json.loads(r.read().decode())
         except Exception as e:
+            # Retry fast: the PLC latches only the *last* bottom-camera
+            # position, so a long gap folds several shots onto one pose
+            # (BtmCheckCalib then sees colinear points).
             log("PLC poll failed:", e)
-            time.sleep(1.0)
+            time.sleep(0.05)
             continue
         if prev is None:
             prev = v
@@ -281,6 +284,8 @@ def poll_plc(server, world, url, period):
             server.push_later(0.15, FEEDER_ID, world.feeder_shot)
         for _ in range(d["sd"]):
             server.push_later(0.04, SIDE_ID, world.side_shot)
+        if d["bt"] > 1:
+            log("WARN: %d bottom shots in one poll gap; they share one latched pose" % d["bt"])
         for _ in range(d["bt"]):
             bx, by = v["bx"], v["by"]
             server.push_later(0.04, BTM_ID, lambda bx=bx, by=by: world.btm_shot(bx, by))

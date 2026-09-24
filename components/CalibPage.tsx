@@ -1907,6 +1907,17 @@ export const CalibPage: React.FC<{
     return { stop_requested: true };
   }, []);
 
+  // payload.plan: same encoding as the plan editor -- positive = pack that
+  // many parts, negative = leave that many cells empty. E.g. [-2, 10].
+  useHarnessAction('set_plan', async (payload: any) => {
+    const plan = payload?.plan;
+    if (!Array.isArray(plan) || plan.length === 0 || !plan.every((n: any) => Number.isInteger(n) && n !== 0)) {
+      throw new Error('set_plan: plan must be a non-empty array of non-zero integers');
+    }
+    setProductionPlan(plan);
+    return { plan: _this.production_plan };
+  }, []);
+
   type PlanSegmentType = 'pack' | 'empty';
   type PlanSegment = { type: PlanSegmentType; count: number; key: string };
 
