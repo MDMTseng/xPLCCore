@@ -217,6 +217,21 @@ Needs the machine (not changed):
   retained plan variables, the TYPE change (Reserved), Comm 1 ms
   (`set_comm_task_period.py` first), FlyEventBufferSize 32.
 
+Also done: the loop body is `lib/production/cycle.ts` (fb8d3d7), with an
+offline end-to-end test that runs whole plans against a fake tape.
+
+Tried and dropped: picking the next part while a segment settles and
+holding it across the empty segment. Top-result idle fell 1.45 -> 0.49 s,
+but the held part then waited ~1.3 s for the empty step's view before
+placing; total arm idle did not move (sim, h1_101: 60 s vs 61 s, noise).
+Not worth the extra state and the deferred STOP.
+
+Where the sim run goes now (plan 1,-10,60,-11,1, 58 s of arm time): arm
+idle ~4.6 s, of which ~2.1 s is the feeder refill (vibration + 700 ms
+brake: machine tuning) and ~1.5 s the segment transitions. The rest is
+motion. Further speed has to come from the machine side: feeder timings,
+motion profiles, and the real-PLC latencies (compare_runs.py).
+
 Next in code: move the loop body of `runAllObjects` into
 `lib/production/cycle.ts` (typed context and checkpoints), then the
 command-set work of §3 (composite PICK/PLACE/FEEDER_CYCLE, batch frames).
