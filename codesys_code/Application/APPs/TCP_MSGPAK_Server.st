@@ -89,6 +89,7 @@ tx_stall_force_reset := FALSE;
 IF fbMyServer.PKT_IDX > TMP_PKT_IDX THEN
 	REEN_CD:=50;
     recv_counter := recv_counter + 1;
+	GVL.HostRxCount := GVL.HostRxCount + 1;
 
 	// Length guard: slots are 256 bytes (1 len + 255 payload). Over-length
 	// packets would wrap via DINT_TO_BYTE and corrupt the slot silently.

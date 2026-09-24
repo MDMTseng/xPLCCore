@@ -212,6 +212,10 @@ VAR_GLOBAL
 	   freeze motion if the UI has gone dark mid-cycle. Diagnostic only
 	   until such a supervisor is wired. 0 = never pinged yet. *)
 	LastUiPingMs : LINT := 0;
+	(* Packets received from the host, bumped by TCP_MSGPAK_Server for
+	   every packet (dropped ones included). AxisGroupSM refreshes
+	   LastUiPingMs when it changes. *)
+	HostRxCount : UDINT := 0;
 	UiPingCount  : UDINT := 0;
 
 	(* Worst-case observed gap between consecutive PINGs (ms, PLC clock).

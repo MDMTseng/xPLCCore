@@ -443,12 +443,17 @@ export const cmd = {
   ReelGo: (a: ReelGoArgs) => env<AckReply>({ type: 'M', cmd: 'ReelGo', ...compact(a) }),
   SetCoord0: () => env<AckReply>({ type: 'M', cmd: 'SetCoord0' }),
   SetCoord1: () => env<AckReply>({ type: 'M', cmd: 'SetCoord1' }),
+  // Waits (WaitFor*/BlockFor*) are deferred replies, not queue barriers:
+  // the PLC replies when the condition holds, and commands sent meanwhile
+  // run meanwhile -- await the reply before sending what must follow.
+  // One pending wait per kind; NAK `wait_busy` / `block_timeout` /
+  // `group_not_ready` (protocol.md).
   WaitForMotionStop: (a: BlockArgs = {}) =>
     env<AckReply>({ type: 'M', cmd: 'WAIT_FOR_MOTION_STOP', ...compact(a) }),
   // Deferred-ack wait for the REEL axis to stop (it isn't in the delta
   // group, so WaitForMotionStop doesn't cover it). The PLC holds the ack
-  // frame until the reel is idle -- await this instead of polling reel_pos.
-  // NAKs `block_timeout` on `timeout_ms` (0/absent = wait forever).
+  // reply until the reel is idle -- await this instead of polling reel_pos.
+  // NAKs `block_timeout` on `timeout_ms` (0/absent = no timeout).
   WaitForReelStop: (a: BlockArgs = {}) =>
     env<AckReply>({ type: 'M', cmd: 'WAIT_FOR_REEL_STOP', ...compact(a) }),
   BlockForDigitalInput: (a: DigitalInputWaitArgs) =>

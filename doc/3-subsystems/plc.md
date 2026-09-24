@@ -342,9 +342,10 @@ Order:
    paths before changing them: feeder refill (target ~1 s) and tape
    advance + two-light shot (target < 0.7 s).
 2. Renderer-side: replace fixed delays with `WAIT_FOR_REEL_STOP` and
-   fly events (no PLC change). **Blocked** until the queue-tail
-   blocking is fixed (review P0-3): today `WAIT_FOR_REEL_STOP` would hold
-   the arm's moves behind the reel. The tape timing today is delay-based, a
+   fly events (no PLC change). Unblocked 2026-09-24: waits are deferred
+   replies and no longer hold the queue (review P0-3), so arm moves keep
+   running while a `WAIT_FOR_REEL_STOP` is pending. The tape timing today
+   is delay-based, a
    leftover from the first machine, where the tape unit was separate
    from the PLC and could only be told "advance".
 3. `TAPE_CYCLE`: advance N, wait for reel stop and arm clear, light 4

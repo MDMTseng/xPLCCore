@@ -35,75 +35,46 @@
             CommandAck := FALSE;
             GVL.minfo_buf_ridx.ConsumeTail();
 
-        ELSIF (CommandType = 'BLOCK_FOR_MOTION_STOP' OR CommandType = 'WAIT_FOR_MOTION_STOP') THEN
-            // First scan we see this CommandId, latch start time and timeout.
-            IF (CommandId <> BlockCommandId) THEN
-                BlockCommandId := CommandId;
-                BlockStartMs := RuntimeMs;
-                BlockTimeoutMs := MessageUnpackerFb.TryReadINT64('timeout_ms', 0);
+        ELSIF (CommandType = 'BLOCK_FOR_MOTION_STOP' OR CommandType = 'WAIT_FOR_MOTION_STOP'
+               OR CommandType = 'WAIT_FOR_REEL_STOP' OR CommandType = 'BLOCK_FOR_REEL_STOP'
+               OR CommandType = 'BLOCK_FOR_DIGITAL_INPUT') THEN
+            // Deferred-reply waits (review 2026-09-24 P0-3). Registered and
+            // taken off the queue at once; the main body (pending waits
+            // block) acks when the condition holds, NAKs block_timeout on
+            // expiry or group_not_ready when the FSM leaves Ready. Packets
+            // behind a wait are no longer held: a wait is not a barrier.
+            // One pending wait per kind; a second one NAKs wait_busy.
+            IF (CommandType = 'BLOCK_FOR_DIGITAL_INPUT') THEN
+                WaitKind := WAIT_KIND_DIN;
+            ELSIF (CommandType = 'WAIT_FOR_REEL_STOP' OR CommandType = 'BLOCK_FOR_REEL_STOP') THEN
+                WaitKind := WAIT_KIND_REEL;
+            ELSE
+                WaitKind := WAIT_KIND_MOTION;
             END_IF;
 
-            IF (GroupReadPositionFb.MovementId = 0) THEN
-                ShouldReturn := TRUE;
-                CommandAck := TRUE;
-                GVL.minfo_buf_ridx.ConsumeTail();
-            ELSIF (BlockTimeoutMs > 0 AND (RuntimeMs - BlockStartMs) >= BlockTimeoutMs) THEN
-                MessagePackerFb.PackKvStr(ADR('err'), ADR('block_timeout'));
-                ShouldReturn := TRUE;
-                CommandAck := FALSE;
-                GVL.minfo_buf_ridx.ConsumeTail();
-            END_IF;
-
-        ELSIF (CommandType = 'WAIT_FOR_REEL_STOP' OR CommandType = 'BLOCK_FOR_REEL_STOP') THEN
-            // Like WAIT_FOR_MOTION_STOP but for the reel axis, which is NOT
-            // part of the delta group (so GroupReadPositionFb doesn't see
-            // it). Defers the ACK -- does NOT spin the scan -- until the
-            // reel is idle, then acks; NAK block_timeout on expiry. Lets the
-            // host await a ReelGo without polling reel_pos.
-            IF (CommandId <> BlockCommandId) THEN
-                BlockCommandId := CommandId;
-                BlockStartMs := RuntimeMs;
-                BlockTimeoutMs := MessageUnpackerFb.TryReadINT64('timeout_ms', 0);
-            END_IF;
-
-            // "Reel active" must include reelGoRequest*: a ReelGo sets the
-            // one-shot Execute request THIS scan but the MC_MoveRelative FB
-            // only goes Busy on the NEXT scan (main-body reel block runs
-            // after this method). Checking .Busy alone would falsely report
-            // "stopped" in that one-scan gap and ack before the move starts.
-            IF NOT (reelGoRequest OR reelGoRequest2
-                    OR reelMoveRelative.Busy OR reelMoveRelative2.Busy) THEN
-                ShouldReturn := TRUE;
-                CommandAck := TRUE;
-                GVL.minfo_buf_ridx.ConsumeTail();
-            ELSIF (BlockTimeoutMs > 0 AND (RuntimeMs - BlockStartMs) >= BlockTimeoutMs) THEN
-                MessagePackerFb.PackKvStr(ADR('err'), ADR('block_timeout'));
+            IF WaitActive[WaitKind] THEN
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('wait_busy'));
                 ShouldReturn := TRUE;
                 CommandAck := FALSE;
-                GVL.minfo_buf_ridx.ConsumeTail();
+            ELSE
+                WaitActive[WaitKind]    := TRUE;
+                WaitCmdId[WaitKind]     := CommandId;
+                WaitStartMs[WaitKind]   := RuntimeMs;
+                WaitTimeoutMs[WaitKind] := MessageUnpackerFb.TryReadINT64('timeout_ms', 0);
+                IF (WaitKind = WAIT_KIND_DIN) THEN
+                    WaitPinMask  := TO_UINT(MessageUnpackerFb.TryReadINT64('pin', 0));
+                    WaitPinGroup := TO_UINT(MessageUnpackerFb.TryReadINT64('group', 0));
+                    WaitPinState := TO_UINT(MessageUnpackerFb.TryReadINT64('state', 0));
+                    // "Wait forever" on an input is how the PLC wedged
+                    // before; inputs get a ceiling instead.
+                    IF (WaitTimeoutMs[WaitKind] <= 0) THEN
+                        WaitTimeoutMs[WaitKind] := WAIT_DIN_DEFAULT_TIMEOUT_MS;
+                    END_IF;
+                END_IF;
+                // No reply now: it is sent when the wait resolves.
             END_IF;
+            GVL.minfo_buf_ridx.ConsumeTail();
 
-        ELSIF (CommandType = 'BLOCK_FOR_DIGITAL_INPUT') THEN
-            InputPinMask := TO_UINT(MessageUnpackerFb.TryReadINT64('pin', 0));
-            InputPinGroup := TO_UINT(MessageUnpackerFb.TryReadINT64('group', 0));
-            InputPinState := TO_UINT(MessageUnpackerFb.TryReadINT64('state', 0));
-
-            IF (CommandId <> BlockCommandId) THEN
-                BlockCommandId := CommandId;
-                BlockStartMs := RuntimeMs;
-                BlockTimeoutMs := MessageUnpackerFb.TryReadINT64('timeout_ms', 0);
-            END_IF;
-
-            IF DigitalInputPointer <> 0 AND ((DigitalInputPointer[InputPinGroup] AND InputPinMask) = (InputPinState AND InputPinMask)) THEN
-                ShouldReturn := TRUE;
-                CommandAck := TRUE;
-                GVL.minfo_buf_ridx.ConsumeTail();
-            ELSIF (BlockTimeoutMs > 0 AND (RuntimeMs - BlockStartMs) >= BlockTimeoutMs) THEN
-                MessagePackerFb.PackKvStr(ADR('err'), ADR('block_timeout'));
-                ShouldReturn := TRUE;
-                CommandAck := FALSE;
-                GVL.minfo_buf_ridx.ConsumeTail();
-            END_IF;
         ELSIF (CommandType = 'GET_DIGITAL_INPUT') THEN
             //InputPinGroup := TO_UINT(MessageUnpackerFb.TryReadINT64('group', 0));
 

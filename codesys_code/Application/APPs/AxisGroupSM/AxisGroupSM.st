@@ -204,14 +204,26 @@ PROGRAM AxisGroupSM
 
         PrevAxisGroupState: INT := -1; // Force initial StateString update
 
-        // A2: PLC-side timeout for BLOCK_FOR_* packets.
-        // Without this a BLOCK packet sits in minfo_buf forever if the
-        // condition (motion stop / digital input) never becomes true,
-        // which hangs the UI until reconnect. Packet carries optional
-        // `timeout_ms` (absent or 0 = wait forever = legacy behavior).
-        BlockStartMs: LINT := 0;
-        BlockCommandId: DINT := 0;
-        BlockTimeoutMs: LINT := 0;
+        // Pending deferred-reply waits (review 2026-09-24 P0-3), one per
+        // kind, indexed by WAIT_KIND_*. Registered in ProcessMotionPacket,
+        // resolved in the main body (pending waits block).
+        HostRxCountSeen : UDINT := 0;   // last GVL.HostRxCount seen (DrainHostPackets)
+        WaitActive    : ARRAY[0..2] OF BOOL;
+        WaitCmdId     : ARRAY[0..2] OF DINT;
+        WaitStartMs   : ARRAY[0..2] OF LINT;
+        WaitTimeoutMs : ARRAY[0..2] OF LINT;   // <= 0: none (motion/reel only)
+        WaitPinMask   : UINT;
+        WaitPinGroup  : UINT;
+        WaitPinState  : UINT;
+        WaitKind      : INT;
+        WaitIdx       : INT;
+        WaitDone      : BOOL;
+        WaitAck       : BOOL;
+        WaitErr       : STRING(31);
+        WAIT_KIND_MOTION : INT := 0;
+        WAIT_KIND_REEL   : INT := 1;
+        WAIT_KIND_DIN    : INT := 2;
+        WAIT_DIN_DEFAULT_TIMEOUT_MS : LINT := 30000;
 
         // Push-notification (server-initiated event) packet pointer.
         // Edge-detect state for COORD_SET and MOVE_DONE push events.
@@ -345,9 +357,6 @@ PROGRAM AxisGroupSM
 
     
     G4HaltTime: REAL;
-    InputPinMask: UINT;
-    InputPinGroup: UINT;
-    InputPinState: UINT;
     
     MotionTargetMovementId: SMC_Movement_Id;
     // Scratch for safely combining MotionTargetMovementId (ULINT) with the
@@ -892,6 +901,54 @@ PROGRAM AxisGroupSM
         END_IF;
         DigitalInputBits_Prev := DigitalInputBits_Curr;
     END_IF;
+
+    // ---- Pending waits (review 2026-09-24 P0-3) ----
+    // Resolve the deferred-reply waits registered by ProcessMotionPacket.
+    // Runs before the not-Ready RETURN so a wait still pending when the
+    // FSM leaves Ready is NAK'd group_not_ready instead of left hanging.
+    // Host gone: dropped without a reply (nobody to answer; the next
+    // client must not get it). Reply ring full: retried next scan.
+    FOR WaitIdx := 0 TO 2 DO
+        IF WaitActive[WaitIdx] THEN
+            WaitDone := FALSE;
+            WaitAck := FALSE;
+            WaitErr := '';
+            IF NOT TCP_MSGPAK_Server.fbMyServer.CLIENT.xActive THEN
+                WaitActive[WaitIdx] := FALSE;
+            ELSIF NOT AxisGroupReady THEN
+                WaitDone := TRUE;
+                WaitErr := 'group_not_ready';
+            ELSE
+                IF (WaitIdx = WAIT_KIND_MOTION) THEN
+                    WaitAck := (GroupReadPositionFb.MovementId = 0);
+                ELSIF (WaitIdx = WAIT_KIND_REEL) THEN
+                    // reelGoRequest*: a ReelGo raises the Execute request
+                    // one scan before MC_MoveRelative reports Busy.
+                    WaitAck := NOT (reelGoRequest OR reelGoRequest2
+                                    OR reelMoveRelative.Busy OR reelMoveRelative2.Busy);
+                ELSE
+                    WaitAck := (DigitalInputPointer <> 0)
+                        AND ((DigitalInputPointer[WaitPinGroup] AND WaitPinMask) = (WaitPinState AND WaitPinMask));
+                END_IF;
+                IF WaitAck THEN
+                    WaitDone := TRUE;
+                ELSIF (WaitTimeoutMs[WaitIdx] > 0)
+                      AND ((RuntimeMs - WaitStartMs[WaitIdx]) >= WaitTimeoutMs[WaitIdx]) THEN
+                    WaitDone := TRUE;
+                    WaitErr := 'block_timeout';
+                END_IF;
+            END_IF;
+            IF WaitDone THEN
+                IF TryAcquireReplySlot(ADR(GVL.ReMpDropCount_Reply)) THEN
+                    IF NOT WaitAck THEN
+                        MessagePackerFb.PackKvStr(ADR('err'), ADR(WaitErr));
+                    END_IF;
+                    CommitReplySlotAck(WaitCmdId[WaitIdx], WaitAck);
+                    WaitActive[WaitIdx] := FALSE;
+                END_IF;
+            END_IF;
+        END_IF;
+    END_FOR;
 
     CheckAxisGroupReady();
 

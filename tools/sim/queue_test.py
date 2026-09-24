@@ -7,10 +7,13 @@ PLC takes one client). Refuses unless the delta arms are virtual (read
 through the CODESYS daemon). Moves: only small Z moves of the (virtual)
 delta group; EAXIS_A is never commanded.
 
-Scenario "wait at the motion head": a BLOCK_FOR_DIGITAL_INPUT that can
-never be satisfied (timeout 3 s) is sent, then PING, GA_EV(0),
-GET_MACHINE_STATE and a G1 right behind it. Order-free SYS commands must
-reply at once; the G1 is reported so the motion behaviour is visible.
+Scenarios: (1) an input wait that never resolves must not hold SYS or
+motion traffic behind it, a second input wait NAKs wait_busy, the first
+times out; (2) WAIT_FOR_MOTION_STOP acks when the move ends; (3) a
+WAIT_FOR_REEL_STOP does not hold a G1 behind it; (4) a pending wait is
+NAK'd group_not_ready when the FSM leaves Ready; (5) the heartbeat
+supervisor trips when the host goes silent while a motion packet waits at
+the queue head (it used to be kept alive by that packet). Ends in UnInited.
 """
 
 import argparse
@@ -35,6 +38,7 @@ class Plc:
         self.replies = {}          # id -> (t_rx, msg)
         self.next_id = 1000
         self.alive = True
+        self.heartbeat = True
         threading.Thread(target=self._rx, daemon=True).start()
         threading.Thread(target=self._heartbeat, daemon=True).start()
 
@@ -57,7 +61,8 @@ class Plc:
 
     def _heartbeat(self):
         while self.alive:
-            self.send({"type": "SYS", "cmd": "PING"})
+            if self.heartbeat:
+                self.send({"type": "SYS", "cmd": "PING"})
             time.sleep(1.0)
 
     def send(self, pkt):
@@ -98,6 +103,30 @@ def to_ready(plc):
     raise SystemExit("FSM did not reach Ready")
 
 
+def timed(plc, name, i, ts, lo=None, hi=None, ack=None, err=None, timeout=8.0):
+    """Wait for reply i; check its latency window and ack/err. Returns fail count."""
+    t_rx, msg = plc.wait(i, timeout)
+    if t_rx is None:
+        print("  %-26s NO REPLY  ** FAIL" % name)
+        return 1
+    dt = (t_rx - ts) * 1000
+    bad = []
+    if lo is not None and dt < lo:
+        bad.append("expected >= %d ms" % lo)
+    if hi is not None and dt > hi:
+        bad.append("expected <= %d ms" % hi)
+    if ack is not None and msg.get("ack") != ack:
+        bad.append("expected ack=%s" % ack)
+    if err is not None and msg.get("err") != err:
+        bad.append("expected err=%s" % err)
+    print("  %-26s %6.0f ms  ack=%-5s err=%-16s %s" % (
+        name, dt, msg.get("ack"), msg.get("err", ""), ("** FAIL: " + ", ".join(bad)) if bad else "ok"))
+    return 1 if bad else 0
+
+
+DIN_NEVER = {"type": "M", "cmd": "BLOCK_FOR_DIGITAL_INPUT", "pin": 0x80, "group": 0, "state": 0x80}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--plc", default="192.168.1.70")
@@ -110,39 +139,63 @@ def main():
     rpc.call({"cmd": "logout"}, 30)
 
     plc = Plc(a.plc)
-    fails = 0
+    f = 0
     try:
         to_ready(plc)
         print("Ready; SetCoord1 ->", plc.call({"type": "M", "cmd": "SetCoord1"}))
         print("G1 Z10 ->", plc.call({"type": "M", "cmd": "G1", "Z": 10}))
+        time.sleep(1.0)
 
-        print("\n-- wait at the motion head --")
-        blk, t0 = plc.send({"type": "M", "cmd": "BLOCK_FOR_DIGITAL_INPUT",
-                            "pin": 0x80, "group": 0, "state": 0x80, "timeout_ms": 3000})
+        print("\n1. input wait that never resolves (3 s), traffic behind it")
+        blk, t0 = plc.send(dict(DIN_NEVER, timeout_ms=3000))
         time.sleep(0.05)
-        probes = [("PING", {"type": "SYS", "cmd": "PING"}, 0.2),
-                  ("GA_EV(0)", {"type": "SYS", "cmd": "GA_EV", "ev": 0}, 0.2),
-                  ("GET_MACHINE_STATE", {"type": "SYS", "cmd": "GET_MACHINE_STATE"}, 0.2),
-                  ("G1 Z12", {"type": "M", "cmd": "G1", "Z": 12}, None)]
-        sent = [(name, limit) + plc.send(pkt) for name, pkt, limit in probes]
-        t_blk, r_blk = plc.wait(blk, 8)
-        for name, limit, i, ts in sent:
-            t_rx, msg = plc.wait(i, 8)
-            if t_rx is None:
-                print("  %-18s NO REPLY" % name)
-                fails += 1
-                continue
-            dt = t_rx - ts
-            ok = limit is None or dt <= limit
-            fails += 0 if ok else 1
-            print("  %-18s %6.0f ms  ack=%s  %s" % (name, dt * 1000, msg.get("ack"),
-                                                   "" if ok else "** TOO SLOW (limit %d ms)" % (limit * 1000)))
-        print("  %-18s %6.0f ms  ack=%s err=%s" % ("BLOCK (3 s)", ((t_blk or 0) - t0) * 1000,
-                                                  (r_blk or {}).get("ack"), (r_blk or {}).get("err")))
-        print("\nRESULT:", "PASS" if fails == 0 else "FAIL (%d)" % fails)
+        f += timed(plc, "PING", *plc.send({"type": "SYS", "cmd": "PING"}), hi=200)
+        f += timed(plc, "GA_EV(0)", *plc.send({"type": "SYS", "cmd": "GA_EV", "ev": 0}), hi=200)
+        f += timed(plc, "GET_MACHINE_STATE", *plc.send({"type": "SYS", "cmd": "GET_MACHINE_STATE"}), hi=200)
+        f += timed(plc, "G1 Z12 (behind the wait)", *plc.send({"type": "M", "cmd": "G1", "Z": 12}), hi=200)
+        f += timed(plc, "second input wait", *plc.send(dict(DIN_NEVER, timeout_ms=3000)), hi=200, ack=False, err="wait_busy")
+        f += timed(plc, "input wait", blk, t0, lo=2900, hi=3300, ack=False, err="block_timeout")
+
+        print("\n2. motion stop wait resolves when the move ends")
+        plc.call({"type": "M", "cmd": "G1", "Z": 40})
+        f += timed(plc, "WAIT_FOR_MOTION_STOP", *plc.send({"type": "M", "cmd": "WAIT_FOR_MOTION_STOP", "timeout_ms": 10000}),
+                   lo=20, hi=8000, ack=True)
+        f += timed(plc, "  ... when already stopped", *plc.send({"type": "M", "cmd": "WAIT_FOR_MOTION_STOP"}), hi=200, ack=True)
+
+        print("\n3. reel stop wait does not hold arm moves")
+        plc.call({"type": "M", "cmd": "ReelGo", "Distance": 30, "F": 30})
+        rw, t0 = plc.send({"type": "M", "cmd": "WAIT_FOR_REEL_STOP", "timeout_ms": 10000})
+        time.sleep(0.05)
+        f += timed(plc, "G1 Z20 (behind reel wait)", *plc.send({"type": "M", "cmd": "G1", "Z": 20}), hi=200, ack=True)
+        f += timed(plc, "WAIT_FOR_REEL_STOP", rw, t0, lo=300, hi=9000, ack=True)
+
+        print("\n4. pending wait when the FSM leaves Ready")
+        blk, t0 = plc.send(DIN_NEVER)          # no timeout_ms: 30 s ceiling
+        time.sleep(0.3)
+        plc.call({"type": "SYS", "cmd": "GA_EV", "ev": 8})
+        f += timed(plc, "input wait after EV_RESET", blk, t0, hi=1000, ack=False, err="group_not_ready")
+
+        print("\n5. host goes silent with a motion packet stuck at the queue head")
+        to_ready(plc)
+        plc.call({"type": "M", "cmd": "SetCoord1"})
+        for k in range(14):                    # > MOTION_BUFFER_THRESHOLD (12): the rest wait at the head
+            plc.send({"type": "M", "cmd": "G1", "Z": 10 + 5 * (k % 2), "F": 5})
+        time.sleep(0.5)
+        plc.heartbeat = False
+        t0 = time.time()
+        time.sleep(6.5)
+        plc.heartbeat = True
+        r = plc.call({"type": "SYS", "cmd": "GA_EV", "ev": 0}) or {}
+        ok = r.get("st_str") == "Error" and r.get("err_src") == "Supervisor:UiHeartbeatStale"
+        f += 0 if ok else 1
+        print("  %-26s after %.1f s silent: st=%s err_src=%s  %s" % (
+            "heartbeat supervisor", time.time() - t0, r.get("st_str"), r.get("err_src"), "ok" if ok else "** FAIL"))
+        plc.call({"type": "SYS", "cmd": "GA_EV", "ev": 8})
+
+        print("\nRESULT:", "PASS" if f == 0 else "FAIL (%d)" % f)
     finally:
         plc.close()
-    return 1 if fails else 0
+    return 1 if f else 0
 
 
 if __name__ == "__main__":

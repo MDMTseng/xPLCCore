@@ -59,6 +59,17 @@ CommandType := '';
 ResponsePacketPointer := 0;
 SysDrainIter := 0;
 
+// Any packet received -- not just SYS/PING -- proves the client is alive
+// (a UI streaming G1 without PING must not trip the A3 supervisor). Keyed
+// on the receive counter, NOT on drain-loop entries: a packet waiting at
+// the motion head is re-read every scan and used to keep a dead host
+// looking alive (review 2026-09-24 P0-3). The PING handler below still
+// refreshes too, alongside the PingMaxGapMs / UiPingCount stats it owns.
+IF GVL.HostRxCount <> HostRxCountSeen THEN
+    HostRxCountSeen := GVL.HostRxCount;
+    GVL.LastUiPingMs := RuntimeMs;
+END_IF;
+
     WHILE ((GVL.sysinfo_buf_ridx.Size() > 0) OR (GVL.minfo_buf_ridx.Size() > 0))
           AND (SysDrainIter < SYS_DRAIN_MAX_PER_SCAN) DO
         SrcSys := GVL.sysinfo_buf_ridx.Size() > 0;
@@ -78,14 +89,6 @@ SysDrainIter := 0;
         CommandType := MessageUnpackerFb.TryReadString('cmd', '');
         ProtocolVersionGot := MessageUnpackerFb.TryReadINT64('protocol_version', 0);
 
-        // Any inbound packet -- not just SYS/PING -- proves the client is
-        // alive. Pre-fix only PING refreshed LastUiPingMs, so a UI sending
-        // a steady G1 stream (no PING) still tripped the A3 supervisor
-        // mid-motion. Refresh on every drain-loop entry so the watchdog
-        // tracks "client is talking" rather than "client is pinging".
-        // The PING handler's own refresh below is now redundant but kept
-        // alongside the PingMaxGapMs / UiPingCount stats it owns.
-        GVL.LastUiPingMs := RuntimeMs;
 
         // W1 A5: if the client declared a version and it doesn't match,
         // NAK before any dispatch. 0 (absent / legacy) is allowed through.

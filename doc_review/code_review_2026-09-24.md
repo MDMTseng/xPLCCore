@@ -61,6 +61,10 @@ Three layers, each enough on its own:
 - Knock-on in the renderer: see R-P0-1.
 
 **3. One waiting motion command blocks the whole inbound queue**
+*Fixed 2026-09-24:* order-free SYS commands have their own ring;
+waits are deferred replies (one per kind, NAK'd on leaving Ready,
+dropped on disconnect, input waits capped at 30 s); the heartbeat is
+keyed on received packets. `tools/sim/queue_test.py` covers it.
 - `BLOCK_FOR_*` and `WAIT_FOR_REEL_STOP` stay at the queue tail until
   satisfied (`ProcessMotionPacket.st:38-106`); the drain loop stops at
   any motion packet at the tail (`DrainHostPackets.st:713-714`); the
