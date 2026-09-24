@@ -7,7 +7,7 @@
   --bg:#F1F4F2; --panel:#FFFFFF; --ink:#17201C; --muted:#5B6964; --grid:#DCE3DF; --grid2:#EBF0ED;
   --arm:#3D6E8F; --arm2:#7FA3BC; --suck:#178A73; --blow:#0E5A4B; --feed:#8C6B34; --brake:#B9975C;
   --flight:#E4CF8E; --cam:#6A4C9C; --light:#C3B2E3; --reel:#C07A12; --mark:#17201C;
-  --ok:#2E8B57; --ng:#C4392F; --band:rgba(61,110,143,.05); --lamp:#E0A800;
+  --ok:#2E8B57; --ng:#C4392F; --band:rgba(61,110,143,.05); --lamp:#E0A800; --back:#E5334B;
   --display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
   --body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI","Noto Sans TC","Microsoft JhengHei",sans-serif;
   --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
@@ -18,7 +18,7 @@
     --bg:#111715; --panel:#18201D; --ink:#E4EBE7; --muted:#92A29C; --grid:#2A3531; --grid2:#1F2825;
     --arm:#6FA3C6; --arm2:#3E6A87; --suck:#3FBF9F; --blow:#8FE3CC; --feed:#C9A45E; --brake:#7E6536;
     --flight:#6E5F33; --cam:#A58BD6; --light:#56477A; --reel:#E3A54A; --mark:#E4EBE7;
-    --ok:#4CC38A; --ng:#F06A5E; --band:rgba(111,163,198,.07); --lamp:#FFD45C;
+    --ok:#4CC38A; --ng:#F06A5E; --band:rgba(111,163,198,.07); --lamp:#FFD45C; --back:#FF5A6E;
   }
 }
 :root[data-theme="dark"]{
@@ -26,7 +26,7 @@
   --bg:#111715; --panel:#18201D; --ink:#E4EBE7; --muted:#92A29C; --grid:#2A3531; --grid2:#1F2825;
   --arm:#6FA3C6; --arm2:#3E6A87; --suck:#3FBF9F; --blow:#8FE3CC; --feed:#C9A45E; --brake:#7E6536;
   --flight:#6E5F33; --cam:#A58BD6; --light:#56477A; --reel:#E3A54A; --mark:#E4EBE7;
-  --ok:#4CC38A; --ng:#F06A5E; --band:rgba(111,163,198,.07); --lamp:#FFD45C;
+  --ok:#4CC38A; --ng:#F06A5E; --band:rgba(111,163,198,.07); --lamp:#FFD45C; --back:#FF5A6E;
 }
 body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:14px;line-height:1.55}
 .wrap{max-width:1280px;margin:0 auto;padding-inline:16px;padding-block:28px 48px;display:flex;flex-direction:column;gap:22px}
@@ -168,6 +168,7 @@ tr{cursor:pointer}
         <span><i class="sw" style="background:var(--flight)"></i>柔震盤燈</span>
         <span><i class="sw" style="background:var(--cam)"></i>相機觸發</span>
         <span><i class="sw" style="background:var(--lamp)"></i>打光</span>
+        <span><i class="sw" style="background:var(--back)"></i>側面背光</span>
         <span><i class="sw" style="background:var(--reel)"></i>捲料</span>
         <span>◆ 視覺結果</span>
         <span style="color:var(--ok)">▲ 放料</span>
@@ -449,15 +450,23 @@ label(X(ST.wait[0]), Y(ST.wait[1])-10, "等待位");
 // inspection station: bottom camera (circle) and side camera (bar)
 tel("circle",{cx:X(ST.insp[0]),cy:Y(ST.insp[1]),r:7*SC,fill:"var(--grid2)",stroke:"var(--cam)","stroke-width":2});
 const btmFlash = tel("circle",{cx:X(ST.insp[0]),cy:Y(ST.insp[1]),r:7*SC,fill:"var(--cam)",opacity:0});
-const sideFlash = tel("rect",{x:X(ST.insp[0])+8*SC,y:Y(ST.insp[1])-4*SC,width:5*SC,height:8*SC,rx:2,fill:"var(--cam)",opacity:.25});
-// side light: a beam from the side camera onto the part
+// side camera (right, lens pointing at the part) -- flashes on a side shot
+const sideCam = tel("g",{opacity:.45});
+tel("path",{d:`M${X(ST.insp[0])+9*SC} ${Y(ST.insp[1])-2*SC} L${X(ST.insp[0])+12*SC} ${Y(ST.insp[1])-3.5*SC} L${X(ST.insp[0])+12*SC} ${Y(ST.insp[1])+3.5*SC} L${X(ST.insp[0])+9*SC} ${Y(ST.insp[1])+2*SC} Z`,fill:"var(--cam)"},sideCam);
+tel("rect",{x:X(ST.insp[0])+12*SC,y:Y(ST.insp[1])-4*SC,width:7*SC,height:8*SC,rx:2,fill:"var(--cam)"},sideCam);
+const sideFlash = sideCam;
+// side light: a red backlight panel on the far side of the part from the
+// side camera (the camera sees the part's silhouette against it)
 const icx = X(ST.insp[0]), icy = Y(ST.insp[1]);
-const sideLamp = tel("path",{d:`M${icx+8*SC} ${icy-4*SC} L${icx} ${icy-2*SC} L${icx} ${icy+2*SC} L${icx+8*SC} ${icy+4*SC} Z`,fill:"var(--lamp)",opacity:0});
+tel("rect",{x:icx-13*SC,y:icy-6*SC,width:3*SC,height:12*SC,rx:1.5,fill:"var(--back)",opacity:.25});
+const sideLamp = tel("g",{opacity:0});
+tel("rect",{x:icx-14.5*SC,y:icy-7.5*SC,width:6*SC,height:15*SC,rx:3,fill:"var(--back)",opacity:.35},sideLamp);
+tel("rect",{x:icx-13*SC,y:icy-6*SC,width:3*SC,height:12*SC,rx:1.5,fill:"var(--back)"},sideLamp);
 // bottom light: a ring around the bottom camera
 const btmLamp = tel("circle",{cx:icx,cy:icy,r:9.5*SC,fill:"none",stroke:"var(--lamp)","stroke-width":5,opacity:0});
 label(X(ST.insp[0]), Y(ST.insp[1]) + 7*SC + 14, "底部 / 側面相機");
 // which shot just fired: "側 1" / "側 2" beside the side camera, "底" on the bottom one
-const sideTag = tel("text",{x:X(ST.insp[0])+14*SC,y:Y(ST.insp[1])+4,"font-size":15,"font-weight":700,fill:"var(--cam)"});
+const sideTag = tel("text",{x:X(ST.insp[0])+21*SC,y:Y(ST.insp[1])+5,"font-size":15,"font-weight":700,fill:"var(--cam)"});
 const btmTag = tel("text",{x:X(ST.insp[0]),y:Y(ST.insp[1])-8*SC-4,"text-anchor":"middle","font-size":15,"font-weight":700,fill:"var(--cam)"});
 const SIDE = L.side.filter(x => x.k === "shot"), BTM = L.btm.filter(x => x.k === "shot");
 // side shot ordinal within one part: a shot > 600 ms after the previous one starts a new part
@@ -467,19 +476,28 @@ const TAG_MS = 300;
 // inspection inset: bottom camera (circle), side camera (box), part at the nozzle
 const insp = $("insp");
 const isp = (tag, a, parent = insp) => el(tag, a, parent);
-const IC = {x: 130, y: 64}, SC2 = {x: 272, y: 64};
+const IC = {x: 150, y: 64}, SC2 = {x: 290, y: 64};
 isp("circle",{cx:IC.x,cy:IC.y,r:44,fill:"var(--grid2)",stroke:"var(--cam)","stroke-width":2});
 const iBtmLamp = isp("circle",{cx:IC.x,cy:IC.y,r:52,fill:"none",stroke:"var(--lamp)","stroke-width":7,opacity:0});
 const iBtmFlash = isp("circle",{cx:IC.x,cy:IC.y,r:44,fill:"var(--cam)",opacity:0});
-const iSideLamp = isp("path",{d:`M${SC2.x-22} ${IC.y-20} L${IC.x+14} ${IC.y-7} L${IC.x+14} ${IC.y+7} L${SC2.x-22} ${IC.y+20} Z`,fill:"var(--lamp)",opacity:0});
-isp("rect",{x:SC2.x-22,y:SC2.y-26,width:44,height:52,rx:6,fill:"var(--grid2)",stroke:"var(--cam)","stroke-width":2});
-const iSideFlash = isp("rect",{x:SC2.x-22,y:SC2.y-26,width:44,height:52,rx:6,fill:"var(--cam)",opacity:0});
+// red backlight left of the part, side camera (body + lens) on the right
+const BLX = IC.x - 78;
+isp("rect",{x:BLX-6,y:IC.y-40,width:12,height:80,rx:4,fill:"var(--back)",opacity:.22});
+const iSideLamp = isp("g",{opacity:0});
+isp("rect",{x:BLX-14,y:IC.y-50,width:28,height:100,rx:10,fill:"var(--back)",opacity:.3},iSideLamp);
+isp("rect",{x:BLX-6,y:IC.y-40,width:12,height:80,rx:4,fill:"var(--back)"},iSideLamp);
+isp("path",{d:`M${SC2.x-44} ${SC2.y-8} L${SC2.x-24} ${SC2.y-16} L${SC2.x-24} ${SC2.y+16} L${SC2.x-44} ${SC2.y+8} Z`,fill:"var(--grid2)",stroke:"var(--cam)","stroke-width":2});
+isp("rect",{x:SC2.x-24,y:SC2.y-22,width:48,height:44,rx:6,fill:"var(--grid2)",stroke:"var(--cam)","stroke-width":2});
+const iSideFlash = isp("g",{opacity:0});
+isp("path",{d:`M${SC2.x-44} ${SC2.y-8} L${SC2.x-24} ${SC2.y-16} L${SC2.x-24} ${SC2.y+16} L${SC2.x-44} ${SC2.y+8} Z`,fill:"var(--cam)"},iSideFlash);
+isp("rect",{x:SC2.x-24,y:SC2.y-22,width:48,height:44,rx:6,fill:"var(--cam)"},iSideFlash);
 const iNozzle = isp("circle",{cx:IC.x,cy:IC.y,r:9,fill:"var(--arm)",opacity:0});
 const iPart = isp("rect",{x:IC.x-7,y:IC.y-7,width:14,height:14,rx:2,fill:"var(--suck)",stroke:"var(--panel)","stroke-width":2,opacity:0});
-const iBtmTag = isp("text",{x:IC.x-58,y:IC.y-36,"text-anchor":"middle","font-size":22,"font-weight":700,fill:"var(--cam)"});
+const iBtmTag = isp("text",{x:IC.x+40,y:IC.y-44,"text-anchor":"middle","font-size":20,"font-weight":700,fill:"var(--cam)"});
 const iSideTag = isp("text",{x:SC2.x,y:SC2.y+8,"text-anchor":"middle","font-size":20,"font-weight":700,fill:"var(--ink)"});
 isp("text",{x:IC.x,y:124,"text-anchor":"middle",fill:"var(--muted)","font-size":12}).textContent = "底部相機";
 isp("text",{x:SC2.x,y:124,"text-anchor":"middle",fill:"var(--muted)","font-size":12}).textContent = "側面相機";
+isp("text",{x:BLX,y:124,"text-anchor":"middle",fill:"var(--muted)","font-size":12}).textContent = "側面背光";
 
 // tape: cells slide with the reel
 const tapeY = Y(ST.slot[1]), tx0 = ST.slot[0] - 3*ST.pitch, tx1 = ST.slot[0] + 9*ST.pitch;
@@ -656,7 +674,7 @@ function drawTop(t){
   iNozzle.setAttribute("opacity", atInsp ? .9 : 0);
   iPart.setAttribute("opacity", atInsp && active(L.nozzle, "suck", t) ? 1 : 0);
   $("inspArm").textContent = atInsp ? `手臂在檢查位 · Z ${p[3].toFixed(1)}` : "";
-  sideFlash.setAttribute("opacity", side ? .95 : .25);
+  sideFlash.setAttribute("opacity", side ? 1 : .45);
   topFlash.setAttribute("opacity", topShot ? .4 : 0);
   feederFlash.setAttribute("opacity", feedShot ? 1 : 0);
   chip.cam.classList.toggle("on", btm || side || topShot || feedShot);
@@ -666,16 +684,16 @@ function drawTop(t){
   const lTopSide = lamp("top", [3], FLASH_MS), lTopFront = lamp("top", [15], FLASH_MS);
   plateGlow.setAttribute("opacity", light || lFeed ? .7 : 0);
   feederLamp.setAttribute("opacity", lFeed || light ? .9 : 0);
-  sideLamp.setAttribute("opacity", lSide ? .85 : 0);
+  sideLamp.setAttribute("opacity", lSide ? 1 : 0);
   btmLamp.setAttribute("opacity", lBtm ? .9 : 0);
-  iSideLamp.setAttribute("opacity", lSide ? .8 : 0);
+  iSideLamp.setAttribute("opacity", lSide ? 1 : 0);
   iBtmLamp.setAttribute("opacity", lBtm ? .9 : 0);
   topSideLamp.setAttribute("opacity", lTopSide ? 1 : 0);
   topFrontLamp.setAttribute("opacity", lTopFront ? .95 : 0);
   insetSide.setAttribute("opacity", lTopSide ? 1 : 0);
   insetFront.setAttribute("opacity", lTopFront ? .9 : 0);
   insetFlash.setAttribute("opacity", active(L.top, "shot", t, FLASH_MS) ? .25 : 0);
-  const lampsOn = [[light || lFeed, "柔震盤"], [lSide, "側面"], [lBtm, "底部"], [lTopSide, "頂部側光"], [lTopFront, "頂部正面光"]].filter(x => x[0]).map(x => x[1]);
+  const lampsOn = [[light || lFeed, "柔震盤"], [lSide, "側面背光"], [lBtm, "底部"], [lTopSide, "頂部側光"], [lTopFront, "頂部正面光"]].filter(x => x[0]).map(x => x[1]);
   chip.lamp.classList.toggle("on", lampsOn.length > 0);
   plate.setAttribute("transform", vib ? `translate(${(Math.sin(t/9)*2.5).toFixed(1)},${(Math.cos(t/7)*1.5).toFixed(1)})` : "translate(0,0)");
   plate.setAttribute("stroke-width", brake ? 5 : 2);
