@@ -51,8 +51,15 @@ class Collector:
     """Polls GET /e and keeps every event, in order. Shares the PLC's
     one-connection HTTP server with vision_mock.py; keep the rate low."""
 
-    def __init__(self, plc, period=0.3):   # 1024-event ring: minutes of headroom
+    def __init__(self, plc, period=0.3, sink=None):   # 1024-event ring: minutes of headroom
         self.url = "http://%s:8126/e?s=%%d" % plc
+        # sink: CSV path written as events arrive (vision_mock collects this
+        # way, so the PLC's one-connection HTTP server has a single client).
+        self.sink = None
+        if sink:
+            self.sink = open(sink, "w", newline="")
+            self.sink.write("seq,t_ms,kind,val\n")
+            self.sink.flush()
         self.period = period
         self.events = []          # (seq, t_ms, kind, val)
         self.next = None          # next seq to ask for
@@ -82,6 +89,10 @@ class Collector:
                 self.lost += seq - self.next
             self.events.append((seq, t, k, v))
             self.next = seq + 1
+            if self.sink:
+                self.sink.write("%d,%d,%d,%d\n" % (seq, t, k, v))
+        if self.sink:
+            self.sink.flush()
 
     def run(self):
         while not self._stop.is_set():
@@ -166,6 +177,37 @@ def analyze(events, out=print):
         out(_stats(k, v, 700 if k == "top result" else None))
     gaps = [events[b][1] - events[a][1] for a, b in zip(anchors, anchors[1:])]
     out(_stats("place to next place", gaps))
+
+    # Is the arm out of the top camera's view when it shoots? XY distance
+    # from above the middle slot (CalibPage SLOT_LOCATION + 8 mm) at each
+    # top-camera trigger, from the pose samples (kinds 11/12).
+    mid = (41.7 + 8.0, -79.752)
+    poses, cur = [], {}
+    for e in events:
+        if e[2] in (POSE_X, POSE_Y):
+            cur[e[2]] = signed(e[3])
+            if e[2] == POSE_Y and POSE_X in cur:
+                poses.append((e[1], cur[POSE_X], cur[POSE_Y]))
+
+    def xy_at(t):
+        # linear between the samples around t (they are 50 ms apart and the
+        # arm covers up to ~75 mm in that time)
+        for (t0, x0, y0), (t1, x1, y1) in zip(poses, poses[1:]):
+            if t0 <= t <= t1:
+                f = (t - t0) / max(1, t1 - t0)
+                return x0 + (x1 - x0) * f, y0 + (y1 - y0) * f
+        return None
+
+    dists = []
+    for e in events:
+        if e[2] == OUT_ON and e[3] == 14:
+            p = xy_at(e[1])
+            if p:
+                dists.append(((p[0] - mid[0]) ** 2 + (p[1] - mid[1]) ** 2) ** 0.5)
+    if dists:
+        near = sum(1 for d in dists if d < 30)
+        out("  arm XY distance from the tape at a top shot: min %.0f  median %.0f mm  (%d of %d shots under 30 mm)"
+            % (min(dists), statistics.median(dists), near, len(dists)))
 
     vib = [i for i, e in enumerate(events) if e[2] == HOST and e[3] == MARK["VIB_ON"]]
     out("feeder path, from vibration on, %d refills:" % len(vib))

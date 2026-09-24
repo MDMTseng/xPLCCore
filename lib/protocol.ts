@@ -163,6 +163,19 @@ export interface M4ImmediatePinOpArgs {
   ttl_ms?: number;   // default 2000
 }
 
+// Pin op that fires when the arm crosses a sphere around (x, y, z):
+// leaving it (inside=false, e.g. "arm clear of the camera view") or
+// entering it (inside=true). Same stage list as M4ImmediatePinOpArgs.
+// On TTL expiry the PLC pushes TRIGGER_TIMEOUT_ERR with event_id.
+export interface M4DistancePinOpArgs {
+  x: number; y: number; z: number;
+  radius: number;
+  inside?: boolean;             // default false: fire on leaving
+  pin_op_seq: number[];
+  event_id: number;
+  ttl_ms?: number;              // default 3000
+}
+
 export interface ReelGoArgs {
   Distance: number;
   F?: number;
@@ -437,6 +450,18 @@ export const cmd = {
     td: 1.0e9,
     tin: 1,
     ttl_ms: a.ttl_ms ?? 2000,
+    pin_op_seq: a.pin_op_seq,
+    event_id: a.event_id,
+  }),
+  // Distance-gated pin op (trig 120 with a real sphere). See M4DistancePinOpArgs.
+  M4DistancePinOp: (a: M4DistancePinOpArgs) => env<M4Reply>({
+    type: 'M', cmd: 'M4',
+    motion_id: 0,
+    trig: 120,
+    tx: a.x, ty: a.y, tz: a.z,
+    td: a.radius,
+    tin: a.inside ? 1 : 0,
+    ttl_ms: a.ttl_ms ?? 3000,
     pin_op_seq: a.pin_op_seq,
     event_id: a.event_id,
   }),

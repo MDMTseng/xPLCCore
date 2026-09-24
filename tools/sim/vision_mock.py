@@ -43,9 +43,13 @@ import json
 import os
 import random
 import socket
+import sys
 import threading
 import time
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import event_log  # noqa: E402
 
 FEEDER_ID, SIDE_ID, BTM_ID, TOP_ID = 104500, 114500, 124500, 134500
 
@@ -274,11 +278,25 @@ class Server:
                 self.client = None
 
 
-def poll_plc(server, world, url, period, reel_cell):
+def poll_plc(server, world, url, period, reel_cell, events_out=None, plc_host=None):
     prev = None
     reel_cells = None
     top_pending = False
+    collector, n = None, 0
     while True:
+        # Event log (event_log.py): fetched in this same loop, between /v
+        # polls, so the PLC's one-connection HTTP server only ever sees one
+        # client. Starts when run_virtual.py creates <events_out>.start.
+        n += 1
+        if events_out and n % 6 == 0:
+            if collector is None and os.path.exists(events_out + ".start"):
+                collector = event_log.Collector(plc_host, sink=events_out)
+            if collector is not None:
+                try:
+                    collector.poll_once()
+                except Exception as e:
+                    collector.errors += 1
+                    log("event poll failed:", e)
         try:
             # 2.5 s, not less: the PLC's HTTP server accepts one connection
             # at a time, and while it is busy Windows re-sends our SYN only
@@ -362,12 +380,15 @@ def main():
     ap.add_argument("--reel-cell", type=float, default=8.0,
                     help="reel axis units per tape cell (CalibPage REEL_CELL_DISTANCE)")
     ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--events-out", default=None,
+                    help="collect the PLC event log into this CSV once <path>.start exists")
     a = ap.parse_args()
 
     world = World(a.ng_side, a.ng_btm, a.ng_tape, random.Random(a.seed))
     server = Server(world, a.port)
     threading.Thread(target=listen_feeder, args=(world, a.feeder_udp), daemon=True).start()
-    threading.Thread(target=poll_plc, args=(server, world, "http://%s/v" % a.plc, a.poll_ms / 1000.0, a.reel_cell),
+    threading.Thread(target=poll_plc, args=(server, world, "http://%s/v" % a.plc, a.poll_ms / 1000.0, a.reel_cell,
+                                            a.events_out, a.plc.split(":")[0]),
                      daemon=True).start()
     server.serve()
 

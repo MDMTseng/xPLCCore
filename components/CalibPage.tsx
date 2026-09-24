@@ -715,6 +715,13 @@ export const CalibPage: React.FC<{
     const REEL_ADV_MOVE={F:5000,ACC:100000,DEA:10000,JERK:100000};
     const REEL_STOP_TIMEOUT_MS=3000;
     const REEL_SETTLE_MS=20;   // after the reel stops, before the top-camera lights
+    // The top camera looks down on the three slots, so the arm must be out
+    // of its view before the lights fire: the shots wait until the arm is
+    // TOP_CAM_CLEAR_MM away from above the middle slot (at safe Z, so a
+    // nozzle rising straight up from a slot still counts as "in view").
+    // Without it a place with no tape advance shot ~50 ms after the vacuum
+    // break, straight into the arm. Tune on the machine.
+    const TOP_CAM_CLEAR_MM=40;
     let topShotEventId=900000;
 
 
@@ -748,14 +755,17 @@ export const CalibPage: React.FC<{
       console.log("TRIGGER top check data");
 
       // 2. Top camera, two shots (side light, then front light 80 ms
-      //    later), fired right away: the tape is already still.
+      //    later), once the tape is still and the arm is out of view.
       let lastPinOpSeq=[//top check camera trigger IO
         REEL_SETTLE_MS, 1<<IO_Pins.O.CAM_Top_SideLight|1<<IO_Pins.O.CAM_Top, 1<<IO_Pins.O.CAM_Top_SideLight|1<<IO_Pins.O.CAM_Top,
         1, 1<<IO_Pins.O.CAM_Top_SideLight|1<<IO_Pins.O.CAM_Top, 0,
        80, 1<<IO_Pins.O.CAM_Top_Light0|1<<IO_Pins.O.CAM_Top, 1<<IO_Pins.O.CAM_Top_Light0|1<<IO_Pins.O.CAM_Top,
        1, 1<<IO_Pins.O.CAM_Top_Light0|1<<IO_Pins.O.CAM_Top, 0,]
 
-      await sendTcpMsgPack(cmd.M4ImmediatePinOp({pin_op_seq:lastPinOpSeq,event_id:++topShotEventId}));
+      await sendTcpMsgPack(cmd.M4DistancePinOp({
+        x:slotLocation.X+slotDist, y:slotLocation.Y, z:safe_z, radius:TOP_CAM_CLEAR_MM,
+        pin_op_seq:lastPinOpSeq, event_id:++topShotEventId,
+      }));
 
       console.log("lastPinOpSeq",lastPinOpSeq);
 

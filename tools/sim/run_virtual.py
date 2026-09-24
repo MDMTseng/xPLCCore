@@ -242,7 +242,12 @@ def main():
     try:
         plc_prepare()
         procs.append(start("remote_harness", [sys.executable, os.path.join(SCRIPTS, "internals", "remote_harness.py")]))
-        mock = [sys.executable, os.path.join(REPO, "tools", "sim", "vision_mock.py"), "--plc", "%s:8126" % a.plc]
+        events_csv = os.path.join(LOGS, "events.csv")
+        for stale in (events_csv, events_csv + ".start"):
+            if os.path.exists(stale):
+                os.remove(stale)
+        mock = [sys.executable, os.path.join(REPO, "tools", "sim", "vision_mock.py"), "--plc", "%s:8126" % a.plc,
+                "--events-out", events_csv]
         for opt in ("ng_side", "ng_btm", "ng_tape", "seed"):
             if getattr(a, opt) is not None:
                 mock += ["--" + opt.replace("_", "-"), str(getattr(a, opt))]
@@ -279,7 +284,8 @@ def main():
         if a.parts:
             a.cycles = 10 ** 6            # run until the plan completes
         log("plan:", push("set_plan", {"plan": plan}, timeout=10))
-        collector = event_log.Collector(a.plc).start()
+        open(events_csv + ".start", "w").close()      # vision_mock starts collecting
+        collector = events_csv
         log("run_cycle:", push("run_cycle", timeout=10))
 
         base = top_checks()                 # the mock log is per run, but be safe
@@ -317,12 +323,13 @@ def main():
             pass
     finally:
         if collector is not None:
-            collector.stop()
-            path = os.path.join(LOGS, "events.csv")
-            collector.save(path)
-            log("event log: %d events -> %s (lost %d, poll errors %d)" % (
-                len(collector.events), path, collector.lost, collector.errors))
-            event_log.analyze(collector.events)
+            time.sleep(0.5)                               # last event poll
+            try:
+                events = event_log.load(collector)
+                log("event log: %d events -> %s" % (len(events), collector))
+                event_log.analyze(events)
+            except (OSError, ValueError) as e:
+                log("event log unreadable:", e)
         for p in reversed(procs):
             try:
                 p.terminate()
