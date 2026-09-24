@@ -1,7 +1,10 @@
 
 PROGRAM AxisGroupSM
     VAR CONSTANT
-        FlyEventBufferSize: UDINT := 10;
+        // 32: one busy cycle can hold the tape shots (DistanceTrigger, up to
+        // 3 s), side/bottom shots, lights and a feeder refill at once; 10
+        // ran out (flyevent_buffer_full, chaos seed 53, 2026-09-25).
+        FlyEventBufferSize: UDINT := 32;
         TaskInstructionBufferSize: UDINT := 10;
         FlyEventStageLimit: INT := 9;
 
