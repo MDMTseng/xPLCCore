@@ -303,21 +303,21 @@ serves it; `tools/sim/event_log.py` collects and analyses, and
 `tools/sim/run_virtual.py` does both on every run
 (`sim_logs/events.csv`).
 
-Baseline, all-virtual scene, 30 places (2026-09-24). Vision replies
-come from the mock (fixed 150/250 ms), so only the PLC-side numbers
-are meaningful:
+Baseline, all-virtual scene (2026-09-24). Vision replies come from the
+mock (~250 ms after the first top pulse), so only the PLC-side numbers
+are meaningful. "After" = the tape step starts before a feeder refill
+is awaited (it used to start after the pick move, so a refill in the
+same cycle delayed it up to ~0.7 s):
 
-| from vacuum break after placing | median | p90 |
+| from vacuum break after placing | before: median / p90 / max | after: median / p90 / max |
 |---|---|---|
-| reel start (waits for the arm's next move) | 92 ms | 1127 ms |
-| reel stop | 133 ms | 1168 ms |
-| top shot 1 / shot 2 | 181 / 262 ms | 296 / 352 ms |
-| top result (mock) | 535 ms | 678 ms |
-| place to next place | 1239 ms | 1714 ms |
+| reel start (only places that advance) | 76 / 180 / 771 ms | 35 / 40 / 233 ms |
+| top shot 2 | 261 / 327 / 958 ms | 216 / 262 / 1090 ms |
+| top result (mock vision) | 535 / 678 / 1327 ms | 464 / 521 / 1109 ms |
+| place to next place | 1239 / 1714 ms | 1211 / 1291 ms |
 
-The p90 tail of the reel start is real: when a feeder refill falls in
-the same cycle, the renderer finishes the refill before the arm moves
-on, and the tape step waits for that move (~0.6 s later). The feeder
+The remaining top-result outliers are all in "shot 2 -> result", i.e.
+the mock's reply; re-measure with VisionMaster. The feeder
 path reaches its result ~1.5 s after vibration on; ~1 s of that is the
 fixed delays in `checkFlexFeederPlate` (vibrate 160 ms, wait 120 ms,
 brake held 700 ms) -- the first thing to tune against the ~1 s target.
