@@ -31,9 +31,9 @@ SCENARIOS = [
     ("5", "各 5%", (0.05, 0.05, 0.05), ""),
     ("0p5", "各 0.5%", (0.005, 0.005, 0.005), ""),
     ("0", "0%", (0.0, 0.0, 0.0), ""),
-    # single lost vision replies: each costs that part (back to the feeder),
-    # the batch still completes (~10 s per drop)
-    ("drop", "0% + 丟 3 個視覺回覆", (0.0, 0.0, 0.0), "114500:5,134500:7,124500:14"),
+    # one lost vision reply: the cycle stops (a late reply could be taken for
+    # the next part's), cleanly, with the reason shown
+    ("drop", "0% + 丟 1 個側面回覆", (0.0, 0.0, 0.0), "114500:5"),
 ]
 SEED = 7
 
@@ -53,6 +53,19 @@ def run_scenario(name, rates, drops, a):
     return p.returncode, p.stdout + p.stderr
 
 
+def check_stop_on_timeout(folder, output, add, results):
+    """A lost vision reply must stop the cycle: reason shown, arm lifted."""
+    add("stopped with the timeout as reason", "no SideCheckData reply" in output,
+        "running state shows the timeout" if "no SideCheckData reply" in output else "no timeout error seen")
+    try:
+        events = E.load(os.path.join(folder, "events.csv"))
+        z = [E.signed(e[3]) for e in events if e[2] == E.POSE_Z]
+        add("arm lifted to safe Z after the stop", z and z[-1] >= 11.5, "last Z %.1f" % (z[-1] if z else float("nan")))
+    except (OSError, ValueError) as e:
+        add("logs readable", False, str(e))
+    return results
+
+
 def check(name, a, rc, output, drops=""):
     folder = os.path.join(RUNS, "reg_" + name)
     results = []
@@ -61,6 +74,8 @@ def check(name, a, rc, output, drops=""):
         results.append((what, bool(ok), detail))
 
     add("run finished", rc == 0 and "STALL" not in output, "exit %d%s" % (rc, ", STALL" if "STALL" in output else ""))
+    if drops:
+        return check_stop_on_timeout(folder, output, add, results)
     try:
         d = gantt.build_run(folder)
         events = E.load(os.path.join(folder, "events.csv"))

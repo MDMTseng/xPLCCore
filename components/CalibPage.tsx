@@ -283,12 +283,17 @@ export const CalibPage: React.FC<{
   // Bounded: a reply that never comes (vision down, callback not
   // registered, trigger lost) used to stall the cycle forever with no
   // error (review 2026-09-24 R-P0-2).
-  // A single lost reply costs that one part (callers treat undefined as
-  // "not inspected" and send the part back to the feeder); only
-  // VISION_TIMEOUT_STOP timeouts in a row -- vision itself is gone -- stop
-  // the cycle.
+  // A timed-out reply stops the cycle (VISION_TIMEOUT_STOP = 1). Replies
+  // carry only the camera's check ID, not which shot they belong to: a
+  // reply that is late rather than lost would be taken as the *next*
+  // part's result, and that part judged on the wrong image. Stopping lets
+  // someone look (owner, 2026-09-24; it has not happened on the machine).
+  // With a per-shot sequence number from vision the replies could be
+  // matched exactly; then raise this to skip just the part -- callers
+  // already treat undefined as "not inspected" and send it back to the
+  // feeder.
   const VISION_REPLY_TIMEOUT_MS=10000;
-  const VISION_TIMEOUT_STOP=3;
+  const VISION_TIMEOUT_STOP=1;
   function waitForCheckData(name:string):Promise<any>{
     return new Promise((resolve, reject)=>{
       const slot:any={};
