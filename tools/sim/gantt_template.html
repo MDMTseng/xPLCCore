@@ -397,7 +397,12 @@ function poseAt(t){
   if (t <= P[0][0]) return P[0];
   if (t >= P[hi][0]) return P[hi];
   while (hi - lo > 1){ const m = (lo + hi) >> 1; if (P[m][0] <= t) lo = m; else hi = m; }
-  const a = P[lo], b = P[hi], f = (t - a[0]) / Math.max(1, b[0] - a[0]);
+  // Samples are logged every 50 ms only while the arm moves: a longer gap
+  // means it stood still at the earlier sample until 50 ms before the next.
+  const a = P[lo], b = P[hi];
+  let ta = a[0];
+  if (b[0] - a[0] > 75){ if (t <= b[0] - 50) return [t, a[1], a[2], a[3]]; ta = b[0] - 50; }
+  const f = (t - ta) / Math.max(1, b[0] - ta);
   return [t, a[1] + (b[1]-a[1])*f, a[2] + (b[2]-a[2])*f, a[3] + (b[3]-a[3])*f];
 }
 // Camera pulses are 1-50 ms: keep them visible for at least `min` ms.

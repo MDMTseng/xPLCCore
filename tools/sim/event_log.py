@@ -191,10 +191,15 @@ def analyze(events, out=print):
                 poses.append((e[1], cur[POSE_X], cur[POSE_Y]))
 
     def xy_at(t):
-        # linear between the samples around t (they are 50 ms apart and the
-        # arm covers up to ~75 mm in that time)
+        # Between the samples around t. Samples are logged every 50 ms only
+        # while the arm moves, so a longer gap means it stood still at the
+        # earlier sample until the last 50 ms before the later one.
         for (t0, x0, y0), (t1, x1, y1) in zip(poses, poses[1:]):
             if t0 <= t <= t1:
+                if t1 - t0 > 75:
+                    if t <= t1 - 50:
+                        return x0, y0
+                    t0 = t1 - 50
                 f = (t - t0) / max(1, t1 - t0)
                 return x0 + (x1 - x0) * f, y0 + (y1 - y0) * f
         return None
