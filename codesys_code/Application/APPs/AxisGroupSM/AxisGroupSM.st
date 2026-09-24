@@ -856,7 +856,19 @@ PROGRAM AxisGroupSM
    //OutputCHs[3]:=InputCHs[2];
 	
 	
-   // DigitalInputPointer := IoConfig_Globals.HECAT_1616.InputData;//////////////////////////////////////////////
+   // Digital inputs. The first machine read them from a HECAT_1616 module
+   // that is not in this machine's device tree, so the line was commented
+   // out and every input read 0 (review 2026-09-24 P0-2). Here the coupler's
+   // two input bytes are InputCHs[1] (%IB8, inputs 0-7) and InputCHs[2]
+   // (%IB9, inputs 8-15), the same mapping as the outputs.
+   // GVL.SimDigitalInputEnable substitutes GVL.SimDigitalInput for the
+   // all-virtual scene, where the tape sensors the renderer's input
+   // watchdog checks do not exist.
+   IF GVL.SimDigitalInputEnable THEN
+       DigitalInputPointer := ADR(GVL.SimDigitalInput);
+   ELSE
+       DigitalInputPointer := ADR(InputCHs[1]);
+   END_IF
 
     IF DigitalInputPointer <> 0 THEN//TrackDigitalInputFlips
         DigitalInputBits_Curr := TO_ULINT(DigitalInputPointer[0]) OR SHL(TO_ULINT(DigitalInputPointer[1]), 8);

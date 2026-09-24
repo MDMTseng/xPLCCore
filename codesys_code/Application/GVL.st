@@ -500,6 +500,16 @@ VAR_GLOBAL
 	BUILD_GIT_SHA : STRING(40) := 'unknown';
 	BUILD_TS_MS   : LINT       := 0;
 
+	(* All-virtual scene: when TRUE, AxisGroupSM reads its digital inputs
+	   from SimDigitalInput instead of the coupler (InputCHs[1..2]). Byte 0 =
+	   inputs 0-7, byte 1 = inputs 8-15. 16#0C in byte 1 is "all normal" for
+	   the renderer's input watchdog (CalibPage.tsx IO_Pins.I):
+	   bit 11 PackedReelNoProtrusion = 1, bit 10 ReelPressRollerInPlace = 1,
+	   bit 9 ReelTapeHTension = 0, bit 8 ReelLacking = 0.
+	   Not retained: a download or restart returns to the real inputs. *)
+	SimDigitalInputEnable : BOOL := FALSE;
+	SimDigitalInput       : ARRAY[0..1] OF USINT := [16#00, 16#0C];
+
 END_VAR
 
 VAR_GLOBAL RETAIN

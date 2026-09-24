@@ -32,7 +32,8 @@ IF fbConn.xActive AND NOT xResponded THEN
     eRx := fbConn.Read(ADR(abyReq), SIZEOF(abyReq), udiCount => udiReqCount);
     IF eRx = NBS.ERROR.NO_ERROR AND udiReqCount >= 6 THEN
         udiRequests := udiRequests + 1;
-        // Request line: "GET /s ..." -> JSON, "GET / ..." -> page.
+        // Request line: "GET /s" -> status JSON, "GET /v" -> sim JSON,
+        // "GET / " -> page.
         IF abyReq[5] = 16#73 THEN
             sJson := '{"alive":';
             IF PRG_EcatEsp.xEspAlive THEN sJson := CONCAT(sJson, '1'); ELSE sJson := CONCAT(sJson, '0'); END_IF
@@ -50,6 +51,24 @@ IF fbConn.xActive AND NOT xResponded THEN
             sJson := CONCAT(sJson, USINT_TO_STRING(PRG_EcatEsp.byEncAgc));
             sJson := CONCAT(sJson, ',"hb":');
             sJson := CONCAT(sJson, UDINT_TO_STRING(udiRequests));
+            sJson := CONCAT(sJson, '}');
+            eTx := fbConn.Write(ADR(sHdrJson), INT_TO_UDINT(LEN(sHdrJson)));
+            eTx := fbConn.Write(ADR(sJson), INT_TO_UDINT(LEN(sJson)));
+        ELSIF abyReq[5] = 16#76 THEN
+            sJson := '{"sd":';
+            sJson := CONCAT(sJson, UDINT_TO_STRING(PRG_SimIo.udiSide));
+            sJson := CONCAT(sJson, ',"bt":');
+            sJson := CONCAT(sJson, UDINT_TO_STRING(PRG_SimIo.udiBtm));
+            sJson := CONCAT(sJson, ',"ff":');
+            sJson := CONCAT(sJson, UDINT_TO_STRING(PRG_SimIo.udiFeeder));
+            sJson := CONCAT(sJson, ',"tp":');
+            sJson := CONCAT(sJson, UDINT_TO_STRING(PRG_SimIo.udiTop));
+            sJson := CONCAT(sJson, ',"ad":');
+            sJson := CONCAT(sJson, UDINT_TO_STRING(PRG_SimIo.udiReelAdv));
+            sJson := CONCAT(sJson, ',"bx":');
+            sJson := CONCAT(sJson, REAL_TO_STRING(PRG_SimIo.rBtmX));
+            sJson := CONCAT(sJson, ',"by":');
+            sJson := CONCAT(sJson, REAL_TO_STRING(PRG_SimIo.rBtmY));
             sJson := CONCAT(sJson, '}');
             eTx := fbConn.Write(ADR(sHdrJson), INT_TO_UDINT(LEN(sHdrJson)));
             eTx := fbConn.Write(ADR(sJson), INT_TO_UDINT(LEN(sJson)));
