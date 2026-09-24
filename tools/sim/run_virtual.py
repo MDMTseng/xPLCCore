@@ -231,6 +231,8 @@ def main():
     ap.add_argument("--ng-btm", type=float, default=None, help="vision mock NG rate, bottom camera")
     ap.add_argument("--ng-tape", type=float, default=None, help="vision mock NG rate, parts in the tape")
     ap.add_argument("--seed", type=int, default=None, help="vision mock random seed")
+    ap.add_argument("--save-as", default=None,
+                    help="copy this run's logs to sim_logs/runs/<name>/ (for gantt.py --run)")
     ap.add_argument("--vision-first", action="store_true", help="connect vision before the PLC")
     ap.add_argument("--no-ui-start", action="store_true", help="UI already running with XPLC_HARNESS=1")
     a = ap.parse_args()
@@ -330,6 +332,14 @@ def main():
                 event_log.analyze(events)
             except (OSError, ValueError) as e:
                 log("event log unreadable:", e)
+        if a.save_as:
+            import shutil
+            dst = os.path.join(LOGS, "runs", a.save_as)
+            os.makedirs(dst, exist_ok=True)
+            for f in ("events.csv", "ui.log", "vision_mock.log"):
+                if os.path.exists(os.path.join(LOGS, f)):
+                    shutil.copy(os.path.join(LOGS, f), dst)
+            log("run saved to", dst)
         for p in reversed(procs):
             try:
                 p.terminate()

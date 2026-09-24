@@ -34,6 +34,9 @@ header{display:flex;flex-direction:column;gap:6px}
 .eyebrow{font-family:var(--mono);font-size:12px;color:var(--muted);letter-spacing:.04em}
 h1{font-family:var(--display);font-weight:700;font-size:clamp(28px,4.2vw,40px);line-height:1.05;margin:0;text-wrap:balance;letter-spacing:.01em}
 .lede{color:var(--muted);max-width:68ch;margin:0}
+.runsw{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.runsw button{font-size:14px;padding:6px 14px;border-radius:18px}
+.runsw button[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;background:var(--grid);border:1px solid var(--grid);border-radius:6px;overflow:hidden}
 .stat{background:var(--panel);padding:12px 14px;display:flex;flex-direction:column;gap:2px}
 .stat .k{font-size:12px;color:var(--muted)}
@@ -115,6 +118,7 @@ tr{cursor:pointer}
     <div class="eyebrow" id="eyebrow"></div>
     <h1>PackerX 虛擬產線時序</h1>
     <p class="lede" id="lede"></p>
+    <div class="runsw" id="runsw" role="group" aria-label="切換資料"></div>
   </header>
 
   <section class="stats" id="stats" aria-label="摘要"></section>
@@ -198,12 +202,14 @@ tr{cursor:pointer}
 <div class="tip" id="tip" hidden></div>
 
 <script>
-const D = /*__DATA__*/null;
+const RUNS = /*__DATA__*/null;
+function init(D, RUN, signal){
+const on = (target, type, fn) => target.addEventListener(type, fn, {signal});
 const S = D.summary;
 const fmtS = ms => (ms/1000).toFixed(1);
 const $ = id => document.getElementById(id);
 
-$("eyebrow").textContent = `全虛擬場景 · ${S.events} 筆 PLC 事件 · 1 ms 解析度`;
+$("eyebrow").textContent = `全虛擬場景 · ${RUN.label} · ${S.events} 筆 PLC 事件 · 1 ms 解析度`;
 $("lede").textContent = `隨機注入側面、底部與載帶 NG，跑到包裝完成。每一條軌道都是 PLC 在 1 ms 任務裡記下的實際動作；視覺結果、振動與柔震盤燈是渲染端打在同一時間軸上的標記。`;
 
 const stats = [
@@ -238,8 +244,11 @@ if (S.waits){
   F.push(["warn", `手臂閒置 ${S.waits} 次、共 ${fmtS(S.wait_ms)} s`,
     `${known.length ? "主要在" + known.join("、") : "原因沒有標記"}${other ? "，另有閒置期間沒有渲染端標記" : ""}（圖上紅框，滑鼠移上去看原因）。這次是視覺模擬器輪詢 PLC 變慢造成的，不是機台動作；換成真的 VisionMaster 要重新量。`]);
 }
-F.push(["note", "載帶上的 NG",
-  `放料 ${S.places} 次${S.packed != null ? `、包裝 ${S.packed} 顆` : ""}。頂部檢查看到載帶上的 NG 件 ${S.top_ng} 次，渲染端從載帶取出 NG 件 ${S.ng_picks} 次，取出後補放同一格。右側的載帶放大圖顯示每次檢查的 3 格結果。`]);
+F.push(S.top_ng
+  ? ["note", "載帶上的 NG",
+     `放料 ${S.places} 次${S.packed != null ? `、包裝 ${S.packed} 顆` : ""}。頂部檢查看到載帶上的 NG 件 ${S.top_ng} 次，渲染端從載帶取出 NG 件 ${S.ng_picks} 次，取出後補放同一格。右側的載帶放大圖顯示每次檢查的 3 格結果。`]
+  : ["note", "載帶上沒有 NG",
+     `放料 ${S.places} 次${S.packed != null ? `、包裝 ${S.packed} 顆` : ""}，頂部檢查沒有看到載帶上的 NG 件。右側的載帶放大圖顯示每次檢查的 3 格結果。`]);
 $("findings").innerHTML = F.map(([c,h,p]) => `<div class="finding ${c}"><h3>${h}</h3><p>${p}</p></div>`).join("");
 
 const LANES = [
@@ -338,7 +347,7 @@ $("zin").onclick = () => setZoom(pxPerMs*1.6);
 $("zout").onclick = () => setZoom(pxPerMs/1.6);
 $("zoom").oninput = e => setZoom(sliderToZoom(+e.target.value));
 
-svg.addEventListener("mousemove", e => {
+on(svg, "mousemove", e => {
   const it = e.target.__it;
   if (!it){ tip.hidden = true; return; }
   const dur = it.e > it.s ? ` · <b>${it.e - it.s} ms</b>` : "";
@@ -352,26 +361,26 @@ svg.addEventListener("mousemove", e => {
   tip.style.left = Math.min(window.innerWidth - r.width - 8, e.clientX + 12) + "px";
   tip.style.top = (e.clientY + 14 + r.height > window.innerHeight ? e.clientY - r.height - 10 : e.clientY + 14) + "px";
 });
-svg.addEventListener("mouseleave", () => tip.hidden = true);
+on(svg, "mouseleave", () => tip.hidden = true);
 
 // drag to pan
 // Axis strip: click or drag seeks. Anywhere else: drag pans, a plain
 // click also seeks.
 let drag = null;
 const tAtClient = cx => (cx - svg.getBoundingClientRect().left - PAD) / pxPerMs;
-scroller.addEventListener("pointerdown", e => {
+on(scroller, "pointerdown", e => {
   const y = e.clientY - svg.getBoundingClientRect().top;
   if (y <= AXIS_H + 2){ drag = {seek:true}; seek(tAtClient(e.clientX)); e.preventDefault(); return; }
   if (e.pointerType !== "mouse") return;
   drag = {x:e.clientX, s:scroller.scrollLeft, moved:false}; scroller.classList.add("drag");
 });
-window.addEventListener("pointermove", e => {
+on(window, "pointermove", e => {
   if (!drag) return;
   if (drag.seek){ seek(tAtClient(e.clientX)); return; }
   if (Math.abs(e.clientX - drag.x) > 3) drag.moved = true;
   scroller.scrollLeft = drag.s - (e.clientX - drag.x);
 });
-window.addEventListener("pointerup", e => {
+on(window, "pointerup", e => {
   if (drag && !drag.seek && !drag.moved) seek(tAtClient(e.clientX));
   drag = null; scroller.classList.remove("drag");
 });
@@ -384,7 +393,7 @@ $("rows").innerHTML = D.rows.map(r => `<tr data-t="${r.t}">
   <td>${r.why || ""}</td>
   <td class="num">${fmt(r.gap)}</td><td class="num">${fmt(r.reel)}</td><td class="num">${fmt(r.shot2)}</td>
   <td class="num ${r.topres > 700 ? "slow" : ""}">${fmt(r.topres)}</td></tr>`).join("");
-$("rows").addEventListener("click", e => {
+on($("rows"), "click", e => {
   const tr = e.target.closest("tr"); if (!tr) return;
   const t = +tr.dataset.t;
   if (pxPerMs < 0.25) setZoom(0.25, t); else scroller.scrollLeft = PAD + t*pxPerMs - scroller.clientWidth/2;
@@ -393,7 +402,8 @@ $("rows").addEventListener("click", e => {
 });
 
 // ---------------------------------------------------------------- player
-let tNow = 0, playing = false, speed = 1, lastTs = null;
+let tNow = 0, playing = false, speed = +$("speed").value, lastTs = null;
+signal.addEventListener("abort", () => { playing = false; $("play").textContent = "▶ 播放"; });
 const P = D.pose, ST = D.stations, L = D.lanes;
 
 function poseAt(t){
@@ -747,15 +757,30 @@ function setPlaying(on){
 $("play").onclick = () => setPlaying(!playing);
 $("speed").onchange = e => { speed = +e.target.value; };
 $("seek").oninput = e => { seek(+e.target.value / 1000 * S.span); follow(); };
-document.addEventListener("keydown", e => {
+on(document, "keydown", e => {
   if (e.target.closest && e.target.closest("input,select,button")) return;
   if (e.code === "Space"){ e.preventDefault(); setPlaying(!playing); }
   if (e.code === "ArrowRight") seek(tNow + 100);
   if (e.code === "ArrowLeft") seek(tNow - 100);
 });
 
-window.addEventListener("resize", () => { if (pxPerMs < MIN()) setZoom(MIN()); });
-setZoom(Math.max(MIN(), 0.12), 9000);
-seek(8900);
+on(window, "resize", () => { if (pxPerMs < MIN()) setZoom(MIN()); });
+setZoom(Math.max(MIN(), 0.12), Math.min(9000, S.span * 0.25));
+seek(Math.min(8900, S.span * 0.25));
+}
+
+// ---------------------------------------------------------------- runs
+let runCtl = null;
+function showRun(i){
+  if (runCtl) runCtl.abort();
+  runCtl = new AbortController();
+  document.querySelectorAll("#runsw button").forEach((b, k) => b.setAttribute("aria-pressed", String(k === i)));
+  for (const id of ["stats","findings","labels","top","inset","insp","chips","dl","rows","svg"]) document.getElementById(id).innerHTML = "";
+  init(RUNS[i].data, RUNS[i], runCtl.signal);
+}
+document.getElementById("runsw").innerHTML = RUNS.map((r, i) => `<button type="button" data-i="${i}">${r.label}</button>`).join("");
+document.getElementById("runsw").hidden = RUNS.length < 2;
+document.getElementById("runsw").onclick = e => { const b = e.target.closest("button"); if (b) showRun(+b.dataset.i); };
+showRun(0);
 
 </script>

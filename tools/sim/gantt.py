@@ -361,21 +361,50 @@ def tape_model(lanes, pose_at):
     return {"parts": parts}
 
 
+def packed_count(ui_log):
+    """Last packCounter the renderer reported (parts packed)."""
+    n = None
+    try:
+        with open(ui_log, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                m = re.search(r'_PACK_INFO_ \{"packCounter":(\d+)\}', line)
+                if m:
+                    n = int(m.group(1))
+    except OSError:
+        pass
+    return n
+
+
+def build_run(folder):
+    ev, ui = os.path.join(folder, "events.csv"), os.path.join(folder, "ui.log")
+    data = build(E.load(ev), toss_reasons(ui), top_results(ui), ng_picks(ui))
+    data["summary"]["packed"] = packed_count(ui)
+    return data
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--events", default=os.path.join(LOGS, "events.csv"))
-    ap.add_argument("--ui-log", default=os.path.join(LOGS, "ui.log"))
+    ap.add_argument("--run", action="append", default=[], metavar="LABEL=FOLDER",
+                    help="a run to include (folder with events.csv and ui.log, e.g. sim_logs/runs/<name>); "
+                         "repeat for several, the page switches between them. Default: sim_logs itself.")
     ap.add_argument("--out", default=os.path.join(LOGS, "gantt.html"))
-    ap.add_argument("--packed", type=int, default=None, help="parts the run packed (shown in the header)")
     a = ap.parse_args()
 
-    data = build(E.load(a.events), toss_reasons(a.ui_log), top_results(a.ui_log), ng_picks(a.ui_log))
-    data["summary"]["packed"] = a.packed
+    specs = a.run or ["最近一次=" + LOGS]
+    runs = []
+    for spec in specs:
+        label, _, folder = spec.partition("=")
+        if not os.path.isabs(folder):
+            folder = folder if os.path.isdir(folder) else os.path.join(LOGS, folder)
+        data = build_run(folder)
+        runs.append({"label": label, "data": data})
+        print("  %s: %d events, %d results, packed %s" % (label, data["summary"]["events"], len(data["rows"]),
+                                                         data["summary"]["packed"]))
     tpl = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "gantt_template.html"), encoding="utf-8").read()
-    html = tpl.replace("/*__DATA__*/null", json.dumps(data, ensure_ascii=False))
+    html = tpl.replace("/*__DATA__*/null", json.dumps(runs, ensure_ascii=False))
     with open(a.out, "w", encoding="utf-8") as f:
         f.write(html)
-    print("wrote", a.out, "(%d events, %d results)" % (data["summary"]["events"], len(data["rows"])))
+    print("wrote", a.out)
     return 0
 
 
