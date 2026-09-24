@@ -63,6 +63,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 import config
+import layout_check
 
 E_OK, E_JOB, E_REFUSED, E_TIMEOUT, E_PROTO, E_WEDGED = 0, 1, 2, 3, 4, 5
 
@@ -208,7 +209,8 @@ def cmd_exec(args):
         label = args.label or "stdin"
     rep = call_or_exit({"cmd": "exec", "code": code, "label": label,
                         "readonly": args.readonly,
-                        "snapshot": not args.no_snapshot},
+                        "snapshot": not args.no_snapshot,
+                        "plc": args.plc},
                        args.timeout)
     out = rep.get("stdout") or ""
     if out:
@@ -308,7 +310,7 @@ def cmd_yield(args):
     return E_WEDGED
 
 
-def _exec_template(name, label, timeout, readonly=False):
+def _exec_template(name, label, timeout, readonly=False, plc="keep"):
     """Run one of jobs/templates/*.py through the daemon."""
     path = os.path.join(HERE, "jobs", "templates", name)
     if not os.path.isfile(path):
@@ -317,7 +319,7 @@ def _exec_template(name, label, timeout, readonly=False):
     with open(path, "r", encoding="utf-8") as f:
         code = f.read()
     rep = call_or_exit({"cmd": "exec", "code": code, "label": label,
-                        "readonly": readonly}, timeout)
+                        "readonly": readonly, "plc": plc}, timeout)
     out = rep.get("stdout") or ""
     if out:
         print(out, end="" if out.endswith("\n") else "\n")
@@ -347,15 +349,43 @@ def cmd_push(args):
         print("push aborted at import_all", file=sys.stderr)
         return rc
 
-    if not args.no_online:
+    if args.no_online:
+        # The regression suite talks to the PLC, so "do not touch the
+        # PLC" has to skip it too. It used to run anyway, and one of its
+        # jobs logged in with Try over a layout change: that became a
+        # download of the running app and wedged the PLC (2026-09-25).
         print("")
-        print("== online_change ==")
-        rc, rep = _exec_template("online_change.py", "push:online",
-                                 args.timeout)
-        stages.append(("online_change", rc))
-        if rc != E_OK:
-            print("push aborted at online_change", file=sys.stderr)
-            return rc
+        print("--no-online: PLC untouched, regression skipped")
+        return E_OK
+
+    print("")
+    print("== layout check ==")
+    ok, msgs = layout_check.check_disk()
+    for m in msgs:
+        print("  " + m)
+    if not ok:
+        print("push refused: this edit changes the memory layout (or the",
+              file=sys.stderr)
+        print("baseline is missing), so an online change would fall back to",
+              file=sys.stderr)
+        print("a full download of the running PLC. The project is imported",
+              file=sys.stderr)
+        print("and saved; install it with someone at the machine:",
+              file=sys.stderr)
+        print("  rpc.py install --on-site", file=sys.stderr)
+        return E_JOB
+    print("  no layout change since the last deploy")
+
+    print("")
+    print("== online_change ==")
+    rc, rep = _exec_template("online_change.py", "push:online",
+                             args.timeout, plc="online_change")
+    stages.append(("online_change", rc))
+    if rc != E_OK:
+        print("push aborted at online_change", file=sys.stderr)
+        return rc
+    print("[layout] baseline: %s" % layout_check.save_baseline(
+        layout_check.scan_disk(), "push"))
 
     if not args.no_tests:
         print("")
@@ -372,6 +402,69 @@ def cmd_push(args):
     print("")
     for name, code in stages:
         print("  %-14s %s" % (name, "ok" if code == 0 else "FAILED(%d)" % code))
+    return E_OK
+
+
+def cmd_layout(args):
+    """Show or record the layout baseline used by `push`."""
+    if args.baseline_from_git:
+        files = layout_check.scan_git(args.baseline_from_git)
+        path = layout_check.save_baseline(
+            files, "git %s" % args.baseline_from_git)
+        print("baseline recorded from git %s: %s"
+              % (args.baseline_from_git, path))
+        return E_OK
+    base = layout_check.load_baseline()
+    if base:
+        print("baseline: %s (%s)" % (base["recorded"], base["how"]))
+    ok, msgs = layout_check.check_disk()
+    for m in msgs:
+        print("  " + m)
+    print("online change OK" if ok else "needs install (stop + download)")
+    return E_OK if ok else E_JOB
+
+
+def cmd_mark_synced(args):
+    """Record the open project as what the PLC runs. Every later login is
+    checked against this; get it wrong and a 'read-only' job online-
+    changes or downloads the difference (plc_guard.py). Only for when you
+    know the PLC runs exactly this project; normally push and install
+    record it themselves."""
+    if not args.i_know:
+        print("mark-synced refused: pass --i-know, and only if the PLC runs",
+              file=sys.stderr)
+        print("exactly the project that is open now.", file=sys.stderr)
+        return E_PROTO
+    rep = call_or_exit({"cmd": "exec", "label": "mark-synced",
+                        "readonly": True, "snapshot": False,
+                        "code": "print(_sync.record('mark-synced'))"},
+                       args.timeout)
+    print(rep.get("stdout", "").strip())
+    return E_OK if rep.get("ok") else E_JOB
+
+
+def cmd_install(args):
+    """Stop the application, download, start: the only way to deploy a
+    layout change. It can leave the PLC needing a power cycle when it
+    goes wrong, so it insists on someone being at the machine."""
+    if not args.on_site:
+        print("install refused: pass --on-site, and only when someone can",
+              file=sys.stderr)
+        print("power-cycle the PLC if the download wedges it.",
+              file=sys.stderr)
+        print("Check the delta arms are virtual in the project first.",
+              file=sys.stderr)
+        return E_PROTO
+    print("== install (stop_then_install) ==")
+    rc, rep = _exec_template("stop_then_install.py", "install",
+                             args.timeout, plc="download")
+    if rc != E_OK:
+        print("install failed; do NOT kill CODESYS while supervisor.py ps",
+              file=sys.stderr)
+        print("shows a plc:* phase", file=sys.stderr)
+        return rc
+    print("[layout] baseline: %s" % layout_check.save_baseline(
+        layout_check.scan_disk(), "install"))
     return E_OK
 
 
@@ -474,6 +567,12 @@ def build_parser():
                     help="job does not mutate: skip snapshot and save")
     sp.add_argument("--no-snapshot", action="store_true",
                     help="mutating job, but skip the pre-job snapshot")
+    sp.add_argument("--plc", choices=("keep", "online_change", "download"),
+                    default="keep",
+                    help="most the job may do to the PLC code. keep "
+                         "(default): login only while the project matches "
+                         "the PLC; Try becomes Keep, Force/Never refused. "
+                         "See plc_guard.py")
     sp.set_defaults(func=cmd_exec)
 
     sp = sub.add_parser("save", help="save the project without leaving")
@@ -513,8 +612,28 @@ def build_parser():
     sp.add_argument("--no-tests", action="store_true",
                     help="hot fix: skip the regression suite")
     sp.add_argument("--no-online", action="store_true",
-                    help="import and save only, do not touch the PLC")
+                    help="import and save only, do not touch the PLC "
+                         "(also skips the regression)")
     sp.set_defaults(func=cmd_push)
+
+    sp = sub.add_parser("layout", help="check the edit against the layout "
+                                       "baseline of the last deploy")
+    sp.add_argument("--baseline-from-git", metavar="REV",
+                    help="record the baseline from a git revision known "
+                         "to match the PLC")
+    sp.set_defaults(func=cmd_layout)
+
+    sp = sub.add_parser("install", help="stop app -> download -> start "
+                                        "(layout changes; needs --on-site)")
+    sp.add_argument("--on-site", action="store_true",
+                    help="someone is at the PLC and can power-cycle it")
+    sp.set_defaults(func=cmd_install)
+
+    sp = sub.add_parser("mark-synced", help="record the open project as "
+                                            "what the PLC runs")
+    sp.add_argument("--i-know", action="store_true",
+                    help="the PLC runs exactly the open project")
+    sp.set_defaults(func=cmd_mark_synced)
 
     sp = sub.add_parser("daemon-start", help="spawn CODESYS with the daemon")
     sp.add_argument("--wait", type=int, default=180)

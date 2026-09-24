@@ -742,7 +742,11 @@ PROGRAM AxisGroupSM
     // diagnostic rather than a downstream symptom.
     IF (AxisGroupManagerFb._eState <> E_RobotState.Error
         AND AxisGroupManagerFb._eState <> E_RobotState.UnInited) THEN
-        IF IoConfig_Globals.EtherCAT_Master_SoftMotion.xError THEN
+        IF IoConfig_Globals.EtherCAT_Master_SoftMotion.xError
+            AND NOT (GVL.SimNoFieldbus
+                     AND IoConfig_Globals.EAxis0.bVirtual AND IoConfig_Globals.EAxis1.bVirtual
+                     AND IoConfig_Globals.EAxis2.bVirtual AND EAXIS_A.bVirtual
+                     AND SM_Drive_GenericDSP402.bVirtual AND reelpullmotor.bVirtual) THEN
             GVL.LastErrorSource := 'Supervisor:EtherCAT_Master';
             GVL.LastErrorID := 0;
             AxisGroupManagerFb.Transition(E_RobotEvent.EV_ERROR);

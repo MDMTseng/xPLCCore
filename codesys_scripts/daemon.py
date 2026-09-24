@@ -44,8 +44,10 @@
 #      wedges you can now see WHICH STEP wedged instead of guessing.
 #
 # Wire protocol: one line-delimited JSON object each way.
-#   {"cmd":"exec","code":"...","label":"tag","readonly":false}\n
-#   -> {"ok":true,"stdout":"...","elapsed":1.23,"saved":true,...}\n
+#   {"cmd":"exec","code":"...","label":"tag","readonly":false,
+#    "plc":"keep"}\n      (plc: keep | online_change | download; see
+#                          plc_guard.py -- keep is the default)
+#   ->{"ok":true,"stdout":"...","elapsed":1.23,"saved":true,...}\n
 
 import os, sys, time, json, socket, select, threading, traceback, shutil
 
@@ -64,6 +66,7 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 import config
+import plc_guard
 
 HOST = config.rpc_host()
 PORT = config.rpc_port()
@@ -116,6 +119,11 @@ _hb_stop = threading.Event()
 # in is slow, and paying it per symbol read would push people back to
 # "just stop the daemon and click around", which is what we are fixing.
 _online = {"app": None}
+
+# What the PLC runs, as a project fingerprint. Every login is checked
+# against it, because any login applies the project/PLC difference.
+_sync = plc_guard.ProjectSync(os.path.join(STATE_DIR, "deployed_fp.json"),
+                              lambda: projects.primary)
 
 
 def set_state(phase, job=None):
@@ -287,10 +295,14 @@ def get_online(login=True):
     found = list(proj.find("Application", True) or [])
     if not found:
         raise RuntimeError("no Application object in project")
+    # Keep does NOT merely attach: when the project differs from the PLC
+    # it online-changes (code) or downloads (device config) that
+    # difference (plc_guard.py). This session only serves symbol
+    # read/write, so refuse unless the project matches the PLC.
+    ok, why = _sync.check()
+    if not ok:
+        raise RuntimeError("no PLC session: %s" % why)
     oapp = online.create_online_application(found[0])
-    # Keep: attach to whatever runs on the controller. This session only
-    # serves read/write of symbols; Try would online-change the machine
-    # whenever the project differs, turning a read into a code push.
     oapp.login(OnlineChangeOption.Keep, False)
     _online["app"] = oapp
     return oapp
@@ -326,11 +338,14 @@ def safe_logout(job_globals):
 
 # ---- job execution ---------------------------------------------------
 
-def exec_job(code, label, readonly=False, want_snapshot=True):
+def exec_job(code, label, readonly=False, want_snapshot=True,
+             plc=plc_guard.KEEP):
     """Run a job as a transaction:
 
         snapshot (unless readonly) -> exec -> safe_logout -> save
-    """
+
+    `plc` is the most the job may do to the code on the PLC. The job
+    sees a guarded `online` whose login() enforces it (plc_guard.py)."""
     snap_path = None
     if not readonly and want_snapshot:
         snap_path = snapshot_project(label)
@@ -345,6 +360,11 @@ def exec_job(code, label, readonly=False, want_snapshot=True):
     err = ""
     job_globals = dict(globals())
     job_globals["__name__"] = "__main__"
+    guard = plc_guard.Guard(
+        plc, OnlineChangeOption.Keep, _sync,
+        set_phase=lambda phase: set_state(phase),
+        log=lambda msg: buf.write(msg + "\n"), label=label)
+    job_globals["online"] = plc_guard.GuardedOnline(online, guard)
     try:
         try:
             compiled = compile(code, "<rpc:%s>" % label, "exec")
@@ -613,12 +633,17 @@ def handle_client(sock):
             label = (req.get("label") or "(unnamed)")[:60]
             readonly = bool(req.get("readonly"))
             want_snapshot = req.get("snapshot", True)
+            plc = req.get("plc") or plc_guard.KEEP
+            if plc not in plc_guard.MODES:
+                send_json(sock, {"ok": False, "stdout": "", "elapsed": 0.0,
+                                 "error": "unknown plc mode %r" % (plc,)})
+                return False
             if not ensure_project():
                 send_json(sock, {"ok": False, "error": "no project open",
                                  "stdout": "", "elapsed": 0.0})
                 log_rpc("NOPROJ label=%s" % label)
                 return False
-            reply = exec_job(code, label, readonly, want_snapshot)
+            reply = exec_job(code, label, readonly, want_snapshot, plc)
             state_lock.acquire()
             try:
                 state["rpc_count"] += 1
@@ -629,9 +654,9 @@ def handle_client(sock):
             if budget:
                 reply["budget_exceeded"] = budget
             send_json(sock, reply)
-            log_rpc("ok=%s elapsed=%.2fs saved=%s label=%s" % (
+            log_rpc("ok=%s elapsed=%.2fs saved=%s plc=%s label=%s" % (
                 reply.get("ok"), reply.get("elapsed", 0.0),
-                reply.get("saved"), label))
+                reply.get("saved"), plc, label))
             if budget:
                 # Retire cleanly rather than letting the session rot.
                 log_rpc("budget-exit %s" % budget)

@@ -200,7 +200,10 @@ IF CLIENT.xActive AND fbDataBuffer.GetSpace() > 0 THEN
         fbDataBuffer.GetSpace(),
         udiCount => udiBytesReceived
     );
-    IF eReadErrorID <> NBS.ERROR.NO_ERROR THEN
+    // PENDING means "nothing to read yet". CODESYS Control Win returns it
+    // on every idle read (Intewell returns NO_ERROR), so treating it as
+    // an error reset each connection right after accept (2026-09-25).
+    IF eReadErrorID <> NBS.ERROR.NO_ERROR AND eReadErrorID <> NBS.ERROR.PENDING THEN
         IF NOT xResetConnection THEN
             GVL.ReadErrorResetCount := GVL.ReadErrorResetCount + 1;
         END_IF;

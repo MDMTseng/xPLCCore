@@ -113,7 +113,7 @@ def _oapp_wrap(body: str) -> str:
         "for app in list(proj.find('Application', True) or []):\n"
         "    app_obj = app; break\n"
         "oapp = online.create_online_application(app_obj)\n"
-        "oapp.login(OnlineChangeOption.Try, False)\n"
+        "oapp.login(OnlineChangeOption.Keep, False)\n"
         "try:\n"
         + "".join("    " + line + "\n" for line in body.strip().splitlines())
         + "finally:\n"

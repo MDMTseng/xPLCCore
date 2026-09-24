@@ -173,7 +173,7 @@ Inside a job, these globals are pre-injected by CODESYS:
 proj = projects.primary
 app = next(iter(proj.find("Application", True)))
 oapp = online.create_online_application(app)
-oapp.login(OnlineChangeOption.Try, False)
+oapp.login(OnlineChangeOption.Keep, False)
 
 # read / write / force GVL symbols
 val = oapp.read_value("GVL.AxisGroupSMScans")
@@ -186,6 +186,23 @@ pou.textual_implementation.replace("OLD_CODE", "NEW_CODE")
 app.generate_code()       # build
 oapp.login(OnlineChangeOption.Try, False)  # apply online change
 ```
+
+**No login is read-only.** Whatever the option, a login applies the
+difference between the project and the PLC: Keep/Try/Force online-change
+code, Never (and even Keep, for device-config changes) stops the app and
+downloads. So the daemon runs every job with a PLC mode (`plc_guard.py`):
+
+| `rpc.py exec --plc` | may log in when | options |
+|---|---|---|
+| `keep` (default) | the project fingerprint matches the last deploy | Keep (Try is downgraded) |
+| `online_change` | always (`rpc.py push` checks layout first) | Try, Keep |
+| `download` | always (`rpc.py install --on-site`) | any |
+
+Deploy with `rpc.py push` (online change; refused when `layout_check.py`
+sees a layout change) or `rpc.py install --on-site` (full download, with
+someone at the machine). Both record the new fingerprint. While a
+transfer runs the heartbeat shows a `plc:*` phase and `supervisor.py kill`
+refuses to act.
 
 `jobs/templates/` has 15 ready-to-use jobs for the common cases:
 `import_all.py` (push every .st on disk into the project),

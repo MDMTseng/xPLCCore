@@ -12,11 +12,14 @@ codesys_scripts/jobs/done/
 codesys_scripts/jobs/watcher.status
 codesys_scripts/jobs/daemon.status
 codesys_scripts/jobs/daemon.rpc.log
+codesys_scripts/jobs/deployed_layout.json
 codesys_scripts/jobs/build.log
 
 # v2: machine-local config (copy codesys_env.sample.json and edit).
 # Committing this would fight every other checkout over paths and IPs.
 codesys_scripts/codesys_env.json
+codesys_scripts/codesys_env.sim.json
+codesys_scripts/jobs_sim/
 
 # v2: pre-job rollback copies of the .project. Binary, churns fast,
 # and regenerated on every mutating job -- never belongs in git.

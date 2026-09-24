@@ -243,6 +243,21 @@ def cmd_kill(args):
         if snaps:
             print("    %s" % snaps[-1][1])
 
+    # A plc:* phase means the main thread is inside a login that is
+    # transferring code to the controller. Killing CODESYS there is what
+    # took the PLC down on 2026-09-25: after a 10-minute hang the IDE was
+    # killed mid-download and the RTOS stopped answering altogether
+    # (no ping, no telnet), leaving only a power cycle at the machine.
+    if (phase and phase.startswith("plc:")
+            and not getattr(args, "mid_plc_transfer", False)):
+        print("")
+        print("  REFUSED: CODESYS is transferring code to the PLC (%s)."
+              % phase)
+        print("  Killing it now can leave the PLC unreachable until someone")
+        print("  power-cycles it. Wait for the phase to change. Only if")
+        print("  someone is at the machine, re-run with --mid-plc-transfer.")
+        return 1
+
     if not args.yes:
         print("")
         print("re-run with --yes to actually kill")
@@ -409,6 +424,9 @@ def build_parser():
 
     sp = sub.add_parser("kill", help="force-kill CODESYS")
     sp.add_argument("--yes", action="store_true")
+    sp.add_argument("--mid-plc-transfer", action="store_true",
+                    help="kill even while a plc:* phase shows a code "
+                         "transfer (only with someone at the PLC)")
     sp.set_defaults(func=cmd_kill)
 
     sp = sub.add_parser("snapshots", help="list rollback points")

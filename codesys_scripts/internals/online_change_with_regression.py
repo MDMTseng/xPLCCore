@@ -24,10 +24,11 @@ RPC = SCRIPTS / "rpc.py"
 JOBS = SCRIPTS / "jobs" / "templates"
 
 
-def run_daemon_job(name: str) -> int:
-    print(f"\n=== daemon job: {name} ===")
+def run_daemon_job(name: str, plc: str = "keep") -> int:
+    print(f"\n=== daemon job: {name} (plc={plc}) ===")
     res = subprocess.run(
-        [sys.executable, str(RPC), "exec", "--file", str(JOBS / f"{name}.py")],
+        [sys.executable, str(RPC), "exec", "--plc", plc,
+         "--file", str(JOBS / f"{name}.py")],
         timeout=180,
     )
     return res.returncode
@@ -64,7 +65,21 @@ def main() -> int:
     if rc != 0:
         print(f"import_all failed (rc={rc}); aborting.")
         return rc
-    rc = run_daemon_job("online_change")
+    # Same gate as `rpc.py push`: an online change over a layout change
+    # falls back to downloading the running app (plc_guard.py).
+    sys.path.insert(0, str(SCRIPTS))
+    import layout_check
+    ok, msgs = layout_check.check_disk()
+    for m in msgs:
+        print("  " + m)
+    if not ok:
+        print("layout change (or no baseline): refusing the online change; "
+              "use `rpc.py install --on-site`.")
+        return 1
+    rc = run_daemon_job("online_change", plc="online_change")
+    if rc == 0:
+        layout_check.save_baseline(layout_check.scan_disk(),
+                                   "online_change_with_regression")
     if rc != 0:
         print(f"online_change failed (rc={rc}); aborting.")
         return rc

@@ -128,6 +128,16 @@ VAR_GLOBAL
 	AxisSimMaskSetMs     : LINT := 0;
 	AXIS_SIM_TTL_MS      : LINT := 600000;
 
+	(* --- PC simulation without a fieldbus (CODESYS Control Win, see
+	   memory local-softplc-sim). There the EtherCAT master can never
+	   open a network adapter, so its xError would keep the FSM in
+	   Error. SimNoFieldbus lets the supervisor ignore that, but ONLY
+	   while every axis (delta trio, EAXIS_A, SM_Drive_GenericDSP402,
+	   reel) is virtual. On the machine EAXIS_A is a real drive, so
+	   setting this there changes nothing. Not retained: every download
+	   clears it; the sim harness writes it after install. *)
+	SimNoFieldbus        : BOOL := FALSE;
+
 	(* --- Error diagnostic latch.
 	   Written from AxisGroupManager.Update (per-state FB error checks) and
 	   from the AxisGroupSM motion-FB supervisor. Cleared on UnInited entry.

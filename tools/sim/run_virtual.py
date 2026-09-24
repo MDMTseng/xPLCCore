@@ -166,6 +166,11 @@ def plc_prepare():
         if v.upper() != "TRUE":
             raise SystemExit("ABORT: %s is not virtual (%s)" % (ax, v))
     daemon({"cmd": "write", "symbol": "GVL.SimDigitalInputEnable", "value": "TRUE"})
+    if PLC_HOST[0] in ("127.0.0.1", "localhost"):
+        # PC soft-PLC sim: no EtherCAT adapter, so the master always errors.
+        # The PLC honours this only while every axis is virtual (GVL.st).
+        daemon({"cmd": "write", "symbol": "GVL.SimNoFieldbus", "value": "TRUE"})
+        log("PLC: local sim, EtherCAT master error ignored (all axes virtual)")
     # Read back only after a pause: an immediate read after the write came
     # back "Not logged in" (2026-09-24); a few hundred ms later it is fine.
     time.sleep(0.5)
