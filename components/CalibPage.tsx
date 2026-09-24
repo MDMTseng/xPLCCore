@@ -691,6 +691,16 @@ export const CalibPage: React.FC<{
     // });
 
     let slotDist=8;
+    // Tape advance: the carrier tape is driven by reelpullmotor (EtherCAT
+    // servo) through ReelGo. The first machine pulsed output 6 into a
+    // separate tape unit; that output is not connected here (review
+    // 2026-09-24 R-P0-3). One cell = REEL_CELL_DISTANCE in reel axis units
+    // -- matches the bench ReelGo button; confirm on the machine.
+    const REEL_CELL_DISTANCE=8;
+    const REEL_ADV_MOVE={F:5000,ACC:100000,DEA:10000,JERK:100000};
+    const REEL_STOP_TIMEOUT_MS=3000;
+    const REEL_SETTLE_MS=20;   // after the reel stops, before the top-camera lights
+    let topShotEventId=900000;
 
 
     await runinng_checkpoint("start",{time:Date.now()});
@@ -706,66 +716,28 @@ export const CalibPage: React.FC<{
         console.log("reel visual clear time",end_time-cur_time);
       }
 
-      let reelAdvPinOpSeq=[];
-
-      let reelAdvWaitTime=0;
-      for(let i=0;i<nxt_adv_count;i++){
-        {        
-          // console.log("reel adv",i);
-          // if(i>0){
-          // }
-          // await sendTcpMsgPack({ "type": "M", "cmd": "M4","group":0, "pin": 1<<IO_Pins.O.ReelAdv, "state": 1<<IO_Pins.O.ReelAdv,reset_ms:50,"motion_id_offset":-1,"motion_progress":0 })//reel adv
-          // await delay(60);
-
-          reelAdvPinOpSeq.push(reelAdvWaitTime, 1<<IO_Pins.O.ReelAdv, 1<<IO_Pins.O.ReelAdv);
-          reelAdvPinOpSeq.push(50, 1<<IO_Pins.O.ReelAdv, 0);
-
-          reelAdvWaitTime=60;
-          // if(i>1){
-          //   await delay(200);
-          // }
-        }
+      // 1. Tape advance. Starts when the arm's previous move starts (the
+      //    moment the old output-6 pulses fired, so the tape never moves
+      //    under a nozzle that is still placing), then waits for the reel
+      //    to stop -- PLC-confirmed, not a fixed delay.
+      if(nxt_adv_count>0){
+        await sendTcpMsgPack(cmd.WaitForTriggerMotionProgress({motion_id_offset:-1,motion_progress:0}));
+        await sendTcpMsgPack(cmd.ReelGo({Distance:nxt_adv_count*REEL_CELL_DISTANCE,...REEL_ADV_MOVE}));
+        await sendTcpMsgPack(cmd.WaitForReelStop({timeout_ms:REEL_STOP_TIMEOUT_MS}));
       }
 
       let topCheckDataPromise=waitForTOPCheckData();
       console.log("TRIGGER top check data");
 
-
-      let initDelayTime = (nxt_adv_count === 2 ? 150 : 100) + reelAdvWaitTime;
-
-
-      
-      // await sendTcpMsgPack({ "type": "M", "cmd": "M4","group":0, "pin": 1<<3, "state": 1<<3,reset_ms:100,"motion_id_offset":0,"motion_progress":0 });
-      // await sendTcpMsgPack({ "type": "M", "cmd": "M4","group":1, "pin": 1<<6, "state": 1<<6,reset_ms:100,"motion_id_offset":0,"motion_progress":0 });//check slot object
-
-
-      // sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.1 });
-
-
-
-      // FlexVibCtrl.top_light_on();
-
-
-      // await sendTcpMsgPack({ "type": "M", "cmd": "M4","group":0, "pin": 1<<3|1<<(6+8), "state": 1<<3|1<<(6+8),reset_ms:2,"motion_id_offset":-10,"motion_progress":0 });
-
-
-      // // sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 0.04 });
-
-      // await delay(30);
-      // await sendTcpMsgPack({ "type": "M", "cmd": "M4","group":1, "pin": 1<<7 | 1<<6, "state": 1<<7 | 1<<6,reset_ms:2,"motion_id_offset":-10,"motion_progress":0 });
-
-
+      // 2. Top camera, two shots (side light, then front light 80 ms
+      //    later), fired right away: the tape is already still.
       let lastPinOpSeq=[//top check camera trigger IO
-        ...reelAdvPinOpSeq,
-        initDelayTime, 1<<IO_Pins.O.CAM_Top_SideLight|1<<IO_Pins.O.CAM_Top, 1<<IO_Pins.O.CAM_Top_SideLight|1<<IO_Pins.O.CAM_Top,
+        REEL_SETTLE_MS, 1<<IO_Pins.O.CAM_Top_SideLight|1<<IO_Pins.O.CAM_Top, 1<<IO_Pins.O.CAM_Top_SideLight|1<<IO_Pins.O.CAM_Top,
         1, 1<<IO_Pins.O.CAM_Top_SideLight|1<<IO_Pins.O.CAM_Top, 0,
        80, 1<<IO_Pins.O.CAM_Top_Light0|1<<IO_Pins.O.CAM_Top, 1<<IO_Pins.O.CAM_Top_Light0|1<<IO_Pins.O.CAM_Top,
        1, 1<<IO_Pins.O.CAM_Top_Light0|1<<IO_Pins.O.CAM_Top, 0,]
 
-      sendTcpMsgPack(cmd.M4({
-        pin_op_seq:lastPinOpSeq
-         ,"motion_id_offset":-1,"motion_progress":0
-      }));
+      await sendTcpMsgPack(cmd.M4ImmediatePinOp({pin_op_seq:lastPinOpSeq,event_id:++topShotEventId}));
 
       console.log("lastPinOpSeq",lastPinOpSeq);
 

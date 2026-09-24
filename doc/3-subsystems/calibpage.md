@@ -67,7 +67,7 @@ literals should not appear in new code.
    `const`; check IDs re-created every render.
 
 10. **Dense bitmask arithmetic** in `pin_op_seq` constructions — e.g.
-    `reelAdvPinOpSeq.push(reelAdvWaitTime, 1<<IO_Pins.O.ReelAdv, 1<<IO_Pins.O.ReelAdv)`
+    `80, 1<<IO_Pins.O.CAM_Top_Light0|1<<IO_Pins.O.CAM_Top, 1<<IO_Pins.O.CAM_Top_Light0|1<<IO_Pins.O.CAM_Top`
     — a small builder would be much crisper.
 
 ---

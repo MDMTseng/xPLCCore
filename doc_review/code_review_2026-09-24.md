@@ -105,6 +105,12 @@ keyed on received packets. `tools/sim/queue_test.py` covers it.
 
 **R-P0-3. Production never moves the tape** -- *confirmed with the
 owner: output 6 is not connected on this machine*
+*Fixed 2026-09-24:* `checkSlot_and_reelAdv` waits for the arm's
+previous move to start (the moment the pulses used to fire), sends
+`ReelGo` (n x `REEL_CELL_DISTANCE`), awaits `WAIT_FOR_REEL_STOP`, then
+fires the two top-camera shots with an immediate M4. The cell distance
+(8) is taken from the bench ReelGo button and needs confirming on the
+machine.
 - The tape advances only by pulsing output 6 (`IO_Pins.O.ReelAdv`,
   `CalibPage.tsx:692-693, 730-740`), the "advance" input of the first
   machine's separate tape unit.

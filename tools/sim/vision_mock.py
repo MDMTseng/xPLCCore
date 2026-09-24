@@ -265,8 +265,9 @@ class Server:
                 self.client = None
 
 
-def poll_plc(server, world, url, period):
+def poll_plc(server, world, url, period, reel_cell):
     prev = None
+    reel_cells = None
     top_pending = False
     while True:
         try:
@@ -284,8 +285,15 @@ def poll_plc(server, world, url, period):
             log("PLC counters", v)
             continue
         d = {k: v[k] - prev[k] for k in ("sd", "bt", "ff", "tp", "ad")}
-        if d["ad"] > 0:
+        if d["ad"] > 0:                       # output-6 pulses (bench button)
             world.reel_adv(d["ad"])
+        if "rp" in v:                         # ReelGo: reel travel in whole cells
+            cells = int(round(v["rp"] / reel_cell))
+            if reel_cells is None:
+                reel_cells = cells
+            elif cells > reel_cells:
+                world.reel_adv(cells - reel_cells)
+                reel_cells = cells
         for _ in range(d["ff"]):
             server.push_later(0.15, FEEDER_ID, world.feeder_shot)
         for _ in range(d["sd"]):
@@ -334,13 +342,15 @@ def main():
     ap.add_argument("--ng-btm", type=float, default=0.03)
     ap.add_argument("--ng-tape", type=float, default=0.02)
     ap.add_argument("--poll-ms", type=float, default=20)
+    ap.add_argument("--reel-cell", type=float, default=8.0,
+                    help="reel axis units per tape cell (CalibPage REEL_CELL_DISTANCE)")
     ap.add_argument("--seed", type=int, default=None)
     a = ap.parse_args()
 
     world = World(a.ng_side, a.ng_btm, a.ng_tape, random.Random(a.seed))
     server = Server(world, a.port)
     threading.Thread(target=listen_feeder, args=(world, a.feeder_udp), daemon=True).start()
-    threading.Thread(target=poll_plc, args=(server, world, "http://%s/v" % a.plc, a.poll_ms / 1000.0),
+    threading.Thread(target=poll_plc, args=(server, world, "http://%s/v" % a.plc, a.poll_ms / 1000.0, a.reel_cell),
                      daemon=True).start()
     server.serve()
 

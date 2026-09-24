@@ -65,6 +65,8 @@ IF fbConn.xActive AND NOT xResponded THEN
             sJson := CONCAT(sJson, UDINT_TO_STRING(PRG_SimIo.udiTop));
             sJson := CONCAT(sJson, ',"ad":');
             sJson := CONCAT(sJson, UDINT_TO_STRING(PRG_SimIo.udiReelAdv));
+            sJson := CONCAT(sJson, ',"rp":');
+            sJson := CONCAT(sJson, LREAL_TO_STRING(reelpullmotor.fActPosition));
             sJson := CONCAT(sJson, ',"bx":');
             sJson := CONCAT(sJson, REAL_TO_STRING(PRG_SimIo.rBtmX));
             sJson := CONCAT(sJson, ',"by":');
