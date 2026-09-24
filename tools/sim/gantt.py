@@ -24,6 +24,15 @@ import event_log as E  # noqa: E402
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 LOGS = os.path.join(REPO, "standalone", "data", "sim_logs")
 
+# Station setpoints (mm, arm frame), copied from components/CalibPage.tsx.
+# The feeder pick area and the side camera are taken from the log instead
+# (arm position at suction-on / side-camera trigger).
+INSP_LOCATION = (15.618, 10.330)          # bottom camera
+SLOT_LOCATION = (41.7, -79.752)           # tape, first slot; slots 8 mm apart in X
+SLOT_PITCH = 8.0
+TOSS = [((-61.074, 60.775), "回柔震盤"), ((-31.0, 8.7), "NG 區 1"), ((-63.321, 9.870), "NG 區 2")]
+WAIT_FEEDER = (-46.350, 30.181)
+
 REASON_ZH = [
     ("SideCam measure failed", "側面量測 NG"),
     ("SideCheck failed", "側面檢查 NG"),
@@ -173,7 +182,35 @@ def build(events, reasons):
         "wait_ms": sum(w["e"] - w["s"] for w in waits),
         "wait_why": sorted({w["why"] for w in waits}),
     }
-    return {"lanes": lanes, "rows": rows, "summary": summary}
+    # Arm path: (t ms, x, y, z) from the pose samples.
+    pose, cur = [], {}
+    for e in events:
+        if e[2] in (E.POSE_X, E.POSE_Y, E.POSE_Z):
+            cur[e[2]] = E.signed(e[3])
+            if e[2] == E.POSE_Z and len(cur) == 3:
+                pose.append([T(e), round(cur[E.POSE_X], 1), round(cur[E.POSE_Y], 1), round(cur[E.POSE_Z], 1)])
+
+    def pose_at(t):
+        best = None
+        for p in pose:
+            if p[0] > t + 60:
+                break
+            best = p
+        return best
+
+    picks = [pose_at(x["s"]) for x in lanes["nozzle"] if x["k"] == "suck"]
+    picks = [p for p in picks if p and p[2] > 60]      # feeder plate (high Y), not NG re-picks
+    sides = [pose_at(x["s"]) for x in lanes["side"] if x["k"] == "shot"]
+    sides = [p for p in sides if p]
+    med = lambda xs: statistics.median(xs) if xs else None
+    stations = {
+        "insp": INSP_LOCATION, "slot": SLOT_LOCATION, "pitch": SLOT_PITCH,
+        "toss": [{"x": x, "y": y, "name": n} for (x, y), n in TOSS],
+        "wait": WAIT_FEEDER,
+        "picks": [[p[1], p[2]] for p in picks],
+        "side": [med([p[1] for p in sides]), med([p[2] for p in sides])] if sides else None,
+    }
+    return {"lanes": lanes, "rows": rows, "summary": summary, "pose": pose, "stations": stations}
 
 
 def main():

@@ -228,7 +228,9 @@ VAR_GLOBAL
 	     5 motion segment start (val = movement id)   6 group idle
 	     7 reel move start             8 reel move end
 	     9 FSM state (val = E_RobotState)
-	    10 host mark (val = code, see tools/sim/event_log.py) *)
+	    10 host mark (val = code, see tools/sim/event_log.py)
+	    11/12/13 arm X/Y/Z, 0.01 mm, DINT bit pattern (every 50 ms
+	             when the arm moved > 0.05 mm) *)
 	EvHead : UDINT := 0;
 	EvT    : ARRAY[0..1023] OF UDINT;   // AxisGroupSM.RuntimeMs, low 32 bits
 	EvKind : ARRAY[0..1023] OF BYTE;

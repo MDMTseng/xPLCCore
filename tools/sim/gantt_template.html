@@ -81,6 +81,28 @@ tr{cursor:pointer}
 .pill.toss{background:color-mix(in srgb,var(--ng) 14%,transparent);color:var(--ng)}
 .slow{color:var(--ng)}
 .foot{font-size:12px;color:var(--muted);max-width:90ch}
+.player{background:var(--panel);border:1px solid var(--grid);border-radius:6px;display:flex;flex-direction:column}
+.pbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;padding:10px 12px;border-bottom:1px solid var(--grid)}
+.pbar .play{min-width:78px;font-weight:600}
+.pbar input[type=range]{flex:1 1 240px;width:auto;min-width:0}
+.pbar select{font:inherit;font-size:13px;color:var(--ink);background:var(--bg);border:1px solid var(--grid);border-radius:4px;padding:3px 6px}
+.clock{font-family:var(--mono);font-size:15px;font-variant-numeric:tabular-nums;min-width:12ch}
+.pbody{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(220px,1fr);gap:0}
+@media (max-width:760px){.pbody{grid-template-columns:1fr}}
+.topview{padding:8px;border-right:1px solid var(--grid)}
+@media (max-width:760px){.topview{border-right:0;border-bottom:1px solid var(--grid)}}
+.topview{display:flex;justify-content:center}
+.topview svg{width:100%;height:auto;max-height:min(46vh,440px)}
+.topview svg text{font-family:var(--body);font-size:10px;fill:var(--muted)}
+.status{padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.status dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;font-size:13px}
+.status dt{color:var(--muted)}
+.status dd{margin:0;font-family:var(--mono);font-variant-numeric:tabular-nums}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-size:12px;padding:2px 8px;border-radius:10px;border:1px solid var(--grid);color:var(--muted)}
+.chip.on{color:var(--panel);border-color:transparent}
+.chip.on[data-c=cam]{background:var(--cam)} .chip.on[data-c=reel]{background:var(--reel)} .chip.on[data-c=feed]{background:var(--feed)}
+.chip.on[data-c=suck]{background:var(--suck)} .chip.on[data-c=wait]{background:var(--ng)}
 @media (prefers-reduced-motion: reduce){*{scroll-behavior:auto!important}}
 </style>
 
@@ -93,6 +115,27 @@ tr{cursor:pointer}
 
   <section class="stats" id="stats" aria-label="摘要"></section>
   <section class="findings" id="findings"></section>
+
+  <section class="player" aria-label="俯視圖播放">
+    <div class="pbar">
+      <button id="play" class="play" type="button">▶ 播放</button>
+      <label for="speed" style="font-size:12px;color:var(--muted)">速度</label>
+      <select id="speed">
+        <option value="0.1">0.1×</option><option value="0.25">0.25×</option><option value="0.5">0.5×</option>
+        <option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option>
+      </select>
+      <input id="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="播放進度">
+      <span class="clock" id="clock">0.000 s</span>
+    </div>
+    <div class="pbody">
+      <div class="topview"><svg id="top" role="img" aria-label="機台俯視圖：手臂位置與各工位狀態"></svg></div>
+      <div class="status">
+        <div class="chips" id="chips"></div>
+        <dl id="dl"></dl>
+        <p class="foot" style="margin:0">俯視圖座標是手臂座標系（mm），手臂位置每 50 ms 取樣一次、中間線性內插。點或拖甘特圖上方的時間軸可以跳到任何時間點；拖圖的其他地方是平移。</p>
+      </div>
+    </div>
+  </section>
 
   <section class="chart" aria-label="甘特圖">
     <div class="toolbar">
@@ -251,8 +294,15 @@ function render(){
       node.__it = it;
     }
   });
+  playhead = el("g",{},svg);
+  el("rect",{x:-5,y:0,width:10,height:AXIS_H,fill:"transparent"},playhead);
+  el("line",{x1:0,x2:0,y1:0,y2:H,stroke:"var(--ng)","stroke-width":1.5},playhead);
+  el("path",{d:"M-6 0 L6 0 L0 9 Z",fill:"var(--ng)"},playhead);
   $("zoomval").textContent = `${Math.round(pxPerMs*1000)} px/s`;
+  placePlayhead();
 }
+let playhead = null;
+function placePlayhead(){ if (playhead) playhead.setAttribute("transform", `translate(${PAD + tNow*pxPerMs},0)`); }
 
 function setZoom(z, anchorT){
   const keepT = anchorT ?? ((scroller.scrollLeft + scroller.clientWidth/2 - PAD) / pxPerMs);
@@ -281,10 +331,26 @@ svg.addEventListener("mousemove", e => {
 svg.addEventListener("mouseleave", () => tip.hidden = true);
 
 // drag to pan
+// Axis strip: click or drag seeks. Anywhere else: drag pans, a plain
+// click also seeks.
 let drag = null;
-scroller.addEventListener("pointerdown", e => { if (e.pointerType !== "mouse") return; drag = {x:e.clientX, s:scroller.scrollLeft}; scroller.classList.add("drag"); });
-window.addEventListener("pointermove", e => { if (drag) scroller.scrollLeft = drag.s - (e.clientX - drag.x); });
-window.addEventListener("pointerup", () => { drag = null; scroller.classList.remove("drag"); });
+const tAtClient = cx => (cx - svg.getBoundingClientRect().left - PAD) / pxPerMs;
+scroller.addEventListener("pointerdown", e => {
+  const y = e.clientY - svg.getBoundingClientRect().top;
+  if (y <= AXIS_H + 2){ drag = {seek:true}; seek(tAtClient(e.clientX)); e.preventDefault(); return; }
+  if (e.pointerType !== "mouse") return;
+  drag = {x:e.clientX, s:scroller.scrollLeft, moved:false}; scroller.classList.add("drag");
+});
+window.addEventListener("pointermove", e => {
+  if (!drag) return;
+  if (drag.seek){ seek(tAtClient(e.clientX)); return; }
+  if (Math.abs(e.clientX - drag.x) > 3) drag.moved = true;
+  scroller.scrollLeft = drag.s - (e.clientX - drag.x);
+});
+window.addEventListener("pointerup", e => {
+  if (drag && !drag.seek && !drag.moved) seek(tAtClient(e.clientX));
+  drag = null; scroller.classList.remove("drag");
+});
 
 // table
 const fmt = v => v == null ? "" : Math.round(v);
@@ -298,9 +364,167 @@ $("rows").addEventListener("click", e => {
   const tr = e.target.closest("tr"); if (!tr) return;
   const t = +tr.dataset.t;
   if (pxPerMs < 0.25) setZoom(0.25, t); else scroller.scrollLeft = PAD + t*pxPerMs - scroller.clientWidth/2;
+  seek(Math.max(0, t - 1500));
   scroller.scrollIntoView({block:"nearest", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth"});
 });
 
+// ---------------------------------------------------------------- player
+let tNow = 0, playing = false, speed = 1, lastTs = null;
+const P = D.pose, ST = D.stations, L = D.lanes;
+
+function poseAt(t){
+  if (!P.length) return null;
+  let lo = 0, hi = P.length - 1;
+  if (t <= P[0][0]) return P[0];
+  if (t >= P[hi][0]) return P[hi];
+  while (hi - lo > 1){ const m = (lo + hi) >> 1; if (P[m][0] <= t) lo = m; else hi = m; }
+  const a = P[lo], b = P[hi], f = (t - a[0]) / Math.max(1, b[0] - a[0]);
+  return [t, a[1] + (b[1]-a[1])*f, a[2] + (b[2]-a[2])*f, a[3] + (b[3]-a[3])*f];
+}
+// Camera pulses are 1-50 ms: keep them visible for at least `min` ms.
+const active = (list, k, t, min = 0) => list.some(x => (k == null || x.k === k) && x.s <= t && t <= Math.max(x.e, x.s + min));
+const count = (k, t) => L.result.filter(x => x.k === k && x.s <= t).length;
+
+// --- top view geometry (arm frame, mm; +Y drawn up)
+const pts = [[ST.insp[0],ST.insp[1]],[ST.slot[0],ST.slot[1]],[ST.wait[0],ST.wait[1]],
+             ...ST.toss.map(b => [b.x,b.y]), ...ST.picks, ...P.map(p => [p[1],p[2]])];
+const minX = Math.min(...pts.map(p=>p[0])) - 18, maxX = Math.max(...pts.map(p=>p[0]), ST.slot[0] + 9*ST.pitch) + 12;
+const minY = Math.min(...pts.map(p=>p[1])) - 16, maxY = Math.max(...pts.map(p=>p[1])) + 18;
+const SC = 2.2, TW = (maxX-minX)*SC, TH = (maxY-minY)*SC;
+const topv = $("top"); topv.setAttribute("viewBox", `0 0 ${TW} ${TH}`);
+const X = x => (x - minX)*SC, Y = y => (maxY - y)*SC;
+const tel = (tag, attrs, parent = topv) => el(tag, attrs, parent);
+
+function label(x, y, text, anchor = "middle"){ const t = tel("text",{x,y,"text-anchor":anchor}); t.textContent = text; return t; }
+// grid every 20 mm
+for (let gx = Math.ceil(minX/20)*20; gx <= maxX; gx += 20) tel("line",{x1:X(gx),x2:X(gx),y1:0,y2:TH,stroke:"var(--grid2)"});
+for (let gy = Math.ceil(minY/20)*20; gy <= maxY; gy += 20) tel("line",{x1:0,x2:TW,y1:Y(gy),y2:Y(gy),stroke:"var(--grid2)"});
+
+// feeder plate, from the pick positions
+const fx = ST.picks.map(p=>p[0]), fy = ST.picks.map(p=>p[1]);
+const fb = fx.length ? [Math.min(...fx)-12, Math.max(...fx)+12, Math.min(...fy)-12, Math.max(...fy)+12]
+                     : [ST.wait[0], ST.wait[0]+40, ST.wait[1]+40, ST.wait[1]+80];
+const fr = {x:X(fb[0]), y:Y(fb[3]), width:(fb[1]-fb[0])*SC, height:(fb[3]-fb[2])*SC};
+const plate = tel("rect",{...fr,rx:14,fill:"var(--grid2)",stroke:"var(--feed)","stroke-width":2});
+const plateGlow = tel("rect",{x:fr.x+4,y:fr.y+4,width:fr.width-8,height:fr.height-8,rx:10,fill:"var(--flight)",opacity:0});
+ST.picks.forEach(p => tel("circle",{cx:X(p[0]),cy:Y(p[1]),r:3,fill:"var(--muted)",opacity:.35}));
+label(fr.x+8, fr.y+16, "柔震盤", "start");
+const feederFlash = tel("rect",{...fr,rx:14,fill:"none",stroke:"var(--cam)","stroke-width":5,opacity:0});
+
+// wait point
+tel("path",{d:`M${X(ST.wait[0])-6} ${Y(ST.wait[1])} h12 M${X(ST.wait[0])} ${Y(ST.wait[1])-6} v12`,stroke:"var(--muted)","stroke-width":1.5});
+label(X(ST.wait[0]), Y(ST.wait[1])-10, "等待位");
+
+// inspection station: bottom camera (circle) and side camera (bar)
+tel("circle",{cx:X(ST.insp[0]),cy:Y(ST.insp[1]),r:7*SC,fill:"var(--grid2)",stroke:"var(--cam)","stroke-width":2});
+const btmFlash = tel("circle",{cx:X(ST.insp[0]),cy:Y(ST.insp[1]),r:7*SC,fill:"var(--cam)",opacity:0});
+const sideFlash = tel("rect",{x:X(ST.insp[0])+8*SC,y:Y(ST.insp[1])-4*SC,width:5*SC,height:8*SC,rx:2,fill:"var(--cam)",opacity:.25});
+label(X(ST.insp[0]), Y(ST.insp[1]) + 7*SC + 14, "底部 / 側面相機");
+
+// tape: cells slide with the reel
+const tapeY = Y(ST.slot[1]), tx0 = ST.slot[0] - 3*ST.pitch, tx1 = ST.slot[0] + 9*ST.pitch;
+tel("rect",{x:X(tx0),y:tapeY-6*SC,width:(tx1-tx0)*SC,height:12*SC,fill:"var(--grid2)",stroke:"var(--grid)"});
+const clip = tel("clipPath",{id:"tapeclip"}); tel("rect",{x:X(tx0),y:tapeY-6*SC,width:(tx1-tx0)*SC,height:12*SC},clip);
+const cells = tel("g",{"clip-path":"url(#tapeclip)"});
+const cellsInner = tel("g",{},cells);
+for (let k = -4; k <= 10; k++) tel("rect",{x:X(ST.slot[0] + k*ST.pitch) - 2.5*SC, y:tapeY-2.5*SC, width:5*SC, height:5*SC, rx:2, fill:"var(--panel)", stroke:"var(--muted)", "stroke-width":1},cellsInner);
+tel("rect",{x:X(ST.slot[0]-ST.pitch/2),y:tapeY-8*SC,width:3*ST.pitch*SC,height:16*SC,rx:3,fill:"none",stroke:"var(--cam)","stroke-width":2,"stroke-dasharray":"5 3"});
+const topFlash = tel("rect",{x:X(ST.slot[0]-ST.pitch/2),y:tapeY-8*SC,width:3*ST.pitch*SC,height:16*SC,rx:3,fill:"var(--cam)",opacity:0});
+label(X(ST.slot[0]-ST.pitch/2), tapeY-8*SC-7, "頂部相機 · 載帶", "start");
+const reelArrow = label(X(tx1)-4, tapeY+6*SC+15, "", "end");
+
+// toss bins
+ST.toss.forEach(b => {
+  tel("rect",{x:X(b.x)-6*SC,y:Y(b.y)-6*SC,width:12*SC,height:12*SC,rx:3,fill:"none",stroke:"var(--ng)","stroke-width":1.5,"stroke-dasharray":"4 3"});
+  label(X(b.x), Y(b.y)+6*SC+14, b.name);
+});
+
+// arm: trail, Z ring, nozzle, carried part
+const trail = tel("polyline",{fill:"none",stroke:"var(--arm)","stroke-width":2.5,opacity:.45,"stroke-linejoin":"round"});
+const zring = tel("circle",{r:10,fill:"none",stroke:"var(--arm)","stroke-width":1.5,opacity:.6});
+const nozzle = tel("circle",{r:7,fill:"var(--arm)"});
+const part = tel("rect",{width:10,height:10,x:-5,y:-5,rx:1.5,fill:"var(--suck)",stroke:"var(--panel)","stroke-width":1.5});
+const zlabel = label(0, 0, "", "start");
+
+const CHIPS = [["suck","吸料中"],["cam","相機拍照"],["reel","捲料中"],["feed","柔震盤振動"],["wait","手臂等待"]];
+$("chips").innerHTML = CHIPS.map(([c,n]) => `<span class="chip" data-c="${c}">${n}</span>`).join("");
+const chip = Object.fromEntries(CHIPS.map(([c]) => [c, document.querySelector(`.chip[data-c="${c}"]`)]));
+
+function drawTop(t){
+  const p = poseAt(t);
+  if (p){
+    const cx = X(p[1]), cy = Y(p[2]);
+    nozzle.setAttribute("cx", cx); nozzle.setAttribute("cy", cy);
+    zring.setAttribute("cx", cx); zring.setAttribute("cy", cy);
+    zring.setAttribute("r", 9 + Math.max(0, p[3] + 25) * 0.6);      // higher Z -> wider ring
+    zlabel.setAttribute("x", cx + 16); zlabel.setAttribute("y", cy - 12); zlabel.textContent = `Z ${p[3].toFixed(1)}`;
+    const tr = [];
+    for (let k = 20; k >= 0; k--){ const q = poseAt(t - k*50); if (q) tr.push(`${X(q[1]).toFixed(1)},${Y(q[2]).toFixed(1)}`); }
+    trail.setAttribute("points", tr.join(" "));
+    const suck = active(L.nozzle, "suck", t);
+    part.setAttribute("transform", `translate(${cx},${cy})`);
+    part.setAttribute("opacity", suck ? 1 : 0);
+    chip.suck.classList.toggle("on", suck);
+  }
+  const btm = active(L.btm, "shot", t, 90), side = active(L.side, "shot", t, 90);
+  const topShot = active(L.top, "shot", t, 90) || active(L.top, "light", t, 60), feedShot = active(L.feeder, "shot", t, 90);
+  btmFlash.setAttribute("opacity", btm ? .55 : 0);
+  sideFlash.setAttribute("opacity", side ? .95 : .25);
+  topFlash.setAttribute("opacity", topShot ? .4 : 0);
+  feederFlash.setAttribute("opacity", feedShot ? 1 : 0);
+  chip.cam.classList.toggle("on", btm || side || topShot || feedShot);
+  const vib = active(L.feeder, "vib", t), light = active(L.feeder, "flight", t), brake = active(L.feeder, "brake", t);
+  plateGlow.setAttribute("opacity", light ? .7 : 0);
+  plate.setAttribute("transform", vib ? `translate(${(Math.sin(t/9)*2.5).toFixed(1)},${(Math.cos(t/7)*1.5).toFixed(1)})` : "translate(0,0)");
+  plate.setAttribute("stroke-width", brake ? 5 : 2);
+  chip.feed.classList.toggle("on", vib);
+  const r = L.reel.find(x => x.s <= t && t <= x.e);
+  const frac = r ? (t - r.s) / Math.max(1, r.e - r.s) : 0;
+  cellsInner.setAttribute("transform", `translate(${(-frac*ST.pitch*SC).toFixed(1)},0)`);
+  reelArrow.textContent = r ? "◀ 捲料" : "";
+  chip.reel.classList.toggle("on", !!r);
+  chip.wait.classList.toggle("on", active(L.arm, "wait", t));
+  const move = L.arm.find(x => x.k === "move" && x.s <= t && t < x.e);
+  $("dl").innerHTML = `<dt>時間</dt><dd>${(t/1000).toFixed(3)} s</dd>
+    <dt>手臂 X / Y / Z</dt><dd>${p ? `${p[1].toFixed(1)} / ${p[2].toFixed(1)} / ${p[3].toFixed(1)}` : "—"}</dd>
+    <dt>運動段</dt><dd>${move ? "#" + move.id : "靜止"}</dd>
+    <dt>放料 / 丟料</dt><dd>${count("place", t)} / ${count("toss", t)}</dd>
+    <dt>捲料次數</dt><dd>${L.reel.filter(x => x.e <= t).length}</dd>`;
+}
+
+function seek(t){
+  tNow = Math.min(S.span, Math.max(0, t));
+  $("seek").value = Math.round(tNow / S.span * 1000);
+  $("clock").textContent = `${(tNow/1000).toFixed(3)} s`;
+  placePlayhead(); drawTop(tNow);
+}
+function follow(){
+  const x = PAD + tNow*pxPerMs, l = scroller.scrollLeft, w = scroller.clientWidth;
+  if (x < l + 40 || x > l + w - 60) scroller.scrollLeft = x - w*0.3;
+}
+function tick(ts){
+  if (!playing){ lastTs = null; return; }
+  if (lastTs != null) seek(tNow + (ts - lastTs) * speed);
+  lastTs = ts; follow();
+  if (tNow >= S.span){ setPlaying(false); return; }
+  requestAnimationFrame(tick);
+}
+function setPlaying(on){
+  playing = on; $("play").textContent = on ? "❚❚ 暫停" : "▶ 播放";
+  if (on){ if (tNow >= S.span) seek(0); lastTs = null; requestAnimationFrame(tick); }
+}
+$("play").onclick = () => setPlaying(!playing);
+$("speed").onchange = e => { speed = +e.target.value; };
+$("seek").oninput = e => { seek(+e.target.value / 1000 * S.span); follow(); };
+document.addEventListener("keydown", e => {
+  if (e.target.closest && e.target.closest("input,select,button")) return;
+  if (e.code === "Space"){ e.preventDefault(); setPlaying(!playing); }
+  if (e.code === "ArrowRight") seek(tNow + 100);
+  if (e.code === "ArrowLeft") seek(tNow - 100);
+});
+
 window.addEventListener("resize", () => { if (pxPerMs < MIN()) setZoom(MIN()); });
-setZoom(Math.max(MIN(), 0.08), 5000);
+setZoom(Math.max(MIN(), 0.12), 9000);
+seek(8900);
+
 </script>

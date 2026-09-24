@@ -10,7 +10,8 @@ the PLC's TCP port; run_virtual.py runs a collector during its run.
 
 Kinds: 1/2 output on/off (val = bit), 3/4 input on/off, 5 motion segment
 start (val = movement id), 6 group idle, 7/8 reel move start/end,
-9 FSM state, 10 host mark (val = MARKS code, sent by CalibPage.tsx).
+9 FSM state, 10 host mark (val = MARKS code, sent by CalibPage.tsx),
+11/12/13 arm X/Y/Z (0.01 mm, every 50 ms while moving; see signed()).
 
 The two paths (doc/3-subsystems/plc.md, "Timing-critical paths"):
   tape   : from the vacuum-break pulse after placing (Nozzle_blow on) to
@@ -38,7 +39,12 @@ MARKS = {1: "TOP_RESULT", 2: "BTM_RESULT", 3: "SIDE_RESULT", 4: "FEEDER_RESULT",
          9: "PLACE", 10: "TOSS"}
 MARK = {v: k for k, v in MARKS.items()}
 
-OUT_ON, OUT_OFF, IN_ON, IN_OFF, MOVE_START, IDLE, REEL_START, REEL_END, FSM, HOST = range(1, 11)
+OUT_ON, OUT_OFF, IN_ON, IN_OFF, MOVE_START, IDLE, REEL_START, REEL_END, FSM, HOST, POSE_X, POSE_Y, POSE_Z = range(1, 14)
+
+
+def signed(v):
+    """Pose values are DINT bit patterns in 0.01 mm."""
+    return (v - (1 << 32) if v >= (1 << 31) else v) / 100.0
 
 
 class Collector:

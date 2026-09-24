@@ -35,6 +35,14 @@ VAR
     abyK        : ARRAY[0..79] OF BYTE;
     audiV       : ARRAY[0..79] OF UDINT;
     udiSlot     : UDINT;
+    // Arm pose sampling (kinds 11/12/13 = X/Y/Z, 0.01 mm, DINT bits in val).
+    iPoseTick   : INT;
+    lrX         : LREAL;
+    lrY         : LREAL;
+    lrZ         : LREAL;
+    lrLastX     : LREAL := 1.0E9;
+    lrLastY     : LREAL;
+    lrLastZ     : LREAL;
 END_VAR
 """
 
@@ -96,6 +104,22 @@ IF (iState <> iStatePrev) AND (n < 80) THEN
     n := n + 1;
 END_IF
 iStatePrev := iState;
+
+// Arm pose every 50 ms, only when it moved more than 0.05 mm, so a
+// timeline viewer can place the arm (tools/sim/gantt.py top view).
+iPoseTick := iPoseTick + 1;
+IF (iPoseTick >= 50) AND (n <= 77) THEN
+    iPoseTick := 0;
+    lrX := AxisGroupSM.GroupActualPositionFb.Position.c.X;
+    lrY := AxisGroupSM.GroupActualPositionFb.Position.c.Y;
+    lrZ := AxisGroupSM.GroupActualPositionFb.Position.c.Z;
+    IF (ABS(lrX - lrLastX) > 0.05) OR (ABS(lrY - lrLastY) > 0.05) OR (ABS(lrZ - lrLastZ) > 0.05) THEN
+        abyK[n] := 11; audiV[n] := DINT_TO_UDINT(LREAL_TO_DINT(lrX * 100.0)); n := n + 1;
+        abyK[n] := 12; audiV[n] := DINT_TO_UDINT(LREAL_TO_DINT(lrY * 100.0)); n := n + 1;
+        abyK[n] := 13; audiV[n] := DINT_TO_UDINT(LREAL_TO_DINT(lrZ * 100.0)); n := n + 1;
+        lrLastX := lrX; lrLastY := lrY; lrLastZ := lrZ;
+    END_IF
+END_IF
 
 FOR i := 0 TO n - 1 DO
     udiSlot := GVL.EvHead MOD 1024;
