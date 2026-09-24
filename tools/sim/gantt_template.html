@@ -235,6 +235,14 @@ if (gp != null && gt != null){
     : d < 0 ? ["good", "NG 不拖慢節拍", `丟料一輪中位數 ${gt} ms，比放料一輪 ${gp} ms 還短：丟料不必放入載帶。`]
             : ["warn", "NG 一輪比較慢", `丟料一輪中位數 ${gt} ms，比放料一輪 ${gp} ms 多 ${d} ms。`]);
 }
+const PL = D.plan, M = D.marks || [];
+if (PL){
+  const cell = c => c === "P" ? "●" : c === "_" ? "○" : c === "X" ? "✕" : c;
+  const tape = (str, ref) => [...str].map((c,i) => ref && c !== ref[i] ? `<b style="color:var(--ng)">${cell(c)}</b>` : cell(c)).join("");
+  const code = h => `<span style="font-family:ui-monospace,Consolas,monospace;letter-spacing:.12em;word-break:break-all">${h}</span>`;
+  F.push([PL.ok ? "good" : "warn", PL.ok ? "載帶與生產計畫逐格相符" : "載帶與生產計畫不符",
+    `計畫 [${PL.plan.join(", ")}]${M.length ? `，中途按停止 ${M.filter(m => m.k === "stop").length} 次再續跑` : ""}。<br>預期 ${code(tape(PL.expected))}<br>實際 ${code(tape(PL.actual, PL.expected))}${PL.actual.length < PL.expected.length ? `（少 ${PL.expected.length - PL.actual.length} 格）` : ""}<br>● OK 件、○ 空格、✕ 其他，依離開頂部相機的順序，不符的格子標紅。`]);
+}
 F.push(S.suspicious
   ? ["warn", `可疑的載帶前進 ${S.suspicious} 次`, `前進時要離開相機的格子裡不是 OK 件（甘特圖捲料軌道上的紅框，滑鼠移上去看原因）。`]
   : ["good", "載帶前進時機正確", `${D.lanes.reel.length} 次捲料，前進時離開相機的格子都是 OK 件。俯視圖上的物件會跟著載帶一起前進。`]);
@@ -242,7 +250,7 @@ if (S.waits){
   const known = S.wait_why.filter(w => w.startsWith("等待")).map(w => w.replace("等待", "等"));
   const other = S.wait_why.length - known.length;
   F.push(["warn", `手臂閒置 ${S.waits} 次、共 ${fmtS(S.wait_ms)} s`,
-    `${known.length ? "主要在" + known.join("、") : "原因沒有標記"}${other ? "，另有閒置期間沒有渲染端標記" : ""}（圖上紅框，滑鼠移上去看原因）。這次是視覺模擬器輪詢 PLC 變慢造成的，不是機台動作；換成真的 VisionMaster 要重新量。`]);
+    `${known.length ? "主要在" + known.join("、") : "原因沒有標記"}${other ? "，另有閒置期間沒有渲染端標記" : ""}（圖上紅框，滑鼠移上去看原因）。${M.length ? "包含按停止到續跑之間的停機（時間軸上的紅／綠直線）。" : "這次是視覺模擬器輪詢 PLC 變慢造成的，不是機台動作；換成真的 VisionMaster 要重新量。"}`]);
 }
 F.push(S.top_ng
   ? ["note", "載帶上的 NG",
@@ -268,7 +276,7 @@ const MAX = 1.2;
 function zoomToSlider(z){ return Math.round(100 * Math.log(z/MIN()) / Math.log(MAX/MIN())); }
 function sliderToZoom(v){ return MIN() * Math.pow(MAX/MIN(), v/100); }
 
-const NAMES = {wait:"手臂閒置",move:"運動段",suck:"吸",blow:"破真空",brake:"剎車",shot:"相機觸發",light:"打光",reel:"捲料",vib:"振動",flight:"柔震盤燈",result:"視覺結果",place:"放料",toss:"丟料"};
+const NAMES = {wait:"手臂閒置",move:"運動段",suck:"吸",blow:"破真空",brake:"剎車",shot:"相機觸發",light:"打光",reel:"捲料",vib:"振動",flight:"柔震盤燈",result:"視覺結果",place:"放料",toss:"丟料",stopmark:"按停止",runmark:"按續跑"};
 function el(tag, attrs, parent){ const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); parent.appendChild(e); return e; }
 
 function render(){
@@ -325,6 +333,14 @@ function render(){
       node.__it = it;
     }
   });
+  for (const m of (D.marks || [])){
+    const c = m.k === "stop" ? "var(--ng)" : "var(--ok)";
+    el("line",{x1:x(m.t),x2:x(m.t),y1:AXIS_H-6,y2:H,stroke:c,"stroke-width":2},svg);
+    const lb = el("text",{x:x(m.t)+4,y:AXIS_H-2,fill:c,"font-weight":700,"font-size":11},svg);
+    lb.textContent = m.k === "stop" ? `■ 停止 #${m.n}` : "▶ 續跑";
+    const hit = el("rect",{x:x(m.t)-4,y:AXIS_H,width:8,height:H-AXIS_H,fill:"transparent"},svg);
+    hit.__it = {k: m.k === "stop" ? "stopmark" : "runmark", s: m.t, e: m.t, why: m.label};
+  }
   playhead = el("g",{},svg);
   el("rect",{x:-5,y:0,width:10,height:AXIS_H,fill:"transparent"},playhead);
   el("line",{x1:0,x2:0,y1:0,y2:H,stroke:"var(--ng)","stroke-width":1.5},playhead);
@@ -353,7 +369,7 @@ on(svg, "mousemove", e => {
   const dur = it.e > it.s ? ` · <b>${it.e - it.s} ms</b>` : "";
   let extra = it.k === "move" ? ` #${it.id}` : "";
   if (it.why) extra += `<br>${it.why}`;
-  if (it.k === "reel") extra += `<br>前進 ${it.cells} 格` + (it.bad ? `<br><b style="color:var(--ng)">可疑：${it.bad}</b>` : "");
+  if (it.k === "reel") extra += `<br>前進 ${it.cells} 格` + (it.plan === "empty" ? "（計畫留空）" : "") + (it.bad ? `<br><b style="color:var(--ng)">可疑：${it.bad}</b>` : "");
   if (it.slots) extra += `<br>載帶：${it.slots.map((x,i) => `${i+1} ${({empty:"空",ok:"OK",ng:"NG"})[x]}`).join("、")}`;
   tip.innerHTML = `${NAMES[it.k] || it.k}${extra}<br><b>${(it.s/1000).toFixed(3)} s</b>${dur}`;
   tip.hidden = false;
@@ -645,12 +661,19 @@ const zring = tel("circle",{r:10,fill:"none",stroke:"var(--arm)","stroke-width":
 const nozzle = tel("circle",{r:7,fill:"var(--arm)"});
 const part = tel("rect",{width:10,height:10,x:-5,y:-5,rx:1.5,fill:"var(--suck)",stroke:"var(--panel)","stroke-width":1.5});
 const zlabel = label(0, 0, "", "start");
+const runState = label(8, 18, "", "start");
+runState.setAttribute("font-weight", 700); runState.setAttribute("font-size", 15);
 
 const CHIPS = [["suck","吸料中"],["cam","相機拍照"],["lamp","打光"],["reel","捲料中"],["feed","柔震盤振動"],["wait","手臂等待"]];
 $("chips").innerHTML = CHIPS.map(([c,n]) => `<span class="chip" data-c="${c}">${n}</span>`).join("");
 const chip = Object.fromEntries(CHIPS.map(([c]) => [c, document.querySelector(`.chip[data-c="${c}"]`)]));
 
 function drawTop(t){
+  { let st = null;
+    for (const m of (D.marks || [])) if (m.t <= t) st = m;
+    const stopped = st && st.k === "stop";
+    runState.textContent = stopped ? `■ 已停止 #${st.n}（計畫剩 ${st.left}）` : (st ? "▶ 運轉中（已續跑）" : "");
+    runState.setAttribute("fill", stopped ? "var(--ng)" : "var(--ok)"); }
   const p = poseAt(t);
   if (p){
     const cx = X(p[1]), cy = Y(p[2]);

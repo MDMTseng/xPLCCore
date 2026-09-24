@@ -44,6 +44,10 @@ REASON_ZH = [
     ("btm check failed", "底部檢查 NG"),
     ("armOffset is too far", "底部偏移過大"),
     ("slotHoleOffset", "載帶孔偏移過大"),
+    # mid-plan: the free slot is past the remaining count (not end-of-plan waste)
+    ("production plan: slot", "空格位置超過剩餘數量"),
+    ("production plan place count hit", "計畫這段數量已到，丟回"),
+    ("production plan is empty", "計畫已完成，丟回"),
 ]
 
 
@@ -378,11 +382,112 @@ def packed_count(ui_log):
     return n
 
 
+def reel_plan_types(ui_log):
+    """The renderer's [STEP][REEL ADV] marks with a non-zero advance, in
+    order: "pack" or "empty" (a production-plan empty segment)."""
+    out = []
+    try:
+        with open(ui_log, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                m = re.search(r'checkpoint \[STEP\]\[REEL ADV\] (\{.*\})', line)
+                if m:
+                    try:
+                        d = json.loads(m.group(1))
+                    except ValueError:
+                        continue
+                    if d.get("adv_count"):
+                        out.append(d.get("type"))
+    except OSError:
+        pass
+    return out
+
+
+def hms(text):
+    h, m, s = text.split(":")
+    return int(h) * 3600 + int(m) * 60 + int(s)
+
+
+def wall_offset(folder, lanes):
+    """Wall clock (s of day) at run time 0, from vision_mock's bottom-camera
+    pushes (1 s resolution) paired in order with the bottom-camera shots.
+    Each pair bounds the offset; the reply comes 0-0.4 s after the shot."""
+    try:
+        with open(os.path.join(folder, "vision_mock.log"), encoding="utf-8", errors="replace") as f:
+            walls = [hms(l[:8]) for l in f if " push 124500 " in l]
+    except OSError:
+        return None
+    shots = [it["s"] for it in lanes["btm"] if it["k"] == "shot" and it.get("bit") == 10]
+    pairs = list(zip(walls, shots))
+    if not pairs:
+        return None
+    lo = max(w - s / 1000.0 - 0.4 for w, s in pairs)
+    hi = min(w + 1 - s / 1000.0 for w, s in pairs)
+    if lo <= hi:
+        return (lo + hi) / 2
+    return statistics.median(w + 0.5 - s / 1000.0 for w, s in pairs)
+
+
+def chaos_marks(folder, data):
+    """STOP / RUN presses from run_virtual's log (run.log), on the run's time
+    axis. Snapped to the arm's idle gap they cause when one is close."""
+    try:
+        with open(os.path.join(folder, "run.log"), encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return []
+    off = wall_offset(folder, data["lanes"])
+    if off is None:
+        return []
+    waits = [w for w in data["lanes"]["arm"] if w["k"] == "wait"]
+    marks = []
+    for l in lines:
+        m = re.match(r"(\d\d:\d\d:\d\d) chaos: STOP #(\d+) -> .*'ms': (\d+)\}, plan left (\[.*\])", l)
+        if m:
+            t = (hms(m.group(1)) + 0.5 - off) * 1000 - int(m.group(3))
+            w = next((w for w in waits if abs(w["s"] - t) < 2500), None)
+            marks.append({"t": round(w["s"] if w else t), "k": "stop", "n": int(m.group(2)), "left": m.group(4),
+                          "label": "停止 #%s（計畫剩 %s）" % (m.group(2), m.group(4))})
+            continue
+        m = re.match(r"(\d\d:\d\d:\d\d) chaos: RUN again", l)
+        if m:
+            t = (hms(m.group(1)) + 0.5 - off) * 1000
+            w = next((w for w in waits if w["s"] - 500 < t < w["e"] + 1500), None)
+            marks.append({"t": round(w["e"] if w else t), "k": "run", "label": "續跑"})
+    return marks
+
+
 def build_run(folder):
     ev, ui = os.path.join(folder, "events.csv"), os.path.join(folder, "ui.log")
     data = build(E.load(ev), toss_reasons(ui), top_results(ui), ng_picks(ui))
     data["summary"]["packed"] = packed_count(ui)
+    # A production plan leaves cells empty on purpose: those advances are
+    # not suspicious.
+    for r, typ in zip(data["lanes"]["reel"], reel_plan_types(ui)):
+        r["plan"] = typ
+        if typ == "empty":
+            r.pop("bad", None)
+    data["summary"]["suspicious"] = sum(1 for r in data["lanes"]["reel"] if r.get("bad"))
+    data["marks"] = chaos_marks(folder, data)
+    data["plan"] = plan_result(folder, data)
+    if data["plan"]:
+        # the renderer's pack count restarts at every RUN
+        data["summary"]["packed"] = data["plan"]["actual"].count("P")
     return data
+
+
+def plan_result(folder, data):
+    """The plan run_virtual set (run.log) against the tape, cell by cell."""
+    try:
+        with open(os.path.join(folder, "run.log"), encoding="utf-8", errors="replace") as f:
+            m = next((re.search(r"plan: \{'plan': (\[[^\]]*\])", l) for l in f if " plan: {" in l), None)
+    except OSError:
+        return None
+    if not m:
+        return None
+    import plan_check
+    plan = json.loads(m.group(1))
+    exp, act = plan_check.expected(plan), plan_check.actual(data)
+    return {"plan": plan, "expected": exp, "actual": act, "ok": exp == act}
 
 
 def main():

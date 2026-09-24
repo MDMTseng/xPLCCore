@@ -222,15 +222,18 @@ def tail(name, n=5):
 def chaos(a):
     """STOP at random moments (a.chaos times), RUN again after each, then let
     the plan finish. Each STOP waits for the loop to really end. Seeded, so
-    a failing sequence can be replayed with the same --chaos-seed."""
+    a failing sequence can be replayed with the same --chaos-seed.
+    With --chaos-in-empty, STOP only while the plan is in an empty-cell
+    segment (plan[0] < 0), a random 0-1 s after noticing it."""
     import random
     rng = random.Random(a.chaos_seed)
     stops = 0
     t_run = time.time()
     wait = rng.uniform(2.0, 6.0)
     end = time.time() + 600
+    t_gap = None
     while time.time() < end:
-        time.sleep(0.25)
+        time.sleep(0.25 if not a.chaos_in_empty else 0.05)
         rs = push("get_running_state", timeout=10)
         if rs.get("currentError") or "errorString" in str(rs.get("runningState")):
             log("chaos: error", rs.get("currentError") or rs.get("runningState"))
@@ -240,6 +243,16 @@ def chaos(a):
             if not left:
                 log("chaos: plan done after %d stops" % stops)
                 return
+        if a.chaos_in_empty and stops < a.chaos and rs.get("isRunning"):
+            plan = push("get_plan", timeout=10).get("plan") or []
+            if plan and plan[0] < 0:
+                if t_gap is None:
+                    t_gap, wait = time.time(), rng.uniform(0.0, 1.0)
+                    t_run = t_gap - 1e9          # the gap timer decides
+                    wait += 1e9
+            else:
+                t_gap = None
+                continue
         if stops < a.chaos and rs.get("isRunning") and time.time() - t_run > wait:
             r = push("stop_cycle", timeout=16)
             left = push("get_plan", timeout=10).get("plan")
@@ -251,6 +264,7 @@ def chaos(a):
                 log("chaos: RUN again")
             t_run = time.time()
             wait = rng.uniform(2.0, 6.0)
+            t_gap = None
     log("chaos: gave up after 10 min")
 
 
@@ -271,6 +285,8 @@ def main():
     ap.add_argument("--chaos", type=int, default=0,
                     help="press STOP at a random moment this many times, RUN again each time, then let the plan finish")
     ap.add_argument("--chaos-seed", type=int, default=1)
+    ap.add_argument("--chaos-in-empty", action="store_true",
+                    help="with --chaos: press STOP only inside an empty-cell segment of the plan")
     ap.add_argument("--stop-after", type=int, default=None,
                     help="press STOP after this many tape checks and report how the loop stops")
     ap.add_argument("--save-as", default=None,

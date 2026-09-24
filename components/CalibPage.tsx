@@ -1582,6 +1582,19 @@ export const CalibPage: React.FC<{
             }
           }
 
+          // The reel only advances past a run of OK cells from slot 0, so
+          // every cell up to the target slot ends up packed. A slot past the
+          // plan's remaining count would pack one too many once the cells
+          // before it are refilled (e.g. slot 0 NG, picked out, part placed
+          // in slot 1 with 1 left: chaos seed 38, 2026-09-25).
+          if(production_plan.length>0 && production_plan[0]>0 && tossReasons.length==0
+             && !Number.isNaN(targetPlaceSlotIdx) && targetPlaceSlotIdx+1>production_plan[0])
+          {
+            console.log("[DBG]production plan slot past count",production_plan[0],targetPlaceSlotIdx);
+            tossReasons.push("production plan: slot "+targetPlaceSlotIdx+" past count "+production_plan[0]);
+            ETC_NG_Location=tossLocation_0;//not object NG, drop back to feeder
+          }
+
           if(production_plan.length==0)
           {
             console.log("[DBG]production plan is empty");

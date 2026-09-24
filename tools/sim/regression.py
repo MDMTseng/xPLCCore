@@ -67,7 +67,7 @@ def run_scenario(name, rates, drops, a):
 
 
 def run_plan_scenario(name, stops, seed, a):
-    cmd = [sys.executable, os.path.join(HERE, "run_virtual.py"), "--plc", a.plc, "--plan", PLAN,
+    cmd = [sys.executable, os.path.join(HERE, "run_virtual.py"), "--plc", a.plc, "--plan=" + PLAN,
            "--ng-side", str(PLAN_NG), "--ng-btm", str(PLAN_NG), "--ng-tape", str(PLAN_NG),
            "--seed", str(SEED), "--save-as", "reg_" + name]
     if stops:
