@@ -474,7 +474,8 @@ SysDrainIter := 0;
                     GVL.AxisSimHostRequested := TRUE;
                     ResponsePacketPointer^.ele_count := 0;
                     MessagePackerFb.PackKvDint(ADR('mask'),
-                        TO_DINT(GVL.AxisSimMask_Request OR SEL(GVL.bVirtualMotorsMode, 16#00, 16#0F)));
+                        TO_DINT(GVL.AxisSimMask_Request OR GVL.AxisSimConfigMask
+                                OR SEL(GVL.bVirtualMotorsMode, 16#00, 16#0F)));
                 END_IF
             ELSIF (CommandType = 'COORD1_BIND') THEN
                 // Bind the coord1 tracking frame to the conveyor encoder.

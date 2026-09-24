@@ -86,7 +86,15 @@ VAR_GLOBAL
 	     memory virtual_motors_gate_ton_reset), a re-stamped deadline
 	     avoids that trap. Expiry is evaluated in UnInited, so an applied
 	     mask is never yanked out from under a powered session; the NEXT
-	     reset after expiry reverts to all-real.
+	     reset after expiry reverts to AxisSimConfigMask.
+	   AxisSimConfigMask   : the device-tree "virtual mode" of each axis,
+	     captured once on the first scan (before any reinit). Always OR'd
+	     into the desired mask: SET_AXIS_SIM can only ADD simulation, and
+	     neither a smaller request nor TTL expiry can turn an axis that
+	     is virtual in the project into a real drive. Making such an axis
+	     real takes a project change and download
+	     (jobs/templates/set_axis_virtual.py). Safety: on this rig the
+	     delta trio is virtual in the project and must never move.
 	   AxisSimMaskApplied  : what the drives actually run right now.
 	     LIVE-DERIVED each scan from the axes' own bVirtual flags (the
 	     drives are the source of truth -- this also captures the
@@ -104,6 +112,8 @@ VAR_GLOBAL
 	AxisSimMaskApplied   : BYTE := 0;
 	AxisSimMask          : BYTE := 0;
 	AxisSimHostRequested : BOOL := FALSE;
+	AxisSimConfigMask    : BYTE := 0;
+	AxisSimConfigCaptured : BOOL := FALSE;
 	AxisSimMaskSetMs     : LINT := 0;
 	AXIS_SIM_TTL_MS      : LINT := 600000;
 

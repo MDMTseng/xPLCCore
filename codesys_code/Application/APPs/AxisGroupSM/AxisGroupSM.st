@@ -609,6 +609,11 @@ PROGRAM AxisGroupSM
     IF IoConfig_Globals.EAxis1.bVirtual THEN GVL.AxisSimMaskApplied := GVL.AxisSimMaskApplied OR 16#02; END_IF;
     IF IoConfig_Globals.EAxis2.bVirtual THEN GVL.AxisSimMaskApplied := GVL.AxisSimMaskApplied OR 16#04; END_IF;
     IF reelpullmotor.bVirtual           THEN GVL.AxisSimMaskApplied := GVL.AxisSimMaskApplied OR 16#08; END_IF;
+    // First scan, before any reinit can run: what the project configured.
+    IF NOT GVL.AxisSimConfigCaptured THEN
+        GVL.AxisSimConfigMask := GVL.AxisSimMaskApplied;
+        GVL.AxisSimConfigCaptured := TRUE;
+    END_IF;
     // Published effective mask: live drive state, with the legacy
     // all-axes gate OR'd in for backward compatibility (the daemon-
     // forced flag never touched drives pre-2026-07-08 and still
@@ -625,7 +630,10 @@ PROGRAM AxisGroupSM
            AND ((RuntimeMs - GVL.AxisSimMaskSetMs) > GVL.AXIS_SIM_TTL_MS) THEN
             GVL.AxisSimMask_Request := 0;
         END_IF;
-        AxisSimDesired := GVL.AxisSimMask_Request OR SEL(GVL.bVirtualMotorsMode, 16#00, 16#0F);
+        // Config mask OR'd in: a request can add simulation, never remove
+        // it from an axis the project has virtual (GVL.AxisSimConfigMask).
+        AxisSimDesired := GVL.AxisSimMask_Request OR GVL.AxisSimConfigMask
+                          OR SEL(GVL.bVirtualMotorsMode, 16#00, 16#0F);
         IF (AxisSimApplySeq = 0) AND GVL.AxisSimHostRequested
            AND (AxisSimDesired <> GVL.AxisSimMaskApplied) THEN
             AxisSimApplyTarget  := AxisSimDesired;
