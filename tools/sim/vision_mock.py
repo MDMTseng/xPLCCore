@@ -173,13 +173,16 @@ class World:
 
     def top_check(self):
         with self.lock:
+            # An NG part reported by the previous check is gone by now: the
+            # renderer picks NG parts back out of the tape. (It used to be
+            # removed in the same check that found it, so the renderer never
+            # saw an NG slot and its NG-pick path never ran.)
+            self.slots = [None if s is False else s for s in self.slots]
             if self.pending_place:
                 self.pending_place = False
                 if None in self.slots:
                     i = self.slots.index(None)
                     self.slots[i] = self.rng.random() >= self.ng_tape
-                if False in self.slots:
-                    self.slots[self.slots.index(False)] = None
             n = min(self.adv_since_top, 3)
             self.adv_since_top = 0
             self.slots = self.slots[n:] + [None] * n

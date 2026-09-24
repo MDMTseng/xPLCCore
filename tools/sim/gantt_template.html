@@ -95,6 +95,10 @@ tr{cursor:pointer}
 .topview svg{width:100%;height:auto;max-height:min(46vh,440px)}
 .topview svg text{font-family:var(--body);font-size:14px;fill:var(--muted)}
 .status{padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.inset{display:flex;flex-direction:column;gap:6px}
+.inset .cap{font-size:12px;color:var(--muted);display:flex;justify-content:space-between}
+.inset svg{width:100%;max-width:340px;height:auto}
+.inset svg text{font-family:var(--body);font-size:13px}
 .status dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;font-size:13px}
 .status dt{color:var(--muted)}
 .status dd{margin:0;font-family:var(--mono);font-variant-numeric:tabular-nums}
@@ -130,9 +134,13 @@ tr{cursor:pointer}
     <div class="pbody">
       <div class="topview"><svg id="top" role="img" aria-label="機台俯視圖：手臂位置與各工位狀態"></svg></div>
       <div class="status">
+        <div class="inset">
+          <div class="cap"><span>載帶放大 · 頂部相機下 3 格</span><span id="insetReel"></span></div>
+          <svg id="inset" viewBox="0 0 340 118" role="img" aria-label="頂部相機下 3 格載帶的物料狀態"></svg>
+        </div>
         <div class="chips" id="chips"></div>
         <dl id="dl"></dl>
-        <p class="foot" style="margin:0">俯視圖座標是手臂座標系（mm），手臂位置每 50 ms 取樣一次、中間線性內插。點或拖甘特圖上方的時間軸可以跳到任何時間點；拖圖的其他地方是平移。</p>
+        <p class="foot" style="margin:0">俯視圖座標是手臂座標系（mm），手臂位置每 50 ms 取樣一次、中間線性內插。載帶 3 格的狀態來自最近一次頂部相機結果（這次是視覺模擬器的判定）；放料後到下一次檢查前標「待檢」，捲料後到下一次結果前標「待確認」。點或拖甘特圖上方的時間軸可以跳到任何時間點；拖圖的其他地方是平移。</p>
       </div>
     </div>
   </section>
@@ -209,16 +217,21 @@ const gp = S.gap_place != null ? Math.round(S.gap_place) : null, gt = S.gap_toss
 const F = [];
 F.push([S.topres <= 700 ? "good" : "warn", S.topres <= 700 ? "載帶路徑在目標內" : "載帶路徑超過目標",
   `放料後破真空到頂部第 2 拍中位數 ${Math.round(S.shot2)} ms，到頂部結果 ${Math.round(S.topres)} ms（目標 0.7 s；含不需前進載帶的輪次）。`]);
-if (gp != null && gt != null) F.push(gt <= gp
-  ? ["good", "NG 不拖慢節拍", `丟料一輪中位數 ${gt} ms，比放料一輪 ${gp} ms 還短：丟料不必放入載帶。NG 只是少包一顆，不會讓下一輪變慢。`]
-  : ["warn", "NG 一輪比較慢", `丟料一輪中位數 ${gt} ms，放料一輪 ${gp} ms。`]);
+if (gp != null && gt != null){
+  const d = gt - gp;
+  F.push(Math.abs(d) <= 0.05 * gp
+    ? ["good", "NG 不拖慢節拍", `丟料一輪中位數 ${gt} ms，放料一輪 ${gp} ms，相差不到 5%。NG 只是少包一顆，不會讓下一輪變慢。`]
+    : d < 0 ? ["good", "NG 不拖慢節拍", `丟料一輪中位數 ${gt} ms，比放料一輪 ${gp} ms 還短：丟料不必放入載帶。`]
+            : ["warn", "NG 一輪比較慢", `丟料一輪中位數 ${gt} ms，比放料一輪 ${gp} ms 多 ${d} ms。`]);
+}
 if (S.waits){
   const known = S.wait_why.filter(w => w.startsWith("等待")).map(w => w.replace("等待", "等"));
   const other = S.wait_why.length - known.length;
   F.push(["warn", `手臂閒置 ${S.waits} 次、共 ${fmtS(S.wait_ms)} s`,
     `${known.length ? "主要在" + known.join("、") : "原因沒有標記"}${other ? "，另有閒置期間沒有渲染端標記" : ""}（圖上紅框，滑鼠移上去看原因）。這次是視覺模擬器輪詢 PLC 變慢造成的，不是機台動作；換成真的 VisionMaster 要重新量。`]);
 }
-if (extra) F.push(["note", "補放同一格", `放料 ${S.places} 次、包裝 ${S.packed} 顆：有 ${extra} 次頂部檢查判定那一格 NG（注入的載帶 NG），不前進載帶、補放同一格。`]);
+F.push(["note", "載帶上的 NG",
+  `放料 ${S.places} 次${S.packed != null ? `、包裝 ${S.packed} 顆` : ""}。頂部檢查看到載帶上的 NG 件 ${S.top_ng} 次，渲染端從載帶取出 NG 件 ${S.ng_picks} 次，取出後補放同一格。右側的載帶放大圖顯示每次檢查的 3 格結果。`]);
 $("findings").innerHTML = F.map(([c,h,p]) => `<div class="finding ${c}"><h3>${h}</h3><p>${p}</p></div>`).join("");
 
 const LANES = [
@@ -322,6 +335,7 @@ svg.addEventListener("mousemove", e => {
   const dur = it.e > it.s ? ` · <b>${it.e - it.s} ms</b>` : "";
   let extra = it.k === "move" ? ` #${it.id}` : "";
   if (it.why) extra += `<br>${it.why}`;
+  if (it.slots) extra += `<br>載帶：${it.slots.map((x,i) => `${i+1} ${({empty:"空",ok:"OK",ng:"NG"})[x]}`).join("、")}`;
   tip.innerHTML = `${NAMES[it.k] || it.k}${extra}<br><b>${(it.s/1000).toFixed(3)} s</b>${dur}`;
   tip.hidden = false;
   const r = tip.getBoundingClientRect();
@@ -436,6 +450,69 @@ const cellsInner = tel("g",{},cells);
 for (let k = -4; k <= 10; k++) tel("rect",{x:X(ST.slot[0] + k*ST.pitch) - 2.5*SC, y:tapeY-2.5*SC, width:5*SC, height:5*SC, rx:2, fill:"var(--panel)", stroke:"var(--muted)", "stroke-width":1},cellsInner);
 tel("rect",{x:X(ST.slot[0]-ST.pitch/2),y:tapeY-8*SC,width:3*ST.pitch*SC,height:16*SC,rx:3,fill:"none",stroke:"var(--cam)","stroke-width":2,"stroke-dasharray":"5 3"});
 const topFlash = tel("rect",{x:X(ST.slot[0]-ST.pitch/2),y:tapeY-8*SC,width:3*ST.pitch*SC,height:16*SC,rx:3,fill:"var(--cam)",opacity:0});
+// the three slots under the top camera: part state from the last top result
+const slotG = [0,1,2].map(i => {
+  const g = tel("g",{transform:`translate(${X(ST.slot[0] + i*ST.pitch)},${tapeY})`},cellsInner);
+  const body = tel("rect",{x:-2.2*SC,y:-2.2*SC,width:4.4*SC,height:4.4*SC,rx:1.5},g);
+  const mark = tel("text",{x:0,y:4.5,"text-anchor":"middle","font-size":13,"font-weight":700},g);
+  const tag = tel("text",{x:0,y:-4.2*SC,"text-anchor":"middle","font-size":12},g);
+  return {g, body, mark, tag};
+});
+const SLOT_LOOK = {
+  empty:  {fill:"none", stroke:"none", mark:"", tag:"空"},
+  ok:     {fill:"var(--ok)", stroke:"none", mark:"✓", tag:"OK"},
+  ng:     {fill:"var(--ng)", stroke:"none", mark:"✕", tag:"NG"},
+  placed: {fill:"var(--muted)", stroke:"none", mark:"?", tag:"待檢"},
+  unknown:{fill:"none", stroke:"var(--muted)", mark:"?", tag:"待確認"},
+};
+// large inset of the three slots
+const inset = $("inset");
+const ins = (tag, a, parent = inset) => el(tag, a, parent);
+ins("rect",{x:4,y:30,width:332,height:60,rx:4,fill:"var(--grid2)",stroke:"var(--grid)"});
+const insetCam = ins("rect",{x:24,y:22,width:292,height:76,rx:8,fill:"none",stroke:"var(--cam)","stroke-width":2,"stroke-dasharray":"6 4"});
+const insetFlash = ins("rect",{x:24,y:22,width:292,height:76,rx:8,fill:"var(--cam)",opacity:0});
+const insetSide = ins("g",{opacity:0});
+ins("rect",{x:8,y:34,width:10,height:52,rx:3,fill:"var(--lamp)"},insetSide);
+ins("rect",{x:322,y:34,width:10,height:52,rx:3,fill:"var(--lamp)"},insetSide);
+const insetFront = ins("rect",{x:20,y:18,width:300,height:84,rx:10,fill:"none",stroke:"var(--lamp)","stroke-width":6,opacity:0});
+const insetSlots = [0,1,2].map(i => {
+  const cx = 72 + i*98;
+  const g = ins("g",{transform:`translate(${cx},60)`});
+  ins("rect",{x:-30,y:-24,width:60,height:48,rx:5,fill:"var(--panel)",stroke:"var(--muted)"},g);
+  const body = ins("rect",{x:-19,y:-16,width:38,height:32,rx:4},g);
+  const mark = ins("text",{x:0,y:7,"text-anchor":"middle","font-size":20,"font-weight":700},g);
+  const tag = ins("text",{x:cx,y:14,"text-anchor":"middle","font-weight":600});
+  ins("text",{x:cx,y:112,"text-anchor":"middle",fill:"var(--muted)","font-size":12}).textContent = `第 ${i+1} 格`;
+  return {body, mark, tag};
+});
+function setSlot(i, st){
+  const o = SLOT_LOOK[st], s = slotG[i], b = insetSlots[i];
+  b.body.setAttribute("fill", o.fill === "none" ? "none" : o.fill);
+  b.body.setAttribute("stroke", st === "unknown" ? "var(--muted)" : "none");
+  b.body.setAttribute("stroke-dasharray", st === "unknown" ? "4 3" : "");
+  b.mark.textContent = o.mark || (st === "empty" ? "" : "");
+  b.mark.setAttribute("fill", st === "unknown" ? "var(--muted)" : "var(--panel)");
+  b.tag.textContent = o.tag;
+  b.tag.setAttribute("fill", st === "ok" ? "var(--ok)" : st === "ng" ? "var(--ng)" : "var(--muted)");
+  s.body.setAttribute("fill", o.fill); s.body.setAttribute("stroke", o.stroke);
+  s.body.setAttribute("stroke-dasharray", st === "unknown" ? "3 2" : "");
+  s.mark.textContent = o.mark; s.mark.setAttribute("fill", st === "unknown" ? "var(--muted)" : "var(--panel)");
+  s.tag.textContent = o.tag;
+  s.tag.setAttribute("fill", st === "ok" ? "var(--ok)" : st === "ng" ? "var(--ng)" : "var(--muted)");
+}
+const topResults = L.top.filter(x => x.k === "result" && x.slots);
+// Slot states at time t: the last top result, then places into a slot
+// ("placed, not yet checked"); after a reel move, unknown until the next
+// result (the move distance is not in the log).
+function slotsAt(t){
+  let last = null;
+  for (const r of topResults){ if (r.s <= t) last = r; else break; }
+  let st = last ? last.slots.slice(0,3) : ["empty","empty","empty"];
+  const since = last ? last.s : -1;
+  if (L.reel.some(x => x.e > since && x.e <= t)) st = ["unknown","unknown","unknown"];
+  for (const r of L.result) if (r.k === "place" && r.slot != null && r.at > since && r.at <= t) st[r.slot] = "placed";
+  return st;
+}
 // top lights: side light = bars on both sides of the view, front light = ring around it
 const tfx = X(ST.slot[0]-ST.pitch/2), tfw = 3*ST.pitch*SC;
 const topSideLamp = tel("g",{opacity:0});
@@ -495,6 +572,9 @@ function drawTop(t){
   btmLamp.setAttribute("opacity", lBtm ? .9 : 0);
   topSideLamp.setAttribute("opacity", lTopSide ? 1 : 0);
   topFrontLamp.setAttribute("opacity", lTopFront ? .95 : 0);
+  insetSide.setAttribute("opacity", lTopSide ? 1 : 0);
+  insetFront.setAttribute("opacity", lTopFront ? .9 : 0);
+  insetFlash.setAttribute("opacity", active(L.top, "shot", t, 90) ? .25 : 0);
   const lampsOn = [[light || lFeed, "柔震盤"], [lSide, "側面"], [lBtm, "底部"], [lTopSide, "頂部側光"], [lTopFront, "頂部正面光"]].filter(x => x[0]).map(x => x[1]);
   chip.lamp.classList.toggle("on", lampsOn.length > 0);
   plate.setAttribute("transform", vib ? `translate(${(Math.sin(t/9)*2.5).toFixed(1)},${(Math.cos(t/7)*1.5).toFixed(1)})` : "translate(0,0)");
@@ -504,13 +584,17 @@ function drawTop(t){
   const frac = r ? (t - r.s) / Math.max(1, r.e - r.s) : 0;
   cellsInner.setAttribute("transform", `translate(${(-frac*ST.pitch*SC).toFixed(1)},0)`);
   reelArrow.textContent = r ? "◀ 捲料" : "";
+  $("insetReel").textContent = r ? "◀ 捲料中" : "";
   chip.reel.classList.toggle("on", !!r);
   chip.wait.classList.toggle("on", active(L.arm, "wait", t));
+  const slots = slotsAt(t);
+  slots.forEach((st, i) => setSlot(i, st));
   const move = L.arm.find(x => x.k === "move" && x.s <= t && t < x.e);
   $("dl").innerHTML = `<dt>時間</dt><dd>${(t/1000).toFixed(3)} s</dd>
     <dt>手臂 X / Y / Z</dt><dd>${p ? `${p[1].toFixed(1)} / ${p[2].toFixed(1)} / ${p[3].toFixed(1)}` : "—"}</dd>
     <dt>運動段</dt><dd>${move ? "#" + move.id : "靜止"}</dd>
     <dt>打光</dt><dd>${lampsOn.length ? lampsOn.join("、") : "—"}</dd>
+    <dt>載帶 3 格</dt><dd>${slots.map((x,i) => `${i+1}:${SLOT_LOOK[x].tag}`).join("  ")}</dd>
     <dt>放料 / 丟料</dt><dd>${count("place", t)} / ${count("toss", t)}</dd>
     <dt>捲料次數</dt><dd>${L.reel.filter(x => x.e <= t).length}</dd>`;
 }

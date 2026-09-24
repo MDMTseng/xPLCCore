@@ -65,7 +65,37 @@ def toss_reasons(ui_log):
     return out
 
 
-def build(events, reasons):
+def top_results(ui_log):
+    """Top-camera replies (trig 134500) in order: the three tape slots under
+    the camera, slot i at SLOT_LOCATION + i * SLOT_PITCH in X."""
+    out, dec = [], json.JSONDecoder()
+    try:
+        with open(ui_log, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                i = line.find('{"trig_id":134500')
+                if "rx_data" not in line or i < 0:
+                    continue
+                try:
+                    data = dec.raw_decode(line[i:])[0].get("data", {})
+                except ValueError:
+                    continue
+                clear, ok = data.get("is_clear", []), data.get("is_OK", [])
+                out.append(["empty" if c else ("ok" if k else "ng") for c, k in zip(clear, ok)])
+    except OSError:
+        pass
+    return out
+
+
+def ng_picks(ui_log):
+    """How often the renderer picked an NG part back out of the tape."""
+    try:
+        with open(ui_log, encoding="utf-8", errors="replace") as f:
+            return sum(1 for line in f if "checkpoint [NG PICK] object" in line)
+    except OSError:
+        return 0
+
+
+def build(events, reasons, tops=(), ngpicks=0):
     t0 = events[0][1]
     T = lambda e: e[1] - t0
     lanes = {k: [] for k in ("arm", "nozzle", "feeder", "side", "btm", "reel", "top", "result")}
@@ -154,6 +184,11 @@ def build(events, reasons):
             results.append({"s": t, "e": t, "k": "toss", "why": reasons[ti] if ti < len(reasons) else "未知"})
             ti += 1
     lanes["result"] = results
+    # Slot states from the n-th top result, in order (one reply per mark).
+    tops = list(tops)
+    for n, r in enumerate(x for x in lanes["top"] if x["k"] == "result"):
+        if n < len(tops):
+            r["slots"] = tops[n]
 
     # Per-result rows with the tape path after each place.
     blows = [i for i, e in enumerate(events) if e[2] == E.OUT_ON and e[3] == 1]
@@ -188,6 +223,8 @@ def build(events, reasons):
         "waits": len(waits),
         "wait_ms": sum(w["e"] - w["s"] for w in waits),
         "wait_why": sorted({w["why"] for w in waits}),
+        "top_ng": sum(1 for x in lanes["top"] if x["k"] == "result" and "ng" in x.get("slots", [])),
+        "ng_picks": ngpicks,
     }
     # Arm path: (t ms, x, y, z) from the pose samples.
     pose, cur = [], {}
@@ -210,6 +247,17 @@ def build(events, reasons):
     sides = [pose_at(x["s"]) for x in lanes["side"] if x["k"] == "shot"]
     sides = [p for p in sides if p]
     med = lambda xs: statistics.median(xs) if xs else None
+    top_res = [x for x in lanes["top"] if x["k"] == "result" and "slots" in x]
+    for r in results:
+        if r["k"] != "place":
+            continue
+        blow = next((x for x in lanes["nozzle"] if x["k"] == "blow" and x["s"] >= r["s"]), None)
+        p = pose_at(blow["s"]) if blow else None
+        if p:
+            idx = round((p[1] - SLOT_LOCATION[0]) / SLOT_PITCH)
+            if 0 <= idx <= 2:
+                r["slot"], r["at"] = idx, blow["s"]
+
     stations = {
         "insp": INSP_LOCATION, "slot": SLOT_LOCATION, "pitch": SLOT_PITCH,
         "toss": [{"x": x, "y": y, "name": n} for (x, y), n in TOSS],
@@ -228,7 +276,7 @@ def main():
     ap.add_argument("--packed", type=int, default=None, help="parts the run packed (shown in the header)")
     a = ap.parse_args()
 
-    data = build(E.load(a.events), toss_reasons(a.ui_log))
+    data = build(E.load(a.events), toss_reasons(a.ui_log), top_results(a.ui_log), ng_picks(a.ui_log))
     data["summary"]["packed"] = a.packed
     tpl = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "gantt_template.html"), encoding="utf-8").read()
     html = tpl.replace("/*__DATA__*/null", json.dumps(data, ensure_ascii=False))
