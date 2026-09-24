@@ -369,6 +369,7 @@
 
 					// Phase 4 step 3: 'action' field switches between pin
 					// operation (default, legacy) and scheduled COORD1_BIND.
+					FlyEventTempData := FlyEventBlank;
 					M4ActionStr := MessageUnpackerFb.TryReadString('action', 'pin_op');
 					IF M4ActionStr = 'coord1_bind' THEN
 						FlyEventTempData.ActionType := FlyEventActType.COORD1_BIND;
@@ -602,6 +603,9 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
                 // to this registration; until any pin-op ever fired it is 0
                 // and every registration was refused -- silently (see ELSE).
                 IF (MotionTargetMovementId <> 0) THEN
+                    // It set only the fields below and inherited the rest --
+                    // pin stages, delays, sphere -- from the last M4.
+                    FlyEventTempData := FlyEventBlank;
                     FlyEventTempData.ActionType := FlyEventActType.ACK_SRC_ID;
                     FlyEventTempData.TriggerType := FlyEventTriggerType.MovmentProgressTrigger;
                     // Same TO_INT->INT16 wrap fix as the M4 branch above.

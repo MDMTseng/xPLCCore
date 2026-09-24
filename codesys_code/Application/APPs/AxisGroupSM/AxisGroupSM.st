@@ -370,6 +370,10 @@ PROGRAM AxisGroupSM
     //LocVar FOR ProcessMotionPacket
     TransitionParameter : ARRAY [0..1] OF LREAL := [0, 0];
     FlyEventTempData : FlyEventData;
+    // All zero, never written: FlyEventTempData is reset from it before each
+    // registration, so fields a branch does not set (stages, sphere, pulse)
+    // cannot leak in from the previous one.
+    FlyEventBlank    : FlyEventData;
     // PH#3: TimeToLiveMs is DINT; raw msgpack value is INT64. Cast via
     // TO_DINT silently wraps values >MAX_DINT to negative, masking the
     // request as "no expiry" (-1) and producing a stuck FlyEvent. Stage
