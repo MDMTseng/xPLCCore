@@ -295,6 +295,33 @@ time (owner's targets):
   return to the feeder and inspection; the result must be in before the
   next placement decision.
 
+**Measuring them.** `PRG_EventLog` records, every 1 ms, output/input
+edges, motion segment start/idle, reel move start/end and FSM changes;
+the renderer adds marks (`SYS EVT_MARK`: vision results in, vibration
+on/off, feeder light) on the same clock. `GET /e?s=<seq>` on :8126
+serves it; `tools/sim/event_log.py` collects and analyses, and
+`tools/sim/run_virtual.py` does both on every run
+(`sim_logs/events.csv`).
+
+Baseline, all-virtual scene, 30 places (2026-09-24). Vision replies
+come from the mock (fixed 150/250 ms), so only the PLC-side numbers
+are meaningful:
+
+| from vacuum break after placing | median | p90 |
+|---|---|---|
+| reel start (waits for the arm's next move) | 92 ms | 1127 ms |
+| reel stop | 133 ms | 1168 ms |
+| top shot 1 / shot 2 | 181 / 262 ms | 296 / 352 ms |
+| top result (mock) | 535 ms | 678 ms |
+| place to next place | 1239 ms | 1714 ms |
+
+The p90 tail of the reel start is real: when a feeder refill falls in
+the same cycle, the renderer finishes the refill before the arm moves
+on, and the tape step waits for that move (~0.6 s later). The feeder
+path reaches its result ~1.5 s after vibration on; ~1 s of that is the
+fixed delays in `checkFlexFeederPlate` (vibrate 160 ms, wait 120 ms,
+brake held 700 ms) -- the first thing to tune against the ~1 s target.
+
 The feeder's vibration itself is commanded from the PC over USB-RS485
 (Modbus), adding PC-side latency and jitter to the first path. Moving it
 to the PLC needs the RS-485 port working (see
@@ -340,7 +367,8 @@ Order:
 
 1. PLC event timestamp log (1 ms), to measure the two timing-critical
    paths before changing them: feeder refill (target ~1 s) and tape
-   advance + two-light shot (target < 0.7 s).
+   advance + two-light shot (target < 0.7 s). *Done 2026-09-24* -- see
+   "Measuring them" above for the tools and the virtual baseline.
 2. Renderer-side: replace fixed delays with `WAIT_FOR_REEL_STOP` and
    fly events (no PLC change). Unblocked 2026-09-24: waits are deferred
    replies and no longer hold the queue (review P0-3), so arm moves keep

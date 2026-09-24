@@ -16,6 +16,9 @@ VAR
     // SET_AXIS_SIM mask raw read. -1 sentinel = missing key.
     AxisSimMaskRaw : LINT;
 
+    // EVT_MARK: event-log slot being written.
+    EvSlot : UDINT;
+
     // TRUE while the packet being handled came from GVL.sysinfo_buf
     // (order-free SYS ring), FALSE for GVL.minfo_buf.
     SrcSys : BOOL;
@@ -668,6 +671,19 @@ END_IF;
                 // answer "does progress 0->1 mean tracking 0->1".
                 MessagePackerFb.PackKvLint(ADR('mv_id'), TO_LINT(CurrentMovementId));
                 MessagePackerFb.PackKvReal(ADR('mv_progress'), CurrentMovementIdProgress);
+            ELSIF (CommandType = 'EVT_MARK') THEN
+                // Host timestamp mark in the event log (GVL.EvHead): the
+                // renderer tags what only it sees (vision results in,
+                // feeder commands out) on the PLC's 1 ms time base. Sent
+                // fire-and-forget (no id): replies only when an id is given.
+                EvSlot := GVL.EvHead MOD 1024;
+                GVL.EvT[EvSlot]    := LINT_TO_UDINT(RuntimeMs);
+                GVL.EvKind[EvSlot] := 10;
+                GVL.EvVal[EvSlot]  := TO_UDINT(MessageUnpackerFb.TryReadINT64('code', 0));
+                GVL.EvHead := GVL.EvHead + 1;
+                ShouldReturn := (CommandId <> 0);
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
             ELSE
                 // Unknown SYS command -- emit NAK so the TS caller doesn't hang on timeout.
                 ShouldReturn := TRUE;

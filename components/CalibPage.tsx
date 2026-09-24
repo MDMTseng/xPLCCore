@@ -48,6 +48,25 @@ const IO_Pins = {
   },
 } as const;
 
+// Host marks in the PLC event log (cmd.EvtMark). Keep in step with
+// tools/sim/event_log.py MARKS.
+const EVT = {
+  TOP_RESULT: 1,
+  BTM_RESULT: 2,
+  SIDE_RESULT: 3,
+  FEEDER_RESULT: 4,
+  VIB_ON: 5,
+  VIB_OFF: 6,
+  FEEDER_LIGHT_ON: 7,
+  FEEDER_LIGHT_OFF: 8,
+} as const;
+const EVT_BY_RESULT: Record<string, number> = {
+  TOPCheckData: EVT.TOP_RESULT,
+  BTMCheckData: EVT.BTM_RESULT,
+  SideCheckData: EVT.SIDE_RESULT,
+  FFeederCheckData: EVT.FEEDER_RESULT,
+};
+
 // Vision check IDs — match the IDs the vision plugin replies with.
 const FFeederCheckID = 104500;
 const SideCheckID    = 114500;
@@ -145,6 +164,12 @@ export const CalibPage: React.FC<{
   };
   const _this = useRef<RunCtx>({}).current;
   const sendTcpMsgPack = COMCtrlObj.sendTcpMsgPack;
+  // Host mark in the PLC event log: fire-and-forget (no reply awaited, no
+  // throw) so timing marks can never disturb the cycle.
+  const evtMark = (code: number | undefined) => {
+    if (code === undefined) return;
+    try { (sendTcpMsgPack as any)(cmd.EvtMark(code), false); } catch {}
+  };
   const VP_sendTcpMsgPack = COMCtrlObj.VP_sendTcpMsgPack;
   const FlexVibCtrl = COMCtrlObj.FlexVibCtrl;
   
@@ -223,6 +248,7 @@ export const CalibPage: React.FC<{
       }
       COMCtrlObj.VP_regTcpMsgCB(id,undefined);//force unload previous leftover
       COMCtrlObj.VP_regTcpMsgCB(id, (data: any) => {
+        evtMark(EVT_BY_RESULT[name]);
         console.log("data",data);
         _this[name]=data;
         if(_this[name+"_Promise"]!=undefined){
@@ -807,12 +833,14 @@ export const CalibPage: React.FC<{
       
       let repReg=waitForFFeederCheckData();
       (async()=>{
+        evtMark(EVT.FEEDER_LIGHT_ON);
         FlexVibCtrl.top_light_on();
         await delay(10);
         await sendTcpMsgPack(cmd.M4({ "pin": 1<<IO_Pins.O.CAM_FlexFeeder, "state": 1<<IO_Pins.O.CAM_FlexFeeder, reset_ms:50 }));
 
         await delay(50);
 
+        evtMark(EVT.FEEDER_LIGHT_OFF);
         FlexVibCtrl.top_light_off();
       })();
 
@@ -1852,8 +1880,10 @@ export const CalibPage: React.FC<{
 
   
   async function FVib(idx:number,delay_ms:number=1000){
+    evtMark(EVT.VIB_ON);
     FlexVibCtrl.von(idx);
     await delay(delay_ms);
+    evtMark(EVT.VIB_OFF);
     FlexVibCtrl.voff(idx);
   }
 

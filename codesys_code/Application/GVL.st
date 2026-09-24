@@ -216,6 +216,23 @@ VAR_GLOBAL
 	   every packet (dropped ones included). AxisGroupSM refreshes
 	   LastUiPingMs when it changes. *)
 	HostRxCount : UDINT := 0;
+
+	(* Event timestamp log (1 ms), for measuring the timing-critical
+	   paths (plc.md). Written only from EtherCAT_Task: PRG_EventLog
+	   (output/input edges, motion segments, reel busy, FSM state) and
+	   AxisGroupSM.DrainHostPackets (host marks, SYS EVT_MARK). Event n
+	   lives in slot n MOD 1024; EvHead = events written so far. Read by
+	   PRG_EcatEspHttp at GET /e?s=<first seq>. Kinds:
+	     1 output on (val = bit)      2 output off
+	     3 input on  (val = bit)      4 input off
+	     5 motion segment start (val = movement id)   6 group idle
+	     7 reel move start             8 reel move end
+	     9 FSM state (val = E_RobotState)
+	    10 host mark (val = code, see tools/sim/event_log.py) *)
+	EvHead : UDINT := 0;
+	EvT    : ARRAY[0..1023] OF UDINT;   // AxisGroupSM.RuntimeMs, low 32 bits
+	EvKind : ARRAY[0..1023] OF BYTE;
+	EvVal  : ARRAY[0..1023] OF UDINT;
 	UiPingCount  : UDINT := 0;
 
 	(* Worst-case observed gap between consecutive PINGs (ms, PLC clock).

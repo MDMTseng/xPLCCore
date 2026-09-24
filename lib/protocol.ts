@@ -441,6 +441,10 @@ export const cmd = {
     event_id: a.event_id,
   }),
   ReelGo: (a: ReelGoArgs) => env<AckReply>({ type: 'M', cmd: 'ReelGo', ...compact(a) }),
+  // Host timestamp mark in the PLC event log (GVL.EvHead, GET /e on :8126).
+  // Send without tracking (no id): the PLC then sends no reply. Codes:
+  // tools/sim/event_log.py MARKS.
+  EvtMark: (code: number) => env<AckReply>({ type: 'SYS', cmd: 'EVT_MARK', code }),
   SetCoord0: () => env<AckReply>({ type: 'M', cmd: 'SetCoord0' }),
   SetCoord1: () => env<AckReply>({ type: 'M', cmd: 'SetCoord1' }),
   // Waits (WaitFor*/BlockFor*) are deferred replies, not queue barriers:

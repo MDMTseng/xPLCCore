@@ -14,7 +14,9 @@ Order matters and is encoded here:
      --vision-first), then the MOCK feeder;
      bring the motion FSM to Ready; press RUN.
   5. Watch: running state, vision mock log, until --cycles tape checks or
-     an error.
+     an error. Meanwhile the PLC event log (event_log.py) is collected
+     and the two timing-critical paths are analysed at the end
+     (sim_logs/events.csv).
 
 Everything started here is stopped on exit (Ctrl+C included). Logs go to
 standalone/data/sim_logs/.
@@ -44,6 +46,8 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SCRIPTS = os.path.join(REPO, "codesys_scripts")
 sys.path.insert(0, SCRIPTS)
 import rpc  # noqa: E402  (daemon client)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import event_log  # noqa: E402
 
 HARNESS = "http://127.0.0.1:8127"
 
@@ -226,6 +230,7 @@ def main():
     a = ap.parse_args()
 
     PLC_HOST[0] = a.plc
+    collector = None
     procs = []
     stalled = False
     try:
@@ -262,6 +267,7 @@ def main():
         bring_to_ready(a.home)
         push("set_tab", {"tab": "Calib"}, timeout=10)
         log("plan:", push("set_plan", {"plan": [a.cycles + 5]}, timeout=10))
+        collector = event_log.Collector(a.plc).start()
         log("run_cycle:", push("run_cycle", timeout=10))
 
         base = top_checks()                 # the mock log is per run, but be safe
@@ -298,6 +304,13 @@ def main():
         except Exception:
             pass
     finally:
+        if collector is not None:
+            collector.stop()
+            path = os.path.join(LOGS, "events.csv")
+            collector.save(path)
+            log("event log: %d events -> %s (lost %d, poll errors %d)" % (
+                len(collector.events), path, collector.lost, collector.errors))
+            event_log.analyze(collector.events)
         for p in reversed(procs):
             try:
                 p.terminate()

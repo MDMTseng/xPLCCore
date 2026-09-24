@@ -347,7 +347,10 @@ def main():
     ap.add_argument("--ng-side", type=float, default=0.05)
     ap.add_argument("--ng-btm", type=float, default=0.03)
     ap.add_argument("--ng-tape", type=float, default=0.02)
-    ap.add_argument("--poll-ms", type=float, default=20)
+    # The PLC's HTTP server takes one connection at a time (~25 requests/s
+    # in all); event_log.py's collector shares it. 50 ms is plenty: the
+    # mock answers 40 ms after a pulse, the renderer waits up to 10 s.
+    ap.add_argument("--poll-ms", type=float, default=50)
     ap.add_argument("--reel-cell", type=float, default=8.0,
                     help="reel axis units per tape cell (CalibPage REEL_CELL_DISTANCE)")
     ap.add_argument("--seed", type=int, default=None)
