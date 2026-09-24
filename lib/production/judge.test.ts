@@ -11,7 +11,6 @@ const good = (over: Partial<JudgeInput> = {}): JudgeInput => ({
   sideStatus: 1,
   btmPoseStatus: 1,
   armOffset: { X: 0.2, Y: -0.1 },
-  btmMmpp: 0.02,
   top: top([1, 0, 0], [0, 1, 1]),
   plan: [60],
   ...over,
@@ -24,7 +23,8 @@ describe('judgePlacement', () => {
     expect(j.placeSlot).toBe(1);
     expect(j.nextAdvance).toBe(1);
     expect(j.reasons).toEqual([]);
-    expect(j.holeOffset).toEqual({ X: 0.1, Y: -0.1 });   // X top mmpp, Y bottom mmpp (see NOTE)
+    expect(j.holeOffset.X).toBeCloseTo(0.1);            // both axes in the top camera's mm/px
+    expect(j.holeOffset.Y).toBeCloseTo(-0.05);
     expect(j.saveNames).toEqual(['OK_1', undefined, undefined]);
   });
 

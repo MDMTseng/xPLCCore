@@ -30,8 +30,6 @@ export type JudgeInput = {
   btmPoseStatus: number;
   /** Arm correction from the bottom shot (mm). */
   armOffset: { X: number; Y: number };
-  /** Bottom camera scale (mm/px). */
-  btmMmpp: number;
   /** Top camera view after this cycle's tape step; undefined = timed out. */
   top: TopView | undefined;
   /** Remaining plan. */
@@ -110,14 +108,14 @@ export function judgePlacement(i: JudgeInput, now: number = Date.now()): Judgeme
     compensationNg = true;
   }
 
-  // NOTE: X uses the top camera's scale, Y the bottom camera's. That is
-  // how it has always been; flagged in the 2026-09-24 review as a likely
-  // bug (both should be the top camera's). Kept until checked on the
-  // machine.
+  // The tape hole corrects the carrier tape's position (mostly X; the
+  // guide holds Y, but the owner keeps both). Both axes are measured in
+  // the top-camera image, so both use its scale. Y used the bottom
+  // camera's mm/px until 2026-09-25 (owner confirmed the fix).
   const holeOffset = { X: NaN, Y: NaN };
   if (view.locHole.status === 1) {
     holeOffset.X = view.locHole.x * view.locHole.mmpp;
-    holeOffset.Y = -view.locHole.y * i.btmMmpp;
+    holeOffset.Y = -view.locHole.y * view.locHole.mmpp;
   }
   if (Number.isNaN(holeOffset.X)) {
     reasons.push('slotHoleOffset is NaN');

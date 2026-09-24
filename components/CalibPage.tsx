@@ -973,15 +973,20 @@ export const CalibPage: React.FC<{
         nxt_adv_count=0;
         const action=nextCycleAction(_PP_, placedUncounted);
         const adv_count=action.kind==='skip_empty' ? action.cells : Math.min(2,-_PP_[0]);
+        // Don't wait for it: the arm picks and inspects the next part while
+        // the tape moves and the top camera shoots (the arm is away from
+        // the tape); the next cycle awaits the view where it needs it.
+        // The PLC runs one TAPE_CYCLE at a time: finish a pending one first.
+        if(slotCheckPromise_BK) await slotCheckPromise_BK;
         const emptyStep=advanceTape(adv_count,'empty');
-        const emptyView=await emptyStep;
+        emptyStep.catch(()=>{});   // rejections surface where it is awaited
 
         await runinng_checkpoint("[STEP][REEL ADV]",{
           adv_count:adv_count,
 
           type:"empty",
         });
-        slotCheckPromise_BK=emptyView ? Promise.resolve(emptyView) : undefined;
+        slotCheckPromise_BK=emptyStep;
         continue;
       }
       
@@ -1282,7 +1287,6 @@ export const CalibPage: React.FC<{
           sideStatus:sideCam_rep_data.status,
           btmPoseStatus:btm_check_rep_data.obj_pose.status,
           armOffset,
-          btmMmpp:btmCheckCalibInfo.mmpp,
           top:slotStatus,
           plan:production_plan,
         });
