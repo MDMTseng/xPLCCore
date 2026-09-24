@@ -129,6 +129,7 @@ export const CalibPage: React.FC<{
     // Loop control
     isRunning?: boolean;
     run_cycle_stop?: boolean;
+    visionTimeouts?: number;      // vision replies timed out in a row (waitForCheckData)
     current_error?: { errorString: string; raw?: any; fc?: any } | undefined;
     BurnRunning?: boolean;
     BurnRunningStopTrigger?: boolean;
@@ -282,15 +283,26 @@ export const CalibPage: React.FC<{
   // Bounded: a reply that never comes (vision down, callback not
   // registered, trigger lost) used to stall the cycle forever with no
   // error (review 2026-09-24 R-P0-2).
+  // A single lost reply costs that one part (callers treat undefined as
+  // "not inspected" and send the part back to the feeder); only
+  // VISION_TIMEOUT_STOP timeouts in a row -- vision itself is gone -- stop
+  // the cycle.
   const VISION_REPLY_TIMEOUT_MS=10000;
+  const VISION_TIMEOUT_STOP=3;
   function waitForCheckData(name:string):Promise<any>{
     return new Promise((resolve, reject)=>{
       const slot:any={};
       const timer=setTimeout(()=>{
         if(_this[name+"_Promise"]===slot)_this[name+"_Promise"]=undefined;
-        reject(new Error(`no ${name} reply from vision within ${VISION_REPLY_TIMEOUT_MS} ms`));
+        _this.visionTimeouts=(_this.visionTimeouts??0)+1;
+        if(_this.visionTimeouts>=VISION_TIMEOUT_STOP){
+          reject(new Error(`no ${name} reply from vision within ${VISION_REPLY_TIMEOUT_MS} ms (${_this.visionTimeouts} timeouts in a row)`));
+        }else{
+          console.warn(`vision timeout: ${name} (${_this.visionTimeouts} in a row), part skipped`);
+          resolve(undefined);
+        }
       },VISION_REPLY_TIMEOUT_MS);
-      slot.resolve=(data:any)=>{clearTimeout(timer);resolve(data);};
+      slot.resolve=(data:any)=>{clearTimeout(timer);_this.visionTimeouts=0;resolve(data);};
       slot.reject=(err:any)=>{clearTimeout(timer);reject(err);};
       _this[name+"_Promise"]=slot;
     });
@@ -783,6 +795,7 @@ export const CalibPage: React.FC<{
       let topCheckData=(await topCheckDataPromise) as ReturnType<typeof waitForTOPCheckData>;
       console.log("topCheckData",topCheckData);
 
+      if(topCheckData===undefined) return undefined as any;   // timed out: caller decides
       let retData={...topCheckData,post_check_advCount:0};
       return retData;
     }
@@ -872,7 +885,8 @@ export const CalibPage: React.FC<{
         FlexVibCtrl.top_light_off();
       })();
 
-      let ret_str_arr_data = await repReg;
+      // Timed out: treat the plate as empty; the next cycle shakes and looks again.
+      let ret_str_arr_data = (await repReg) ?? [];
 
 
       let data=ret_str_arr_data.map((item:{x:number,y:number,ang:number,inner:number,outer:number}):FlexFeeder_object_data_type=>{
@@ -1108,7 +1122,7 @@ export const CalibPage: React.FC<{
           await sendTcpMsgPack(cmd.G1({X:wait_flexfeeder_location.X,Y:wait_flexfeeder_location.Y }));
           const st=await slotCheckPromise;
           let okRun=0;
-          while(okRun<st.is_OK.length && st.is_OK[okRun]==1 && st.is_clear[okRun]==0) okRun++;
+          while(st && okRun<st.is_OK.length && st.is_OK[okRun]==1 && st.is_clear[okRun]==0) okRun++;
           if(okRun>=planNow[0]){
             const adv=planNow[0];
             packCounter+=adv;
@@ -1250,6 +1264,8 @@ export const CalibPage: React.FC<{
 
         console.log("wait for SideCam report");
         let sideCam_rep_data = await waitTime(sideCam_repReg,"SideCam report")  ;//WAIT: SideCam report
+        const sideTimedOut = sideCam_rep_data===undefined;
+        if(sideTimedOut) sideCam_rep_data={status:0,facing:0,measure:{status:0,OK_vec:[0,0,0]}};
 
 
 
@@ -1257,9 +1273,16 @@ export const CalibPage: React.FC<{
 
 
         let btm_check_rep_data = await waitTime(btm_check_rep_promise,"BTM report") as NozzleCheckData;//WAIT: BTM report
+        const btmTimedOut = btm_check_rep_data===undefined;
+        if(btmTimedOut) btm_check_rep_data={status:0,
+          obj_pose:{x:btmCheckCalibInfo.center.X,y:btmCheckCalibInfo.center.Y,ang:0,status:0},
+          nozzle_pose:{x:btmCheckCalibInfo.center.X,y:btmCheckCalibInfo.center.Y,ang:0,status:0},
+          mmpp:btmCheckCalibInfo.mmpp};
         console.log("btm_check_rep_data",btm_check_rep_data,"sideCam_rep_data",sideCam_rep_data);
 
         let tossReasons:string[]=[];
+        if(sideTimedOut) tossReasons.push("vision timeout: side");
+        if(btmTimedOut) tossReasons.push("vision timeout: bottom");
 
 
         let TOP_NG_Location=tossLocation_0;
@@ -1337,6 +1360,15 @@ export const CalibPage: React.FC<{
 
         console.log("slotCheckPromise",slotCheckPromise);
         let slotStatus=await waitTime(slotCheckPromise,"TOP CAM report");//WAIT: TOP CAM report
+        // Timed out: the slots are unknown. Do not place, do not pick an
+        // "NG" out of the tape, do not advance; the part goes back to the
+        // feeder and the next cycle checks the tape again.
+        const topTimedOut = slotStatus===undefined;
+        if(topTimedOut){
+          slotStatus={is_clear:[0,0,0],is_OK:[0,0,0],post_check_advCount:0,locHole:{status:0,x:0,y:0,mmpp:0}};
+          tossReasons.push("vision timeout: top");
+          ETC_NG_Location=tossLocation_0;
+        }
 
         {
 
@@ -1379,6 +1411,11 @@ export const CalibPage: React.FC<{
           }
           if(targetPickSlotIdx==-1){
             targetPickSlotIdx=NaN;
+          }
+          if(topTimedOut){
+            targetPlaceSlotIdx=NaN;
+            targetPickSlotIdx=NaN;
+            nxt_adv_count=0;
           }
         
 
@@ -2630,6 +2667,7 @@ export const CalibPage: React.FC<{
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
           <button ref={(el) => { _this.runButtonEl = el; }} onClick={async() =>{
         _this.run_cycle_stop=false;
+        _this.visionTimeouts=0;
 
         _this.current_error=undefined;
 

@@ -25,12 +25,15 @@ import gantt  # noqa: E402
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 RUNS = os.path.join(REPO, "standalone", "data", "sim_logs", "runs")
 
-# name, label, (side, bottom, tape) NG rates
+# name, label, (side, bottom, tape) NG rates, vision_mock drops
 SCENARIOS = [
-    ("high", "高 NG 20/15/25%", (0.20, 0.15, 0.25)),
-    ("5", "各 5%", (0.05, 0.05, 0.05)),
-    ("0p5", "各 0.5%", (0.005, 0.005, 0.005)),
-    ("0", "0%", (0.0, 0.0, 0.0)),
+    ("high", "高 NG 20/15/25%", (0.20, 0.15, 0.25), ""),
+    ("5", "各 5%", (0.05, 0.05, 0.05), ""),
+    ("0p5", "各 0.5%", (0.005, 0.005, 0.005), ""),
+    ("0", "0%", (0.0, 0.0, 0.0), ""),
+    # single lost vision replies: each costs that part (back to the feeder),
+    # the batch still completes (~10 s per drop)
+    ("drop", "0% + 丟 3 個視覺回覆", (0.0, 0.0, 0.0), "114500:5,134500:7,124500:14"),
 ]
 SEED = 7
 
@@ -41,15 +44,16 @@ TOP_RESULT_SLOW_MAX = 1           # allowed outliers per run
 SHOT_CLEAR_MM = 30                # arm distance from the tape at a top shot
 
 
-def run_scenario(name, rates, a):
+def run_scenario(name, rates, drops, a):
     cmd = [sys.executable, os.path.join(HERE, "run_virtual.py"), "--plc", a.plc, "--parts", str(a.parts),
            "--ng-side", str(rates[0]), "--ng-btm", str(rates[1]), "--ng-tape", str(rates[2]),
            "--seed", str(SEED), "--save-as", "reg_" + name]
-    p = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    env = dict(os.environ, VISION_MOCK_DROP=drops)
+    p = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
     return p.returncode, p.stdout + p.stderr
 
 
-def check(name, a, rc, output):
+def check(name, a, rc, output, drops=""):
     folder = os.path.join(RUNS, "reg_" + name)
     results = []
 
@@ -90,6 +94,12 @@ def check(name, a, rc, output):
     med = statistics.median(gaps) if gaps else None
     add("cycle median <= %d ms" % CYCLE_MEDIAN_MAX_MS, med is not None and med <= CYCLE_MEDIAN_MAX_MS,
         "%s ms" % (round(med) if med else "-"))
+    if drops:
+        dropped = sum(1 for line in open(os.path.join(folder, "vision_mock.log"), encoding="utf-8", errors="replace")
+                      if "DROPPED push" in line and "104500" not in line)
+        timeouts = sum(1 for r in d["rows"] if r["k"] == "toss" and "逾時" in (r["why"] or ""))
+        add("each lost reply cost one part", dropped > 0 and timeouts == dropped,
+            "%d dropped (side/bottom/top), %d parts sent back" % (dropped, timeouts))
     end_toss = sum(1 for r in d["rows"] if r["k"] == "toss" and ("計畫" in (r["why"] or "") or "plan" in (r["why"] or "")))
     add("no part picked after the plan is done", end_toss == 0, "%d end-of-plan tosses" % end_toss)
     return results
@@ -104,10 +114,10 @@ def main():
 
     chosen = [s for s in SCENARIOS if not a.only or s[0] in a.only.split(",")]
     failed = 0
-    for name, label, rates in chosen:
+    for name, label, rates, drops in chosen:
         print("== %s (%s)" % (label, name), flush=True)
-        rc, out = run_scenario(name, rates, a)
-        for what, ok, detail in check(name, a, rc, out):
+        rc, out = run_scenario(name, rates, drops, a)
+        for what, ok, detail in check(name, a, rc, out, drops):
             failed += 0 if ok else 1
             print("  %s %-40s %s" % ("PASS" if ok else "FAIL", what, detail), flush=True)
     print("RESULT:", "PASS" if not failed else "FAIL (%d checks)" % failed)

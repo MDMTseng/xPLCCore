@@ -67,6 +67,16 @@ BTM_STUCK = os.environ.get("VISION_MOCK_BTM_STUCK") == "1"
 # VISION_MOCK_MUTE=134500[,...]: never send these check results -- a lost
 # vision reply, for the renderer's reply timeout.
 MUTE_IDS = {int(x) for x in os.environ.get("VISION_MOCK_MUTE", "").split(",") if x.strip()}
+# VISION_MOCK_DROP=114500:4,134500:6: drop only the 4th side and 6th top
+# result (1-based per check ID) -- single lost replies, for the renderer's
+# skip-the-part timeout handling.
+DROP = {}
+for _item in os.environ.get("VISION_MOCK_DROP", "").split(","):
+    if ":" in _item:
+        _i, _n = _item.split(":")
+        DROP.setdefault(int(_i), set()).add(int(_n))
+SENT = {}
+DROP_LOCK = threading.Lock()
 
 # Feeder camera pixel area covered by default/calib.json.
 FEED_X = (2420.0, 3520.0)
@@ -272,6 +282,12 @@ class Server:
             data = make()
             if trig_id in MUTE_IDS:
                 log("MUTED push", trig_id)
+                return
+            with DROP_LOCK:
+                SENT[trig_id] = SENT.get(trig_id, 0) + 1
+                drop = SENT[trig_id] in DROP.get(trig_id, ())
+            if drop:
+                log("DROPPED push %d #%d" % (trig_id, SENT[trig_id]))
                 return
             self.send(trig_id, data)
             log("push", trig_id, json.dumps(data)[:160])

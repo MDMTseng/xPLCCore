@@ -36,6 +36,9 @@ WAIT_FEEDER = (-46.350, 30.181)
 PRE_PLACE_FRACTION = 0.5                  # CalibPage: park this far from inspection toward slot 2
 
 REASON_ZH = [
+    ("vision timeout: side", "側面視覺逾時"),
+    ("vision timeout: bottom", "底部視覺逾時"),
+    ("vision timeout: top", "頂部視覺逾時"),
     ("SideCam measure failed", "側面量測 NG"),
     ("SideCheck failed", "側面檢查 NG"),
     ("btm check failed", "底部檢查 NG"),
