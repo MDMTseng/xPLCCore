@@ -40,6 +40,7 @@ other and with what the renderer does:
 
 import argparse
 import json
+import os
 import random
 import socket
 import threading
@@ -54,6 +55,9 @@ INSP_X, INSP_Y = 15.618, 10.330
 BTM_CENTER = (1000.0, 1000.0)
 BTM_MMPP = 0.0124
 BTM_PX_PER_MM = 1.0 / BTM_MMPP
+# VISION_MOCK_BTM_STUCK=1: report the nozzle at the image centre whatever
+# the arm pose -- exercises the BtmCheckCalib degenerate-calibration path.
+BTM_STUCK = os.environ.get("VISION_MOCK_BTM_STUCK") == "1"
 
 # Feeder camera pixel area covered by default/calib.json.
 FEED_X = (2420.0, 3520.0)
@@ -145,6 +149,8 @@ class World:
             r = self.rng
             nx = BTM_CENTER[0] + (arm_x - INSP_X) * BTM_PX_PER_MM
             ny = BTM_CENTER[1] + (arm_y - INSP_Y) * BTM_PX_PER_MM
+            if BTM_STUCK:   # fault injection: nozzle never seems to move
+                nx, ny = BTM_CENTER
             nozzle = {"x": round(nx, 2), "y": round(ny, 2), "ang": 0.0, "status": 1}
             p = self.part
             ok = True

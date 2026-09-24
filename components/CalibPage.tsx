@@ -348,6 +348,11 @@ export const CalibPage: React.FC<{
     center:{X:number,Y:number},
     mmpp:number,
     mat_offset_cam2arm:[[number,number,number],[number,number,number],[number,number,number]],//3x3 matrix
+    // Set when the three calibration shots cannot give a usable matrix
+    // (nozzle missing, shots on one line, scale off from the camera's own
+    // mmpp). The identity fallback is still filled in, but offsets from it
+    // are in pixels, not mm -- callers must stop, not run on it.
+    error?:string,
   };
 
   function BtmCheckOffset2ArmOffset(info:TYPE_BtmCheckCalibInfo,check_offset:{X:number,Y:number},targetAngleDeg:number):{X:number,Y:number}{
@@ -423,8 +428,21 @@ export const CalibPage: React.FC<{
 
     const det = delta_cam_x.X * delta_cam_y.Y - delta_cam_x.Y * delta_cam_y.X;
     let mat_offset_cam2arm: TYPE_BtmCheckCalibInfo["mat_offset_cam2arm"];
+    let calibError: string | undefined;
 
-    if (Math.abs(det) > 1e-9) {
+    // A 1 mm arm step must move the nozzle by a few pixels at least, along
+    // two clearly different directions (|sin| of the angle between them).
+    const stepX = Math.hypot(delta_cam_x.X, delta_cam_x.Y);
+    const stepY = Math.hypot(delta_cam_y.X, delta_cam_y.Y);
+    if ([rep0_0, rep0_1, rep1_0].some((r) => r?.nozzle_pose?.status !== 1)) {
+      calibError = 'nozzle not found in a calibration shot';
+    } else if (stepX < 1 || stepY < 1) {
+      calibError = `nozzle did not move between calibration shots (${stepX.toFixed(2)}px, ${stepY.toFixed(2)}px per mm)`;
+    } else if (Math.abs(det) < 0.1 * stepX * stepY) {
+      calibError = 'calibration shots are (nearly) colinear';
+    }
+
+    if (calibError === undefined && Math.abs(det) > 1e-9) {
       const invDet = 1 / det;
       mat_offset_cam2arm = [
         [delta_cam_y.Y * invDet, -delta_cam_y.X * invDet, 0],
@@ -432,7 +450,7 @@ export const CalibPage: React.FC<{
         [0, 0, 1],
       ];
     } else {
-      console.warn("BtmCheckCalib: camera offsets are colinear, fallback to identity matrix.");
+      console.warn("BtmCheckCalib: " + calibError + "; identity matrix placeholder.");
       mat_offset_cam2arm = [
         [1, 0, 0],
         [0, 1, 0],
@@ -466,10 +484,20 @@ export const CalibPage: React.FC<{
       mmpp = avgCamStep > 0 ? 1 / avgCamStep : NaN;
     }
 
+    // Cross-check the derived scale against what the camera reports.
+    const camMmpp = [rep0_0.mmpp, rep0_1.mmpp, rep1_0.mmpp].filter((v) => Number.isFinite(v) && v > 0);
+    if (calibError === undefined && camMmpp.length > 0) {
+      const ref = camMmpp.reduce((a, b) => a + b, 0) / camMmpp.length;
+      if (!(Math.abs(mmpp - ref) <= 0.2 * ref)) {
+        calibError = `derived mmpp ${mmpp} differs from camera mmpp ${ref} by more than 20%`;
+      }
+    }
+
     const btmCheckInfo: TYPE_BtmCheckCalibInfo = {
       center: {...nozzleLoc0_0},
       mmpp,
       mat_offset_cam2arm,
+      error: calibError,
     };
 
 
@@ -867,6 +895,12 @@ export const CalibPage: React.FC<{
 
     await runinng_checkpoint("BtmCheckCalib",{time:Date.now()});
     let btmCheckCalibInfo=await BtmCheckCalib();
+    if(btmCheckCalibInfo.error!==undefined){
+      // Outside the cycle loop's try: handle here so isRunning is cleared.
+      await runinng_checkpoint("ERROR",{errorString:"BtmCheckCalib failed: "+btmCheckCalibInfo.error}).catch(()=>{});
+      _this.isRunning=false;
+      return;
+    }
 
     // return;
 
@@ -1580,6 +1614,9 @@ export const CalibPage: React.FC<{
   const checkInspObject=async(pickObjIndex:number,placeObjIndex:number,speed_alpha:number=0.3)=>{
     //set speed
     let btmCheckCalibInfo=await BtmCheckCalib();
+    if(btmCheckCalibInfo.error!==undefined){
+      throw new Error("BtmCheckCalib failed: "+btmCheckCalibInfo.error);
+    }
 
     let alpha=speed_alpha;
     let _speed=speed*alpha;
