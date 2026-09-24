@@ -176,6 +176,24 @@ export interface M4DistancePinOpArgs {
   ttl_ms?: number;              // default 3000
 }
 
+// TAPE_CYCLE: the tape step as one PLC command. When the move
+// motion_id_offset/motion_progress (relative to the last accepted move)
+// starts, advance the reel by `distance` (0 = no advance) and wait for it,
+// then arm `pin_op_seq` to fire once the arm leaves the sphere (x,y,z,r).
+// Reply {wait_ms, reel_ms} when the shots are armed; NAK tape_busy /
+// tape_timeout / reel_busy / flyevent_buffer_full / group_not_ready.
+export interface TapeCycleArgs {
+  motion_id_offset: number;
+  motion_progress: number;
+  distance: number;
+  F?: number; ACC?: number; DEA?: number; JERK?: number;
+  x: number; y: number; z: number; radius: number;
+  pin_op_seq: number[];
+  event_id: number;
+  ttl_ms?: number;        // shots: arm-clear wait after arming (default 3000)
+  timeout_ms?: number;    // whole sequence up to arming (default 6000)
+}
+
 export interface ReelGoArgs {
   Distance: number;
   F?: number;
@@ -466,6 +484,14 @@ export const cmd = {
     event_id: a.event_id,
   }),
   ReelGo: (a: ReelGoArgs) => env<AckReply>({ type: 'M', cmd: 'ReelGo', ...compact(a) }),
+  TapeCycle: (a: TapeCycleArgs) => env<AckReply>({
+    type: 'M', cmd: 'TAPE_CYCLE',
+    motion_id_offset: a.motion_id_offset, motion_progress: a.motion_progress,
+    Distance: a.distance, ...compact({ F: a.F, ACC: a.ACC, DEA: a.DEA, JERK: a.JERK }),
+    tx: a.x, ty: a.y, tz: a.z, td: a.radius, tin: 0,
+    pin_op_seq: a.pin_op_seq, event_id: a.event_id,
+    ttl_ms: a.ttl_ms ?? 3000, timeout_ms: a.timeout_ms ?? 6000,
+  }),
   // Host timestamp mark in the PLC event log (GVL.EvHead, GET /e on :8126).
   // Send without tracking (no id): the PLC then sends no reply. Codes:
   // tools/sim/event_log.py MARKS.

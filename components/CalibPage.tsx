@@ -763,38 +763,38 @@ export const CalibPage: React.FC<{
         console.log("reel visual clear time",end_time-cur_time);
       }
 
-      // 1. Tape advance. Starts when the arm's previous move starts (the
-      //    moment the old output-6 pulses fired, so the tape never moves
-      //    under a nozzle that is still placing), then waits for the reel
-      //    to stop -- PLC-confirmed, not a fixed delay.
-      // Wait for the last queued move (the Z rise after placing) to start
-      // even when the tape does not advance: the place moves are queued, not
-      // done, when this runs, so the arm may still be on its way *to* the
-      // tape -- and the distance-gated shots below would fire at once, into
-      // the arriving arm (regression test, 2026-09-24).
-      await sendTcpMsgPack(cmd.WaitForTriggerMotionProgress(trig));
-      if(nxt_adv_count>0){
-        await sendTcpMsgPack(cmd.ReelGo({Distance:nxt_adv_count*REEL_CELL_DISTANCE,...REEL_ADV_MOVE}));
-        await sendTcpMsgPack(cmd.WaitForReelStop({timeout_ms:REEL_STOP_TIMEOUT_MS}));
-      }
-
-      let topCheckDataPromise=waitForTOPCheckData();
-      console.log("TRIGGER top check data");
-
-      // 2. Top camera, two shots (side light, then front light 80 ms
-      //    later), once the tape is still and the arm is out of view.
+      // The tape step is one PLC command (TAPE_CYCLE, plc.md §Direction
+      // step 3), sequenced on the PLC's 1 ms task instead of four host
+      // round trips:
+      //  1. wait for the last queued move (the Z rise after placing) to
+      //     start -- even without an advance: the place moves are only
+      //     queued when this runs, so the arm may still be on its way *to*
+      //     the tape;
+      //  2. advance nxt_adv_count cells and wait for the reel to stop;
+      //  3. arm the two top-camera shots (side light, then front light
+      //     80 ms later) to fire once the arm is TOP_CAM_CLEAR_MM away from
+      //     above the middle slot.
       let lastPinOpSeq=[//top check camera trigger IO
         REEL_SETTLE_MS, 1<<IO_Pins.O.CAM_Top_SideLight|1<<IO_Pins.O.CAM_Top, 1<<IO_Pins.O.CAM_Top_SideLight|1<<IO_Pins.O.CAM_Top,
         1, 1<<IO_Pins.O.CAM_Top_SideLight|1<<IO_Pins.O.CAM_Top, 0,
        80, 1<<IO_Pins.O.CAM_Top_Light0|1<<IO_Pins.O.CAM_Top, 1<<IO_Pins.O.CAM_Top_Light0|1<<IO_Pins.O.CAM_Top,
        1, 1<<IO_Pins.O.CAM_Top_Light0|1<<IO_Pins.O.CAM_Top, 0,]
-
-      await sendTcpMsgPack(cmd.M4DistancePinOp({
+      const tapeRep=await (sendTcpMsgPack as any)(cmd.TapeCycle({
+        ...trig,
+        distance: nxt_adv_count>0 ? nxt_adv_count*REEL_CELL_DISTANCE : 0,
+        ...REEL_ADV_MOVE,
         x:slotLocation.X+slotDist, y:slotLocation.Y, z:safe_z, radius:TOP_CAM_CLEAR_MM,
         pin_op_seq:lastPinOpSeq, event_id:++topShotEventId,
-      }));
+        timeout_ms:REEL_STOP_TIMEOUT_MS+3000,
+      }), true, REEL_STOP_TIMEOUT_MS+5000);
+      console.log("TAPE_CYCLE",tapeRep);
 
-      console.log("lastPinOpSeq",lastPinOpSeq);
+      // The shots fire only after this reply (the arm must still leave the
+      // sphere, and vision needs its processing time), so registering the
+      // wait now cannot miss the result -- and its 10 s budget is not spent
+      // on the reel.
+      let topCheckDataPromise=waitForTOPCheckData();
+      console.log("TRIGGER top check data");
 
       console.log("wait for top check data");
       let topCheckData=(await topCheckDataPromise) as ReturnType<typeof waitForTOPCheckData>;

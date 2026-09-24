@@ -208,6 +208,99 @@
             CommandAck := TRUE;
             GVL.minfo_buf_ridx.ConsumeTail();
 
+        ELSIF (CommandType = 'TAPE_CYCLE') THEN
+            // Tape step as one command (plc.md §Direction step 3): when the
+            // move motion_id_offset / motion_progress relative to the last
+            // accepted one starts, advance the reel by Distance (0 = none)
+            // and wait for it, then arm the pin_op_seq shots as a
+            // DistanceTrigger fly event (fire once the arm is outside the
+            // sphere tx/ty/tz/td). Deferred reply {wait_ms, reel_ms} when
+            // the shots are armed; NAK tape_busy / flyevent_buffer_full /
+            // tape_timeout / reel_busy / group_not_ready. See the TAPE_CYCLE
+            // block in AxisGroupSM.
+            IF TapeActive THEN
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('tape_busy'));
+                ShouldReturn := TRUE;
+                CommandAck := FALSE;
+            ELSIF (FlyEventAvailableCount <= 3) THEN
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('flyevent_buffer_full'));
+                ShouldReturn := TRUE;
+                CommandAck := FALSE;
+            ELSE
+                TapeTargetId := GroupReadStatusFb.LastAcceptedMovementId;
+                TapeOffset := TO_DINT(MessageUnpackerFb.TryReadINT64('motion_id_offset', 0));
+                IF TapeOffset >= 0 THEN
+                    TapeTargetId := TapeTargetId + DINT_TO_ULINT(TapeOffset);
+                ELSIF TapeTargetId >= DINT_TO_ULINT(-TapeOffset) THEN
+                    TapeTargetId := TapeTargetId - DINT_TO_ULINT(-TapeOffset);
+                ELSE
+                    TapeTargetId := 0;
+                END_IF;
+                TapeTargetProg := MessageUnpackerFb.TryReadREAL('motion_progress', 0);
+                TapeReelDist := MessageUnpackerFb.TryReadREAL('Distance', 0);
+                TapeReelF    := MessageUnpackerFb.TryReadREAL('F',    reelGoVelocity);
+                TapeReelAcc  := MessageUnpackerFb.TryReadREAL('ACC',  reelGoAccel);
+                TapeReelDec  := MessageUnpackerFb.TryReadREAL('DEA',  reelGoDecel);
+                TapeReelJerk := MessageUnpackerFb.TryReadREAL('JERK', reelGoJerk);
+                TapeTimeoutMs := MessageUnpackerFb.TryReadINT64('timeout_ms', 0);
+                IF TapeTimeoutMs <= 0 THEN
+                    TapeTimeoutMs := TAPE_DEFAULT_TIMEOUT_MS;
+                END_IF;
+
+                // the shots: a DistanceTrigger pin op, as M4 trig 120 builds it
+                TapeFly.ActionType := FlyEventActType.PIN_OPERATION;
+                TapeFly.TriggerType := FlyEventTriggerType.DistanceTrigger;
+                TapeFly.SourceCommandId := CommandId;
+                TapeFly.PinGrp := 0;
+                TapeFly.TimeToLiveMs := TO_DINT(MessageUnpackerFb.TryReadINT64('ttl_ms', 3000));
+                TapeFly.TargetMovementId := 0;
+                TapeFly.TargetMovementProgress := 0;
+                TapeFly.TargetPos_X := TO_LREAL(MessageUnpackerFb.TryReadREAL('tx', 0));
+                TapeFly.TargetPos_Y := TO_LREAL(MessageUnpackerFb.TryReadREAL('ty', 0));
+                TapeFly.TargetPos_Z := TO_LREAL(MessageUnpackerFb.TryReadREAL('tz', 0));
+                TapeFly.TargetDistance := TO_LREAL(MessageUnpackerFb.TryReadREAL('td', 0));
+                TapeFly.TriggerInBoundary := MessageUnpackerFb.TryReadINT64('tin', 0) <> 0;
+                TapeFly.TargetPulseValue := 0;
+                TapeFly.EventId := TO_DINT(MessageUnpackerFb.TryReadINT64('event_id', 0));
+                TapeFly.IoStageCount := 0;
+                TapeFly.IoStageIndex := 0;
+                TapeFly.IoStageDelayCountdown := 0;
+                FOR StageLoopIdx := 0 TO FlyEventStageLimit-1 DO
+                    TapeFly.IoStageDelay[StageLoopIdx] := 0;
+                    TapeFly.IoStagePinMask[StageLoopIdx] := 0;
+                    TapeFly.IoStagePinState[StageLoopIdx] := 0;
+                END_FOR;
+                IF MessageUnpackerFb.TryReadObject('pin_op_seq', ADR(fbPinOpSeqUnpacker)) THEN
+                    fbPinOpSeqUnpacker.UnpackNext();
+                    FOR PinOpSeqIdx := 0 TO (fbPinOpSeqUnpacker.uiLastCount / 3) - 1 DO
+                        IF TapeFly.IoStageCount >= FlyEventStageLimit THEN
+                            EXIT;
+                        END_IF;
+                        fbPinOpSeqUnpacker.UnpackNext();
+                        StageDelayTemp := TO_INT(fbPinOpSeqUnpacker.diLastDINT);
+                        fbPinOpSeqUnpacker.UnpackNext();
+                        IF fbPinOpSeqUnpacker.diLastDINT < 0 THEN StagePinMaskTemp := 0;
+                        ELSE StagePinMaskTemp := DINT_TO_ULINT(fbPinOpSeqUnpacker.diLastDINT); END_IF;
+                        fbPinOpSeqUnpacker.UnpackNext();
+                        IF fbPinOpSeqUnpacker.diLastDINT < 0 THEN StagePinStateTemp := 0;
+                        ELSE StagePinStateTemp := DINT_TO_ULINT(fbPinOpSeqUnpacker.diLastDINT); END_IF;
+                        IF StagePinMaskTemp <> 0 THEN
+                            TapeFly.IoStageDelay[TapeFly.IoStageCount] := StageDelayTemp;
+                            TapeFly.IoStagePinMask[TapeFly.IoStageCount] := StagePinMaskTemp;
+                            TapeFly.IoStagePinState[TapeFly.IoStageCount] := StagePinStateTemp;
+                            TapeFly.IoStageCount := TapeFly.IoStageCount + 1;
+                        END_IF;
+                    END_FOR;
+                END_IF;
+
+                TapeCmdId := CommandId;
+                TapeStartMs := RuntimeMs;
+                TapeState := 1;
+                TapeActive := TRUE;
+                // no reply now: it comes when the shots are armed
+            END_IF;
+            GVL.minfo_buf_ridx.ConsumeTail();
+
         ELSIF (CommandType = 'ReelGo') THEN
             reelGoDistance := MessageUnpackerFb.TryReadREAL('Distance', reelGoDistance);
             reelGoVelocity := MessageUnpackerFb.TryReadREAL('F',        reelGoVelocity);

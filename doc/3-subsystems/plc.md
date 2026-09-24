@@ -380,7 +380,9 @@ Order:
    leftover from the first machine, where the tape unit was separate
    from the PLC and could only be told "advance".
 3. `TAPE_CYCLE`: advance N, wait for reel stop and arm clear, light 4
-   shot, light 5 shot. Needs no vision round-trip.
+   shot, light 5 shot. Needs no vision round-trip. *Done 2026-09-24*
+   (protocol.md); virtual scene, vacuum break -> reel start 38 -> 20 ms
+   (p90 44 -> 20), top shot 1 206 -> 122 ms, top result 483 -> 418 ms.
 4. `FEEDER_CYCLE`: stop vibration, light 1 shot, wait for the
    renderer's refill decision, vibrate, settle, shoot. Defines the
    vision-reply path into the PLC.

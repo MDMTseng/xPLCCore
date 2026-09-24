@@ -225,6 +225,32 @@ PROGRAM AxisGroupSM
         WAIT_KIND_DIN    : INT := 2;
         WAIT_DIN_DEFAULT_TIMEOUT_MS : LINT := 30000;
 
+        // TAPE_CYCLE composite (plc.md §Direction step 3): wait for the arm's
+        // move to start, advance the reel, wait for it to stop, then arm the
+        // distance-gated top-camera shots. One at a time; deferred reply.
+        // TapeState: 1 wait motion, 2 wait reel, 3 arm the shots.
+        TapeActive      : BOOL;
+        TapeState       : INT;
+        TapeCmdId       : DINT;
+        TapeStartMs     : LINT;
+        TapeT1          : LINT;      // motion trigger reached
+        TapeT2          : LINT;      // reel stopped
+        TapeTimeoutMs   : LINT;
+        TapeTargetId    : SMC_Movement_Id;
+        TapeTargetProg  : REAL;
+        TapeReelDist    : REAL;
+        TapeReelF       : REAL;
+        TapeReelAcc     : REAL;
+        TapeReelDec     : REAL;
+        TapeReelJerk    : REAL;
+        TapeFly         : FlyEventData;   // the shots, parsed at command time
+        TapeDone        : BOOL;
+        TapeOk          : BOOL;
+        TapeErr         : STRING(31);
+        TapeIdx         : INT;
+        TapeOffset      : DINT;
+        TAPE_DEFAULT_TIMEOUT_MS : LINT := 6000;
+
         // Push-notification (server-initiated event) packet pointer.
         // Edge-detect state for COORD_SET and MOVE_DONE push events.
         // Both emit into the same reMP reply-ring as ST_CHG, same
@@ -949,6 +975,80 @@ PROGRAM AxisGroupSM
             END_IF;
         END_IF;
     END_FOR;
+
+    // ---- TAPE_CYCLE sequence (registered in ProcessMotionPacket) ----
+    IF TapeActive THEN
+        TapeDone := FALSE;
+        TapeOk := FALSE;
+        TapeErr := '';
+        IF NOT TCP_MSGPAK_Server.fbMyServer.CLIENT.xActive THEN
+            TapeActive := FALSE;                          // host gone: nobody to answer
+        ELSIF NOT AxisGroupReady THEN
+            TapeDone := TRUE;
+            TapeErr := 'group_not_ready';
+        ELSIF (RuntimeMs - TapeStartMs) > TapeTimeoutMs THEN
+            TapeDone := TRUE;
+            TapeErr := 'tape_timeout';
+        ELSIF TapeState = 1 THEN
+            // same test as a MovmentProgressTrigger fly event
+            IF (CurrentMovementId > TapeTargetId)
+               OR ((CurrentMovementId = TapeTargetId) AND (CurrentMovementIdProgress >= TapeTargetProg)) THEN
+                TapeT1 := RuntimeMs;
+                TapeT2 := RuntimeMs;
+                IF TapeReelDist <> 0 THEN
+                    // same dispatch as ReelGo
+                    reelGoDistance := TapeReelDist;
+                    reelGoVelocity := TapeReelF;
+                    reelGoAccel    := TapeReelAcc;
+                    reelGoDecel    := TapeReelDec;
+                    reelGoJerk     := TapeReelJerk;
+                    IF NOT reelMoveRelative.Busy THEN
+                        reelGoRequest := TRUE;
+                        TapeState := 2;
+                    ELSIF NOT reelMoveRelative2.Busy THEN
+                        reelGoRequest2 := TRUE;
+                        TapeState := 2;
+                    ELSE
+                        TapeDone := TRUE;
+                        TapeErr := 'reel_busy';
+                    END_IF;
+                ELSE
+                    TapeState := 3;
+                END_IF;
+            END_IF;
+        ELSIF TapeState = 2 THEN
+            // reelGoRequest* covers the scan before MC_MoveRelative reports Busy
+            IF NOT (reelGoRequest OR reelGoRequest2 OR reelMoveRelative.Busy OR reelMoveRelative2.Busy) THEN
+                TapeT2 := RuntimeMs;
+                TapeState := 3;
+            END_IF;
+        END_IF;
+        IF TapeActive AND NOT TapeDone AND (TapeState = 3) THEN
+            TapeDone := TRUE;
+            TapeErr := 'flyevent_buffer_full';
+            FOR TapeIdx := 0 TO TO_INT(FlyEventBufferSize - 1) DO
+                IF FlyEventBuffer[TapeIdx].TriggerType = 0 THEN
+                    FlyEventBuffer[TapeIdx] := TapeFly;
+                    TapeOk := TRUE;
+                    TapeErr := '';
+                    EXIT;
+                END_IF;
+            END_FOR;
+        END_IF;
+        IF TapeDone THEN
+            IF TryAcquireReplySlot(ADR(GVL.ReMpDropCount_Reply)) THEN
+                IF TapeOk THEN
+                    MessagePackerFb.PackKvLint(ADR('wait_ms'), TapeT1 - TapeStartMs);
+                    MessagePackerFb.PackKvLint(ADR('reel_ms'), TapeT2 - TapeT1);
+                ELSE
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR(TapeErr));
+                    MessagePackerFb.PackKvDint(ADR('state'), TapeState);
+                END_IF;
+                CommitReplySlotAck(TapeCmdId, TapeOk);
+                TapeActive := FALSE;
+            END_IF;
+        END_IF;
+    END_IF;
 
     CheckAxisGroupReady();
 
