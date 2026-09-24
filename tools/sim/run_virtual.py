@@ -225,6 +225,12 @@ def main():
     ap.add_argument("--cycles", type=int, default=20, help="stop after this many tape checks")
     ap.add_argument("--home", choices=("go", "skip"), default="skip",
                     help="'skip' (default): EV_HOME_GO_FORCE_SKIP, allowed while the delta trio is simulated; 'go': real homing")
+    ap.add_argument("--parts", type=int, default=None,
+                    help="plan exactly this many good parts and run until the plan is done (overrides --cycles)")
+    ap.add_argument("--ng-side", type=float, default=None, help="vision mock NG rate, side camera")
+    ap.add_argument("--ng-btm", type=float, default=None, help="vision mock NG rate, bottom camera")
+    ap.add_argument("--ng-tape", type=float, default=None, help="vision mock NG rate, parts in the tape")
+    ap.add_argument("--seed", type=int, default=None, help="vision mock random seed")
     ap.add_argument("--vision-first", action="store_true", help="connect vision before the PLC")
     ap.add_argument("--no-ui-start", action="store_true", help="UI already running with XPLC_HARNESS=1")
     a = ap.parse_args()
@@ -236,8 +242,11 @@ def main():
     try:
         plc_prepare()
         procs.append(start("remote_harness", [sys.executable, os.path.join(SCRIPTS, "internals", "remote_harness.py")]))
-        procs.append(start("vision_mock", [sys.executable, os.path.join(REPO, "tools", "sim", "vision_mock.py"),
-                                           "--plc", "%s:8126" % a.plc]))
+        mock = [sys.executable, os.path.join(REPO, "tools", "sim", "vision_mock.py"), "--plc", "%s:8126" % a.plc]
+        for opt in ("ng_side", "ng_btm", "ng_tape", "seed"):
+            if getattr(a, opt) is not None:
+                mock += ["--" + opt.replace("_", "-"), str(getattr(a, opt))]
+        procs.append(start("vision_mock", mock))
         if not a.no_ui_start:
             env = os.environ.copy()
             env["PATH"] = NODE_DIR + os.pathsep + env.get("PATH", "")
@@ -266,7 +275,10 @@ def main():
 
         bring_to_ready(a.home)
         push("set_tab", {"tab": "Calib"}, timeout=10)
-        log("plan:", push("set_plan", {"plan": [a.cycles + 5]}, timeout=10))
+        plan = [a.parts] if a.parts else [a.cycles + 5]
+        if a.parts:
+            a.cycles = 10 ** 6            # run until the plan completes
+        log("plan:", push("set_plan", {"plan": plan}, timeout=10))
         collector = event_log.Collector(a.plc).start()
         log("run_cycle:", push("run_cycle", timeout=10))
 

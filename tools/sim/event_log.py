@@ -34,7 +34,8 @@ OUT_NAMES = {0: "Nozzle_suck", 1: "Nozzle_blow", 3: "CAM_Top_SideLight", 5: "Fle
              14: "CAM_Top", 15: "CAM_Top_Light0"}
 # CalibPage.tsx EVT
 MARKS = {1: "TOP_RESULT", 2: "BTM_RESULT", 3: "SIDE_RESULT", 4: "FEEDER_RESULT",
-         5: "VIB_ON", 6: "VIB_OFF", 7: "FEEDER_LIGHT_ON", 8: "FEEDER_LIGHT_OFF"}
+         5: "VIB_ON", 6: "VIB_OFF", 7: "FEEDER_LIGHT_ON", 8: "FEEDER_LIGHT_OFF",
+         9: "PLACE", 10: "TOSS"}
 MARK = {v: k for k, v in MARKS.items()}
 
 OUT_ON, OUT_OFF, IN_ON, IN_OFF, MOVE_START, IDLE, REEL_START, REEL_END, FSM, HOST = range(1, 11)
@@ -56,7 +57,8 @@ class Collector:
 
     def poll_once(self):
         start = 0 if self.next is None else self.next
-        with urllib.request.urlopen(self.url % start, timeout=1.0) as r:
+        # >1 s: a busy one-connection server costs one SYN re-send (~1 s).
+        with urllib.request.urlopen(self.url % start, timeout=2.5) as r:
             lines = r.read().decode("ascii", "replace").split("\n")
         head = int(lines[0].split()[1])
         if self.next is None:

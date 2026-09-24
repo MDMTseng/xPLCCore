@@ -277,7 +277,12 @@ def poll_plc(server, world, url, period, reel_cell):
     top_pending = False
     while True:
         try:
-            with urllib.request.urlopen(url, timeout=0.5) as r:
+            # 2.5 s, not less: the PLC's HTTP server accepts one connection
+            # at a time, and while it is busy Windows re-sends our SYN only
+            # after ~1 s. A shorter timeout gave up on every such request,
+            # piled up abandoned connections and blacked the mock out for
+            # 10+ s mid-run (2026-09-24).
+            with urllib.request.urlopen(url, timeout=2.5) as r:
                 v = json.loads(r.read().decode())
         except Exception as e:
             # Retry fast: the PLC latches only the *last* bottom-camera

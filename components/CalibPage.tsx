@@ -59,6 +59,8 @@ const EVT = {
   VIB_OFF: 6,
   FEEDER_LIGHT_ON: 7,
   FEEDER_LIGHT_OFF: 8,
+  PLACE: 9,
+  TOSS: 10,
 } as const;
 const EVT_BY_RESULT: Record<string, number> = {
   TOPCheckData: EVT.TOP_RESULT,
@@ -1480,6 +1482,7 @@ export const CalibPage: React.FC<{
         if(sideCam_rep_data.status==1 && !Number.isNaN(targetPlaceSlotIdx) && compensationIsNG==false && tossReasons.length==0){
           
           
+          evtMark(EVT.PLACE);
           await runinng_checkpoint("place object",i);
 
           let x_place_offset=targetPlaceSlotIdx*slotDist;
@@ -1496,6 +1499,7 @@ export const CalibPage: React.FC<{
         }      
         else
         {//toss
+          evtMark(EVT.TOSS);
           await runinng_checkpoint("[TOSS] object",{tossReasons:tossReasons});
           
           //console.log("toss object",sideCam_rep_data.status,targetPlaceSlotIdx,compensationIsNG);
