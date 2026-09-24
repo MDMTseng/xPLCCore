@@ -7,7 +7,7 @@
   --bg:#F1F4F2; --panel:#FFFFFF; --ink:#17201C; --muted:#5B6964; --grid:#DCE3DF; --grid2:#EBF0ED;
   --arm:#3D6E8F; --arm2:#7FA3BC; --suck:#178A73; --blow:#0E5A4B; --feed:#8C6B34; --brake:#B9975C;
   --flight:#E4CF8E; --cam:#6A4C9C; --light:#C3B2E3; --reel:#C07A12; --mark:#17201C;
-  --ok:#2E8B57; --ng:#C4392F; --band:rgba(61,110,143,.05);
+  --ok:#2E8B57; --ng:#C4392F; --band:rgba(61,110,143,.05); --lamp:#E0A800;
   --display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
   --body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI","Noto Sans TC","Microsoft JhengHei",sans-serif;
   --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
@@ -18,7 +18,7 @@
     --bg:#111715; --panel:#18201D; --ink:#E4EBE7; --muted:#92A29C; --grid:#2A3531; --grid2:#1F2825;
     --arm:#6FA3C6; --arm2:#3E6A87; --suck:#3FBF9F; --blow:#8FE3CC; --feed:#C9A45E; --brake:#7E6536;
     --flight:#6E5F33; --cam:#A58BD6; --light:#56477A; --reel:#E3A54A; --mark:#E4EBE7;
-    --ok:#4CC38A; --ng:#F06A5E; --band:rgba(111,163,198,.07);
+    --ok:#4CC38A; --ng:#F06A5E; --band:rgba(111,163,198,.07); --lamp:#FFD45C;
   }
 }
 :root[data-theme="dark"]{
@@ -26,7 +26,7 @@
   --bg:#111715; --panel:#18201D; --ink:#E4EBE7; --muted:#92A29C; --grid:#2A3531; --grid2:#1F2825;
   --arm:#6FA3C6; --arm2:#3E6A87; --suck:#3FBF9F; --blow:#8FE3CC; --feed:#C9A45E; --brake:#7E6536;
   --flight:#6E5F33; --cam:#A58BD6; --light:#56477A; --reel:#E3A54A; --mark:#E4EBE7;
-  --ok:#4CC38A; --ng:#F06A5E; --band:rgba(111,163,198,.07);
+  --ok:#4CC38A; --ng:#F06A5E; --band:rgba(111,163,198,.07); --lamp:#FFD45C;
 }
 body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:14px;line-height:1.55}
 .wrap{max-width:1280px;margin:0 auto;padding-inline:16px;padding-block:28px 48px;display:flex;flex-direction:column;gap:22px}
@@ -93,7 +93,7 @@ tr{cursor:pointer}
 @media (max-width:760px){.topview{border-right:0;border-bottom:1px solid var(--grid)}}
 .topview{display:flex;justify-content:center}
 .topview svg{width:100%;height:auto;max-height:min(46vh,440px)}
-.topview svg text{font-family:var(--body);font-size:10px;fill:var(--muted)}
+.topview svg text{font-family:var(--body);font-size:14px;fill:var(--muted)}
 .status{padding:12px 14px;display:flex;flex-direction:column;gap:10px}
 .status dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;font-size:13px}
 .status dt{color:var(--muted)}
@@ -102,7 +102,7 @@ tr{cursor:pointer}
 .chip{font-size:12px;padding:2px 8px;border-radius:10px;border:1px solid var(--grid);color:var(--muted)}
 .chip.on{color:var(--panel);border-color:transparent}
 .chip.on[data-c=cam]{background:var(--cam)} .chip.on[data-c=reel]{background:var(--reel)} .chip.on[data-c=feed]{background:var(--feed)}
-.chip.on[data-c=suck]{background:var(--suck)} .chip.on[data-c=wait]{background:var(--ng)}
+.chip.on[data-c=suck]{background:var(--suck)} .chip.on[data-c=lamp]{background:var(--lamp);color:#1b1500} .chip.on[data-c=wait]{background:var(--ng)}
 @media (prefers-reduced-motion: reduce){*{scroll-behavior:auto!important}}
 </style>
 
@@ -155,7 +155,7 @@ tr{cursor:pointer}
         <span><i class="sw" style="background:var(--brake)"></i>剎車</span>
         <span><i class="sw" style="background:var(--flight)"></i>柔震盤燈</span>
         <span><i class="sw" style="background:var(--cam)"></i>相機觸發</span>
-        <span><i class="sw" style="background:var(--light)"></i>頂部光源</span>
+        <span><i class="sw" style="background:var(--lamp)"></i>打光</span>
         <span><i class="sw" style="background:var(--reel)"></i>捲料</span>
         <span>◆ 視覺結果</span>
         <span style="color:var(--ok)">▲ 放料</span>
@@ -223,8 +223,8 @@ $("findings").innerHTML = F.map(([c,h,p]) => `<div class="finding ${c}"><h3>${h}
 
 const LANES = [
   ["arm","手臂","運動段"],["nozzle","吸嘴","吸 / 破真空"],["feeder","柔震盤","振動 · 剎車 · 燈 · 拍照"],
-  ["side","側面相機","觸發 · 結果"],["btm","底部相機","觸發 · 結果"],["reel","載帶捲料","ReelGo"],
-  ["top","頂部相機","兩光拍照 · 結果"],["result","結果","放料 / 丟料"],
+  ["side","側面相機","觸發 · 打光 · 結果"],["btm","底部相機","觸發 · 打光 · 結果"],["reel","載帶捲料","ReelGo"],
+  ["top","頂部相機","側光 / 正面光 · 結果"],["result","結果","放料 / 丟料"],
 ];
 const LANE_H = 44, AXIS_H = 28, PAD = 16;
 document.documentElement.style.setProperty("--lane", LANE_H + "px");
@@ -238,7 +238,7 @@ const MAX = 1.2;
 function zoomToSlider(z){ return Math.round(100 * Math.log(z/MIN()) / Math.log(MAX/MIN())); }
 function sliderToZoom(v){ return MIN() * Math.pow(MAX/MIN(), v/100); }
 
-const NAMES = {wait:"手臂閒置",move:"運動段",suck:"吸",blow:"破真空",brake:"剎車",shot:"相機觸發",light:"頂部光源",reel:"捲料",vib:"振動",flight:"柔震盤燈",result:"視覺結果",place:"放料",toss:"丟料"};
+const NAMES = {wait:"手臂閒置",move:"運動段",suck:"吸",blow:"破真空",brake:"剎車",shot:"相機觸發",light:"打光",reel:"捲料",vib:"振動",flight:"柔震盤燈",result:"視覺結果",place:"放料",toss:"丟料"};
 function el(tag, attrs, parent){ const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); parent.appendChild(e); return e; }
 
 function render(){
@@ -287,7 +287,7 @@ function render(){
         else if (it.k === "brake"){ fill = "var(--brake)"; y = top + 17; h = 9; }
         else if (it.k === "flight"){ fill = "var(--flight)"; y = top + 27; h = 9; }
         else if (it.k === "shot"){ fill = "var(--cam)"; }
-        else if (it.k === "light"){ fill = "var(--light)"; y = top + 10; h = LANE_H - 20; }
+        else if (it.k === "light"){ fill = "var(--lamp)"; y = top + LANE_H - 13; h = 6; }
         else if (it.k === "reel"){ fill = "var(--reel)"; }
         node = el("rect",{x:x0,y,width:it.k==="shot"?Math.max(2.5,w):w,height:h,fill,rx:1},svg);
       }
@@ -410,6 +410,7 @@ const plateGlow = tel("rect",{x:fr.x+4,y:fr.y+4,width:fr.width-8,height:fr.heigh
 ST.picks.forEach(p => tel("circle",{cx:X(p[0]),cy:Y(p[1]),r:3,fill:"var(--muted)",opacity:.35}));
 label(fr.x+8, fr.y+16, "柔震盤", "start");
 const feederFlash = tel("rect",{...fr,rx:14,fill:"none",stroke:"var(--cam)","stroke-width":5,opacity:0});
+const feederLamp = tel("rect",{x:fr.x-6,y:fr.y-6,width:fr.width+12,height:fr.height+12,rx:18,fill:"none",stroke:"var(--lamp)","stroke-width":6,opacity:0});
 
 // wait point
 tel("path",{d:`M${X(ST.wait[0])-6} ${Y(ST.wait[1])} h12 M${X(ST.wait[0])} ${Y(ST.wait[1])-6} v12`,stroke:"var(--muted)","stroke-width":1.5});
@@ -419,6 +420,11 @@ label(X(ST.wait[0]), Y(ST.wait[1])-10, "等待位");
 tel("circle",{cx:X(ST.insp[0]),cy:Y(ST.insp[1]),r:7*SC,fill:"var(--grid2)",stroke:"var(--cam)","stroke-width":2});
 const btmFlash = tel("circle",{cx:X(ST.insp[0]),cy:Y(ST.insp[1]),r:7*SC,fill:"var(--cam)",opacity:0});
 const sideFlash = tel("rect",{x:X(ST.insp[0])+8*SC,y:Y(ST.insp[1])-4*SC,width:5*SC,height:8*SC,rx:2,fill:"var(--cam)",opacity:.25});
+// side light: a beam from the side camera onto the part
+const icx = X(ST.insp[0]), icy = Y(ST.insp[1]);
+const sideLamp = tel("path",{d:`M${icx+8*SC} ${icy-4*SC} L${icx} ${icy-2*SC} L${icx} ${icy+2*SC} L${icx+8*SC} ${icy+4*SC} Z`,fill:"var(--lamp)",opacity:0});
+// bottom light: a ring around the bottom camera
+const btmLamp = tel("circle",{cx:icx,cy:icy,r:9.5*SC,fill:"none",stroke:"var(--lamp)","stroke-width":5,opacity:0});
 label(X(ST.insp[0]), Y(ST.insp[1]) + 7*SC + 14, "底部 / 側面相機");
 
 // tape: cells slide with the reel
@@ -430,6 +436,12 @@ const cellsInner = tel("g",{},cells);
 for (let k = -4; k <= 10; k++) tel("rect",{x:X(ST.slot[0] + k*ST.pitch) - 2.5*SC, y:tapeY-2.5*SC, width:5*SC, height:5*SC, rx:2, fill:"var(--panel)", stroke:"var(--muted)", "stroke-width":1},cellsInner);
 tel("rect",{x:X(ST.slot[0]-ST.pitch/2),y:tapeY-8*SC,width:3*ST.pitch*SC,height:16*SC,rx:3,fill:"none",stroke:"var(--cam)","stroke-width":2,"stroke-dasharray":"5 3"});
 const topFlash = tel("rect",{x:X(ST.slot[0]-ST.pitch/2),y:tapeY-8*SC,width:3*ST.pitch*SC,height:16*SC,rx:3,fill:"var(--cam)",opacity:0});
+// top lights: side light = bars on both sides of the view, front light = ring around it
+const tfx = X(ST.slot[0]-ST.pitch/2), tfw = 3*ST.pitch*SC;
+const topSideLamp = tel("g",{opacity:0});
+tel("rect",{x:tfx-5*SC,y:tapeY-7*SC,width:3*SC,height:14*SC,rx:2,fill:"var(--lamp)"},topSideLamp);
+tel("rect",{x:tfx+tfw+2*SC,y:tapeY-7*SC,width:3*SC,height:14*SC,rx:2,fill:"var(--lamp)"},topSideLamp);
+const topFrontLamp = tel("rect",{x:tfx-3,y:tapeY-8*SC-3,width:tfw+6,height:16*SC+6,rx:5,fill:"none",stroke:"var(--lamp)","stroke-width":5,opacity:0});
 label(X(ST.slot[0]-ST.pitch/2), tapeY-8*SC-7, "頂部相機 · 載帶", "start");
 const reelArrow = label(X(tx1)-4, tapeY+6*SC+15, "", "end");
 
@@ -446,7 +458,7 @@ const nozzle = tel("circle",{r:7,fill:"var(--arm)"});
 const part = tel("rect",{width:10,height:10,x:-5,y:-5,rx:1.5,fill:"var(--suck)",stroke:"var(--panel)","stroke-width":1.5});
 const zlabel = label(0, 0, "", "start");
 
-const CHIPS = [["suck","吸料中"],["cam","相機拍照"],["reel","捲料中"],["feed","柔震盤振動"],["wait","手臂等待"]];
+const CHIPS = [["suck","吸料中"],["cam","相機拍照"],["lamp","打光"],["reel","捲料中"],["feed","柔震盤振動"],["wait","手臂等待"]];
 $("chips").innerHTML = CHIPS.map(([c,n]) => `<span class="chip" data-c="${c}">${n}</span>`).join("");
 const chip = Object.fromEntries(CHIPS.map(([c]) => [c, document.querySelector(`.chip[data-c="${c}"]`)]));
 
@@ -474,7 +486,17 @@ function drawTop(t){
   feederFlash.setAttribute("opacity", feedShot ? 1 : 0);
   chip.cam.classList.toggle("on", btm || side || topShot || feedShot);
   const vib = active(L.feeder, "vib", t), light = active(L.feeder, "flight", t), brake = active(L.feeder, "brake", t);
-  plateGlow.setAttribute("opacity", light ? .7 : 0);
+  const lamp = (lane, bits, min) => L[lane].some(x => x.k === "light" && (!bits || bits.includes(x.bit)) && x.s <= t && t <= Math.max(x.e, x.s + min));
+  const lFeed = lamp("feeder", null, 90), lSide = lamp("side", null, 90), lBtm = lamp("btm", null, 90);
+  const lTopSide = lamp("top", [3], 70), lTopFront = lamp("top", [15], 70);
+  plateGlow.setAttribute("opacity", light || lFeed ? .7 : 0);
+  feederLamp.setAttribute("opacity", lFeed || light ? .9 : 0);
+  sideLamp.setAttribute("opacity", lSide ? .85 : 0);
+  btmLamp.setAttribute("opacity", lBtm ? .9 : 0);
+  topSideLamp.setAttribute("opacity", lTopSide ? 1 : 0);
+  topFrontLamp.setAttribute("opacity", lTopFront ? .95 : 0);
+  const lampsOn = [[light || lFeed, "柔震盤"], [lSide, "側面"], [lBtm, "底部"], [lTopSide, "頂部側光"], [lTopFront, "頂部正面光"]].filter(x => x[0]).map(x => x[1]);
+  chip.lamp.classList.toggle("on", lampsOn.length > 0);
   plate.setAttribute("transform", vib ? `translate(${(Math.sin(t/9)*2.5).toFixed(1)},${(Math.cos(t/7)*1.5).toFixed(1)})` : "translate(0,0)");
   plate.setAttribute("stroke-width", brake ? 5 : 2);
   chip.feed.classList.toggle("on", vib);
@@ -488,6 +510,7 @@ function drawTop(t){
   $("dl").innerHTML = `<dt>時間</dt><dd>${(t/1000).toFixed(3)} s</dd>
     <dt>手臂 X / Y / Z</dt><dd>${p ? `${p[1].toFixed(1)} / ${p[2].toFixed(1)} / ${p[3].toFixed(1)}` : "—"}</dd>
     <dt>運動段</dt><dd>${move ? "#" + move.id : "靜止"}</dd>
+    <dt>打光</dt><dd>${lampsOn.length ? lampsOn.join("、") : "—"}</dd>
     <dt>放料 / 丟料</dt><dd>${count("place", t)} / ${count("toss", t)}</dd>
     <dt>捲料次數</dt><dd>${L.reel.filter(x => x.e <= t).length}</dd>`;
 }

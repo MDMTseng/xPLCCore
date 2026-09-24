@@ -103,13 +103,20 @@ def build(events, reasons):
                 lanes["feeder"].append(dict(item, k="brake"))
             elif bit == 12:
                 lanes["feeder"].append(dict(item, k="shot"))
+            elif bit == 13:
+                lanes["feeder"].append(dict(item, k="light"))
             elif bit == 8:
                 lanes["side"].append(dict(item, k="shot"))
+            elif bit == 9:
+                lanes["side"].append(dict(item, k="light"))
             elif bit == 10:
                 lanes["btm"].append(dict(item, k="shot"))
+            elif bit == 11:
+                lanes["btm"].append(dict(item, k="light"))
             elif bit == 14:
                 lanes["top"].append(dict(item, k="shot"))
             elif bit in (3, 15):
+                # 3 = top side light, 15 = top front light (item["bit"] tells them apart)
                 lanes["top"].append(dict(item, k="light"))
 
     reel = None
