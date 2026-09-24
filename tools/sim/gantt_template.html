@@ -135,6 +135,10 @@ tr{cursor:pointer}
       <div class="topview"><svg id="top" role="img" aria-label="機台俯視圖：手臂位置與各工位狀態"></svg></div>
       <div class="status">
         <div class="inset">
+          <div class="cap"><span>檢查位放大 · 底部與側面相機</span><span id="inspArm"></span></div>
+          <svg id="insp" viewBox="0 0 340 128" role="img" aria-label="檢查位：底部相機與側面相機的拍照與打光"></svg>
+        </div>
+        <div class="inset">
           <div class="cap"><span>載帶放大 · 頂部相機下 3 格</span><span id="insetReel"></span></div>
           <svg id="inset" viewBox="0 0 340 118" role="img" aria-label="頂部相機下 3 格載帶的物料狀態"></svg>
         </div>
@@ -405,7 +409,9 @@ function poseAt(t){
   const f = (t - ta) / Math.max(1, b[0] - ta);
   return [t, a[1] + (b[1]-a[1])*f, a[2] + (b[2]-a[2])*f, a[3] + (b[3]-a[3])*f];
 }
-// Camera pulses are 1-50 ms: keep them visible for at least `min` ms.
+// Camera pulses are 1-50 ms: keep them visible for at least `min` ms of
+// run time (FLASH_MS; slow playback stretches it on screen).
+const FLASH_MS = 40;
 const active = (list, k, t, min = 0) => list.some(x => (k == null || x.k === k) && x.s <= t && t <= Math.max(x.e, x.s + min));
 const count = (k, t) => L.result.filter(x => x.k === k && x.s <= t).length;
 
@@ -450,6 +456,30 @@ const sideLamp = tel("path",{d:`M${icx+8*SC} ${icy-4*SC} L${icx} ${icy-2*SC} L${
 // bottom light: a ring around the bottom camera
 const btmLamp = tel("circle",{cx:icx,cy:icy,r:9.5*SC,fill:"none",stroke:"var(--lamp)","stroke-width":5,opacity:0});
 label(X(ST.insp[0]), Y(ST.insp[1]) + 7*SC + 14, "底部 / 側面相機");
+// which shot just fired: "側 1" / "側 2" beside the side camera, "底" on the bottom one
+const sideTag = tel("text",{x:X(ST.insp[0])+14*SC,y:Y(ST.insp[1])+4,"font-size":15,"font-weight":700,fill:"var(--cam)"});
+const btmTag = tel("text",{x:X(ST.insp[0]),y:Y(ST.insp[1])-8*SC-4,"text-anchor":"middle","font-size":15,"font-weight":700,fill:"var(--cam)"});
+const SIDE = L.side.filter(x => x.k === "shot"), BTM = L.btm.filter(x => x.k === "shot");
+// side shot ordinal within one part: a shot > 600 ms after the previous one starts a new part
+const sideOrd = SIDE.map((x, i) => (i > 0 && x.s - SIDE[i-1].s < 600) ? 2 : 1);
+const TAG_MS = 300;
+
+// inspection inset: bottom camera (circle), side camera (box), part at the nozzle
+const insp = $("insp");
+const isp = (tag, a, parent = insp) => el(tag, a, parent);
+const IC = {x: 130, y: 64}, SC2 = {x: 272, y: 64};
+isp("circle",{cx:IC.x,cy:IC.y,r:44,fill:"var(--grid2)",stroke:"var(--cam)","stroke-width":2});
+const iBtmLamp = isp("circle",{cx:IC.x,cy:IC.y,r:52,fill:"none",stroke:"var(--lamp)","stroke-width":7,opacity:0});
+const iBtmFlash = isp("circle",{cx:IC.x,cy:IC.y,r:44,fill:"var(--cam)",opacity:0});
+const iSideLamp = isp("path",{d:`M${SC2.x-22} ${IC.y-20} L${IC.x+14} ${IC.y-7} L${IC.x+14} ${IC.y+7} L${SC2.x-22} ${IC.y+20} Z`,fill:"var(--lamp)",opacity:0});
+isp("rect",{x:SC2.x-22,y:SC2.y-26,width:44,height:52,rx:6,fill:"var(--grid2)",stroke:"var(--cam)","stroke-width":2});
+const iSideFlash = isp("rect",{x:SC2.x-22,y:SC2.y-26,width:44,height:52,rx:6,fill:"var(--cam)",opacity:0});
+const iNozzle = isp("circle",{cx:IC.x,cy:IC.y,r:9,fill:"var(--arm)",opacity:0});
+const iPart = isp("rect",{x:IC.x-7,y:IC.y-7,width:14,height:14,rx:2,fill:"var(--suck)",stroke:"var(--panel)","stroke-width":2,opacity:0});
+const iBtmTag = isp("text",{x:IC.x-58,y:IC.y-36,"text-anchor":"middle","font-size":22,"font-weight":700,fill:"var(--cam)"});
+const iSideTag = isp("text",{x:SC2.x,y:SC2.y+8,"text-anchor":"middle","font-size":20,"font-weight":700,fill:"var(--ink)"});
+isp("text",{x:IC.x,y:124,"text-anchor":"middle",fill:"var(--muted)","font-size":12}).textContent = "底部相機";
+isp("text",{x:SC2.x,y:124,"text-anchor":"middle",fill:"var(--muted)","font-size":12}).textContent = "側面相機";
 
 // tape: cells slide with the reel
 const tapeY = Y(ST.slot[1]), tx0 = ST.slot[0] - 3*ST.pitch, tx1 = ST.slot[0] + 9*ST.pitch;
@@ -604,26 +634,47 @@ function drawTop(t){
     part.setAttribute("opacity", suck ? 1 : 0);
     chip.suck.classList.toggle("on", suck);
   }
-  const btm = active(L.btm, "shot", t, 90), side = active(L.side, "shot", t, 90);
-  const topShot = active(L.top, "shot", t, 90) || active(L.top, "light", t, 60), feedShot = active(L.feeder, "shot", t, 90);
+  const btm = active(L.btm, "shot", t, FLASH_MS), side = active(L.side, "shot", t, FLASH_MS);
+  const topShot = active(L.top, "shot", t, FLASH_MS) || active(L.top, "light", t, FLASH_MS), feedShot = active(L.feeder, "shot", t, FLASH_MS);
   btmFlash.setAttribute("opacity", btm ? .55 : 0);
+  let si = -1; for (let i = 0; i < SIDE.length && SIDE[i].s <= t; i++) si = i;
+  const sideOn = si >= 0 && t - SIDE[si].s < TAG_MS;
+  sideTag.textContent = sideOn ? `側 ${sideOrd[si]}` : "";
+  sideTag.setAttribute("opacity", sideOn ? 1 - (t - SIDE[si].s) / TAG_MS * 0.6 : 0);
+  const lastB = BTM.filter(x => x.s <= t).pop();
+  const btmOn = lastB && t - lastB.s < TAG_MS;
+  btmTag.textContent = btmOn ? "底" : "";
+  btmTag.setAttribute("opacity", btmOn ? 1 - (t - lastB.s) / TAG_MS * 0.6 : 0);
+  iBtmFlash.setAttribute("opacity", btm ? .6 : 0);
+  iSideFlash.setAttribute("opacity", side ? .75 : 0);
+  iBtmTag.textContent = btmOn ? "底" : "";
+  iBtmTag.setAttribute("opacity", btmOn ? 1 - (t - lastB.s) / TAG_MS * 0.6 : 0);
+  iSideTag.textContent = sideOn ? `側 ${sideOrd[si]}` : "";
+  iSideTag.setAttribute("fill", side ? "var(--panel)" : "var(--cam)");
+  iSideTag.setAttribute("opacity", sideOn ? 1 - (t - SIDE[si].s) / TAG_MS * 0.6 : 0);
+  const atInsp = p && Math.hypot(p[1] - ST.insp[0], p[2] - ST.insp[1]) < 3;
+  iNozzle.setAttribute("opacity", atInsp ? .9 : 0);
+  iPart.setAttribute("opacity", atInsp && active(L.nozzle, "suck", t) ? 1 : 0);
+  $("inspArm").textContent = atInsp ? `手臂在檢查位 · Z ${p[3].toFixed(1)}` : "";
   sideFlash.setAttribute("opacity", side ? .95 : .25);
   topFlash.setAttribute("opacity", topShot ? .4 : 0);
   feederFlash.setAttribute("opacity", feedShot ? 1 : 0);
   chip.cam.classList.toggle("on", btm || side || topShot || feedShot);
   const vib = active(L.feeder, "vib", t), light = active(L.feeder, "flight", t), brake = active(L.feeder, "brake", t);
   const lamp = (lane, bits, min) => L[lane].some(x => x.k === "light" && (!bits || bits.includes(x.bit)) && x.s <= t && t <= Math.max(x.e, x.s + min));
-  const lFeed = lamp("feeder", null, 90), lSide = lamp("side", null, 90), lBtm = lamp("btm", null, 90);
-  const lTopSide = lamp("top", [3], 70), lTopFront = lamp("top", [15], 70);
+  const lFeed = lamp("feeder", null, FLASH_MS), lSide = lamp("side", null, FLASH_MS), lBtm = lamp("btm", null, FLASH_MS);
+  const lTopSide = lamp("top", [3], FLASH_MS), lTopFront = lamp("top", [15], FLASH_MS);
   plateGlow.setAttribute("opacity", light || lFeed ? .7 : 0);
   feederLamp.setAttribute("opacity", lFeed || light ? .9 : 0);
   sideLamp.setAttribute("opacity", lSide ? .85 : 0);
   btmLamp.setAttribute("opacity", lBtm ? .9 : 0);
+  iSideLamp.setAttribute("opacity", lSide ? .8 : 0);
+  iBtmLamp.setAttribute("opacity", lBtm ? .9 : 0);
   topSideLamp.setAttribute("opacity", lTopSide ? 1 : 0);
   topFrontLamp.setAttribute("opacity", lTopFront ? .95 : 0);
   insetSide.setAttribute("opacity", lTopSide ? 1 : 0);
   insetFront.setAttribute("opacity", lTopFront ? .9 : 0);
-  insetFlash.setAttribute("opacity", active(L.top, "shot", t, 90) ? .25 : 0);
+  insetFlash.setAttribute("opacity", active(L.top, "shot", t, FLASH_MS) ? .25 : 0);
   const lampsOn = [[light || lFeed, "柔震盤"], [lSide, "側面"], [lBtm, "底部"], [lTopSide, "頂部側光"], [lTopFront, "頂部正面光"]].filter(x => x[0]).map(x => x[1]);
   chip.lamp.classList.toggle("on", lampsOn.length > 0);
   plate.setAttribute("transform", vib ? `translate(${(Math.sin(t/9)*2.5).toFixed(1)},${(Math.cos(t/7)*1.5).toFixed(1)})` : "translate(0,0)");
