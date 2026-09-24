@@ -53,6 +53,12 @@ VAR
 	tx_stall_force_reset: BOOL := FALSE;
 
 	DBG_reMP_info_ridx_size:INT;
+
+	// Routing of inbound packets (GVL minfo_buf / sysinfo_buf).
+	RouteUnpacker : FB_MpUnpacker;
+	RouteType     : STRING;
+	RouteCmd      : STRING;
+	RouteToSys    : BOOL;
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
 
@@ -72,7 +78,7 @@ fbMyServer(
     ENABLE:= bEnableServer,
     IP_ADDRESS:= ipServerAddress,
     PORT:= uiServerPort,
-    PKT_ALLOW_NEXT:=GVL.minfo_buf_ridx.Space()>1,
+    PKT_ALLOW_NEXT:=(GVL.minfo_buf_ridx.Space()>1) AND (GVL.sysinfo_buf_ridx.Space()>1),
     xForceReset:= tx_stall_force_reset
 );
 // One-shot pulse: clear after delivery so we don't loop-reset.
@@ -91,11 +97,31 @@ IF fbMyServer.PKT_IDX > TMP_PKT_IDX THEN
 	// 'missing_type_field'.
 	IF (fbMyServer.BUFFER_LEN > GVL.MAX_SLOT_PAYLOAD) THEN
 		GVL.OverlenDropCount := GVL.OverlenDropCount + 1;
-	ELSIF (GVL.minfo_buf_ridx.Space() > 0) THEN
-		tmp_ptr:=ADR(GVL.minfo_buf[GVL.minfo_buf_ridx.GetHead()][0]);
-		tmp_ptr[0]:=DINT_TO_BYTE(fbMyServer.BUFFER_LEN);
-		MEMUtils.MemCpy(ADR(tmp_ptr[1]),ADR(fbMyServer.BUFFER_PTR[0]),DINT_TO_UINT(fbMyServer.BUFFER_LEN));
-		GVL.minfo_buf_ridx.PushHead();
+	ELSE
+		// Order-free SYS commands take their own ring so they never queue
+		// behind a motion packet the PLC cannot take yet. Everything else
+		// -- motion, and SYS whose order against motion matters
+		// (COORD1_BIND/UNBIND, SCRATCHPAD_WRITE, unknown) -- stays FIFO in
+		// minfo_buf. Unparseable packets go to minfo_buf too, where the
+		// drain loop NAKs them as before.
+		RouteUnpacker.Init(ADR(fbMyServer.BUFFER_PTR[0]), DINT_TO_UDINT(fbMyServer.BUFFER_LEN));
+		RouteType := RouteUnpacker.TryReadString('type', '');
+		RouteCmd  := RouteUnpacker.TryReadString('cmd', '');
+		RouteToSys := (RouteType = 'SYS') AND (
+			RouteCmd = 'PING' OR RouteCmd = 'GA_EV' OR RouteCmd = 'GET_MACHINE_STATE'
+			OR RouteCmd = 'GET_DIAG' OR RouteCmd = 'VERSION' OR RouteCmd = 'RESET_DBG_INFO'
+			OR RouteCmd = 'SET_AXIS_SIM' OR RouteCmd = 'GET_COORD1_DEBUG');
+		IF RouteToSys AND (GVL.sysinfo_buf_ridx.Space() > 0) THEN
+			tmp_ptr:=ADR(GVL.sysinfo_buf[GVL.sysinfo_buf_ridx.GetHead()][0]);
+			tmp_ptr[0]:=DINT_TO_BYTE(fbMyServer.BUFFER_LEN);
+			MEMUtils.MemCpy(ADR(tmp_ptr[1]),ADR(fbMyServer.BUFFER_PTR[0]),DINT_TO_UINT(fbMyServer.BUFFER_LEN));
+			GVL.sysinfo_buf_ridx.PushHead();
+		ELSIF (NOT RouteToSys) AND (GVL.minfo_buf_ridx.Space() > 0) THEN
+			tmp_ptr:=ADR(GVL.minfo_buf[GVL.minfo_buf_ridx.GetHead()][0]);
+			tmp_ptr[0]:=DINT_TO_BYTE(fbMyServer.BUFFER_LEN);
+			MEMUtils.MemCpy(ADR(tmp_ptr[1]),ADR(fbMyServer.BUFFER_PTR[0]),DINT_TO_UINT(fbMyServer.BUFFER_LEN));
+			GVL.minfo_buf_ridx.PushHead();
+		END_IF;
 	END_IF;
 END_IF;
 

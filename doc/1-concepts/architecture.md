@@ -43,7 +43,7 @@ solidification.md.
 │                        diagnostic counters)                          │
 │        │                                                             │
 │        ▼                                                             │
-│   GVL.minfo_buf_ridx ── 6-slot ring of decoded MsgPakInfo            │
+│   GVL.sysinfo_buf (8, order-free SYS) + minfo_buf (16, FIFO)         │
 │        │                                                             │
 │        ▼                                                             │
 │   AxisGroupSM (EC task 1ms) ── single big dispatcher:                │
@@ -220,11 +220,21 @@ human-readable cause for any FSM→Error transition; surfaced in
 
 ## Ring buffers
 
-Three rings:
+Rings:
 
-- `minfo_buf` (6 slots, 256 bytes each) — inbound msgpack command
-  decode. Slot byte 0 is length, bytes 1..255 are payload. Producer
+- `minfo_buf` (16 slots, 256 bytes each) — inbound msgpack commands,
+  FIFO. Slot byte 0 is length, bytes 1..255 are payload. Producer
   is the parser in `TCP_MSGPAK_Server`; consumer is `AxisGroupSM`.
+  Holds motion and every SYS command whose order against motion
+  matters (`COORD1_BIND/UNBIND`, `SCRATCHPAD_WRITE`, anything unknown).
+  A motion packet the PLC cannot take yet waits at the tail and holds
+  everything behind it.
+- `sysinfo_buf` (8 slots, same layout) — order-free SYS commands
+  (`PING`, `GA_EV`, `GET_MACHINE_STATE`, `GET_DIAG`, `VERSION`,
+  `RESET_DBG_INFO`, `SET_AXIS_SIM`, `GET_COORD1_DEBUG`), routed by the
+  producer on `type`/`cmd`. `DrainHostPackets` empties it first every
+  scan, so these never wait behind motion (review 2026-09-24 P0-3).
+  They may overtake motion packets sent earlier.
   Overlen packets are dropped with `OverlenDropCount` rather than
   silently wrapping via `DINT_TO_BYTE`.
 - `reMP_info_ridx` (32 slots) — outbound msgpack reply + push

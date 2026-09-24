@@ -2,8 +2,19 @@
 VAR_GLOBAL
 	
 	
-	minfo_buf: ARRAY [0..5] OF ARRAY [0..256-1]OF BYTE;
-	minfo_buf_ridx:FB_RingBufferIndex(6);
+	(* Host->PLC packet rings, filled by TCP_MSGPAK_Server (Comm task),
+	   drained by AxisGroupSM.DrainHostPackets (EC task).
+	   minfo_buf  : motion packets and every SYS command whose order
+	                relative to motion matters. FIFO; a motion packet the
+	                PLC cannot take yet (buffer full, BLOCK_ waits) holds it.
+	   sysinfo_buf: order-free SYS commands (see TCP_MSGPAK_Server
+	                IsOrderFreeSys), drained completely every scan so
+	                PING, GA_EV and state reads never wait behind motion
+	                (review 2026-09-24 P0-3). *)
+	minfo_buf: ARRAY [0..15] OF ARRAY [0..256-1]OF BYTE;
+	minfo_buf_ridx:FB_RingBufferIndex(16);
+	sysinfo_buf: ARRAY [0..7] OF ARRAY [0..256-1]OF BYTE;
+	sysinfo_buf_ridx:FB_RingBufferIndex(8);
 
 
 	reMP_info_SIZE:INT:=32;

@@ -16,6 +16,10 @@ VAR
     // SET_AXIS_SIM mask raw read. -1 sentinel = missing key.
     AxisSimMaskRaw : LINT;
 
+    // TRUE while the packet being handled came from GVL.sysinfo_buf
+    // (order-free SYS ring), FALSE for GVL.minfo_buf.
+    SrcSys : BOOL;
+
     // COORD1_BIND wire-read staging (B3, analysis 2.1). Pre-fix the
     // handler read straight into GVL.Coord1RefPulse/RefXyz/Scale and
     // validated afterwards -- a REJECTED bind still stomped the GVL
@@ -30,7 +34,8 @@ VAR
     BindScaleZW   : LREAL;
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
-// Drains GVL.minfo_buf_ridx (host->PLC packet ring). Per-iteration:
+// Drains the host->PLC packet rings: GVL.sysinfo_buf (order-free SYS,
+// always first, never blocked) then GVL.minfo_buf (FIFO). Per-iteration:
 //   - protocol_version_mismatch -> NAK + consume + drain next
 //   - PacketType='SYS' -> dispatch to GA_EV / PING / GET_MACHINE_STATE /
 //     SCRATCHPAD_WRITE / RESET_DBG_INFO / VERSION / GET_DIAG /
@@ -54,8 +59,14 @@ CommandType := '';
 ResponsePacketPointer := 0;
 SysDrainIter := 0;
 
-    WHILE (GVL.minfo_buf_ridx.Size() > 0) AND (SysDrainIter < SYS_DRAIN_MAX_PER_SCAN) DO
-        MessageBufferPointer := ADR(GVL.minfo_buf[GVL.minfo_buf_ridx.GetTail()][0]);
+    WHILE ((GVL.sysinfo_buf_ridx.Size() > 0) OR (GVL.minfo_buf_ridx.Size() > 0))
+          AND (SysDrainIter < SYS_DRAIN_MAX_PER_SCAN) DO
+        SrcSys := GVL.sysinfo_buf_ridx.Size() > 0;
+        IF SrcSys THEN
+            MessageBufferPointer := ADR(GVL.sysinfo_buf[GVL.sysinfo_buf_ridx.GetTail()][0]);
+        ELSE
+            MessageBufferPointer := ADR(GVL.minfo_buf[GVL.minfo_buf_ridx.GetTail()][0]);
+        END_IF;
         MessageUnpackerFb.Init(ADR(MessageBufferPointer[1]), MessageBufferPointer[0]);
         // R6 fix: missing-id default is 0, matching the no-id sentinel the
         // G1 dedupe ring and the M-path reply gate test against
@@ -88,7 +99,7 @@ SysDrainIter := 0;
                 CommitReplySlotAck(CommandId, FALSE);
             END_IF;
 
-            GVL.minfo_buf_ridx.ConsumeTail();
+            IF SrcSys THEN GVL.sysinfo_buf_ridx.ConsumeTail(); ELSE GVL.minfo_buf_ridx.ConsumeTail(); END_IF;
             GVL.ProtocolVersionMismatchCount := GVL.ProtocolVersionMismatchCount + 1;
 
             // Neutralise downstream dispatch in case loop exits next.
@@ -662,7 +673,7 @@ SysDrainIter := 0;
                 MessagePackerFb.PackKvStr(ADR('err'), ADR('unknown SYS cmd'));
             END_IF;
 
-            GVL.minfo_buf_ridx.ConsumeTail();
+            IF SrcSys THEN GVL.sysinfo_buf_ridx.ConsumeTail(); ELSE GVL.minfo_buf_ridx.ConsumeTail(); END_IF;
 
             IF ShouldReturn = TRUE THEN // return ack/nak with id
                 CommitReplySlotOrScratch(CommandId, CommandAck, ADR(GVL.ReMpDropCount_Reply));
@@ -684,7 +695,7 @@ SysDrainIter := 0;
                 CommitReplySlotAck(CommandId, FALSE);
             END_IF;
 
-            GVL.minfo_buf_ridx.ConsumeTail();
+            IF SrcSys THEN GVL.sysinfo_buf_ridx.ConsumeTail(); ELSE GVL.minfo_buf_ridx.ConsumeTail(); END_IF;
             GVL.MissingTypeFieldNakCount := GVL.MissingTypeFieldNakCount + 1;
 
             PacketType := '';
@@ -704,7 +715,7 @@ SysDrainIter := 0;
                     CommitReplySlotAck(CommandId, FALSE);
                 END_IF;
 
-                GVL.minfo_buf_ridx.ConsumeTail();
+                IF SrcSys THEN GVL.sysinfo_buf_ridx.ConsumeTail(); ELSE GVL.minfo_buf_ridx.ConsumeTail(); END_IF;
                 GVL.GroupNotReadyNakCount := GVL.GroupNotReadyNakCount + 1;
 
                 PacketType := '';

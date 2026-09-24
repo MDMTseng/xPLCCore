@@ -364,8 +364,8 @@ Order:
                                                             │ decoded cmd
                                                             ▼
                           ┌──────────────────────────────────────┐
-                          │ GVL.minfo_buf_ridx  (ring buffer of  │
-                          │   decoded MsgPakInfo command slots)  │
+                          │ GVL.sysinfo_buf (order-free SYS) +   │
+                          │ GVL.minfo_buf   (motion, FIFO)       │
                           └────────────────┬─────────────────────┘
                                            │ consumed each scan
                                            ▼
