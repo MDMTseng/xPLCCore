@@ -278,15 +278,113 @@ class Server:
                 self.client = None
 
 
-def poll_plc(server, world, url, period, reel_cell, events_out=None, plc_host=None):
-    prev = None
-    reel_cells = None
-    top_pending = False
+class Counters:
+    """Turns the PLC's camera-trigger counters into vision replies. Fed by
+    either transport: the :8128 stream (default) or HTTP polling of /v."""
+
+    def __init__(self, server, world, reel_cell):
+        self.server, self.world, self.reel_cell = server, world, reel_cell
+        self.prev = None
+        self.reel_cells = None
+        self.top_pending = False
+
+    def feed(self, v):
+        if self.prev is None:
+            self.prev = v
+            log("PLC counters", v)
+            return
+        server, world = self.server, self.world
+        d = {k: v[k] - self.prev[k] for k in ("sd", "bt", "ff", "tp", "ad")}
+        if d["ad"] > 0:                       # output-6 pulses (bench button)
+            world.reel_adv(d["ad"])
+        if "rp" in v:                         # ReelGo: reel travel in whole cells
+            cells = int(round(v["rp"] / self.reel_cell))
+            if self.reel_cells is None or cells < self.reel_cells:   # first sample, or axis wrapped
+                self.reel_cells = cells
+            elif cells > self.reel_cells:
+                world.reel_adv(cells - self.reel_cells)
+                self.reel_cells = cells
+        for _ in range(d["ff"]):
+            server.push_later(0.15, FEEDER_ID, world.feeder_shot)
+        for _ in range(d["sd"]):
+            server.push_later(0.04, SIDE_ID, world.side_shot)
+        if d["bt"] > 1:
+            log("WARN: %d bottom shots in one sample; they share one latched pose" % d["bt"])
+        for _ in range(d["bt"]):
+            bx, by = v["bx"], v["by"]
+            server.push_later(0.04, BTM_ID, lambda bx=bx, by=by: world.btm_shot(bx, by))
+        if d["tp"] > 0 and not self.top_pending:
+            # Both top pulses (side light, front light ~80 ms apart) make one
+            # check; answer 250 ms after the first.
+            self.top_pending = True
+
+            def top():
+                data = world.top_check()
+                server.last_top = data
+                self.top_pending = False
+                return data
+            server.push_later(0.25, TOP_ID, top)
+        self.prev = v
+
+
+class EventSink:
+    """Event-log lines (event_log.py CSV) once <path>.start exists."""
+
+    def __init__(self, path):
+        self.path, self.f = path, None
+
+    def add(self, seq, t, k, val):
+        if not self.path:
+            return
+        if self.f is None:
+            if not os.path.exists(self.path + ".start"):
+                return
+            self.f = open(self.path, "w", newline="")
+            self.f.write("seq,t_ms,kind,val\n")
+        self.f.write("%d,%d,%d,%d\n" % (seq, t, k, val))
+
+    def flush(self):
+        if self.f:
+            self.f.flush()
+
+
+def stream_plc(counters, host, events_out=None, port=8128):
+    """One persistent TCP connection to the PLC's stream port; the PLC pushes
+    'e ...' event lines and 'v ...' counter lines. Reconnects on loss."""
+    sink = EventSink(events_out)
+    while True:
+        try:
+            s = socket.create_connection((host, port), timeout=3)
+            s.settimeout(2.0)
+            log("stream connected %s:%d" % (host, port))
+            buf = b""
+            while True:
+                chunk = s.recv(65536)
+                if not chunk:
+                    raise ConnectionError("closed by PLC")
+                buf += chunk
+                *lines, buf = buf.split(b"\n")
+                for line in lines:
+                    f = line.decode("ascii", "replace").split()
+                    if len(f) == 5 and f[0] == "e":
+                        sink.add(*(int(x) for x in f[1:]))
+                    elif len(f) == 9 and f[0] == "v":
+                        counters.feed({"sd": int(f[1]), "bt": int(f[2]), "ff": int(f[3]), "tp": int(f[4]),
+                                       "ad": int(f[5]), "rp": float(f[6]), "bx": float(f[7]), "by": float(f[8])})
+                sink.flush()
+        except Exception as e:
+            log("stream lost:", e)
+            try:
+                s.close()
+            except Exception:
+                pass
+            time.sleep(1.0)
+
+
+def poll_plc(counters, url, period, events_out=None, plc_host=None):
+    """Fallback transport: HTTP polling of /v (and /e for the event log)."""
     collector, n = None, 0
     while True:
-        # Event log (event_log.py): fetched in this same loop, between /v
-        # polls, so the PLC's one-connection HTTP server only ever sees one
-        # client. Starts when run_virtual.py creates <events_out>.start.
         n += 1
         if events_out and n % 6 == 0:
             if collector is None and os.path.exists(events_out + ".start"):
@@ -298,56 +396,13 @@ def poll_plc(server, world, url, period, reel_cell, events_out=None, plc_host=No
                     collector.errors += 1
                     log("event poll failed:", e)
         try:
-            # 2.5 s, not less: the PLC's HTTP server accepts one connection
-            # at a time, and while it is busy Windows re-sends our SYN only
-            # after ~1 s. A shorter timeout gave up on every such request,
-            # piled up abandoned connections and blacked the mock out for
-            # 10+ s mid-run (2026-09-24).
             with urllib.request.urlopen(url, timeout=2.5) as r:
                 v = json.loads(r.read().decode())
         except Exception as e:
-            # Retry fast: the PLC latches only the *last* bottom-camera
-            # position, so a long gap folds several shots onto one pose
-            # (BtmCheckCalib then sees colinear points).
             log("PLC poll failed:", e)
             time.sleep(0.05)
             continue
-        if prev is None:
-            prev = v
-            log("PLC counters", v)
-            continue
-        d = {k: v[k] - prev[k] for k in ("sd", "bt", "ff", "tp", "ad")}
-        if d["ad"] > 0:                       # output-6 pulses (bench button)
-            world.reel_adv(d["ad"])
-        if "rp" in v:                         # ReelGo: reel travel in whole cells
-            cells = int(round(v["rp"] / reel_cell))
-            if reel_cells is None or cells < reel_cells:   # first poll, or axis re-referenced
-                reel_cells = cells
-            elif cells > reel_cells:
-                world.reel_adv(cells - reel_cells)
-                reel_cells = cells
-        for _ in range(d["ff"]):
-            server.push_later(0.15, FEEDER_ID, world.feeder_shot)
-        for _ in range(d["sd"]):
-            server.push_later(0.04, SIDE_ID, world.side_shot)
-        if d["bt"] > 1:
-            log("WARN: %d bottom shots in one poll gap; they share one latched pose" % d["bt"])
-        for _ in range(d["bt"]):
-            bx, by = v["bx"], v["by"]
-            server.push_later(0.04, BTM_ID, lambda bx=bx, by=by: world.btm_shot(bx, by))
-        if d["tp"] > 0 and not top_pending:
-            # Both top pulses (side light, front light ~80 ms apart) make one
-            # check; answer 250 ms after the first.
-            top_pending = True
-
-            def top():
-                nonlocal top_pending
-                data = world.top_check()
-                server.last_top = data
-                top_pending = False
-                return data
-            server.push_later(0.25, TOP_ID, top)
-        prev = v
+        counters.feed(v)
         time.sleep(period)
 
 
@@ -380,6 +435,8 @@ def main():
     ap.add_argument("--reel-cell", type=float, default=8.0,
                     help="reel axis units per tape cell (CalibPage REEL_CELL_DISTANCE)")
     ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--transport", choices=("stream", "http"), default="stream",
+                    help="stream: one persistent connection to PLC :8128 (default); http: poll /v on :8126")
     ap.add_argument("--events-out", default=None,
                     help="collect the PLC event log into this CSV once <path>.start exists")
     a = ap.parse_args()
@@ -387,8 +444,13 @@ def main():
     world = World(a.ng_side, a.ng_btm, a.ng_tape, random.Random(a.seed))
     server = Server(world, a.port)
     threading.Thread(target=listen_feeder, args=(world, a.feeder_udp), daemon=True).start()
-    threading.Thread(target=poll_plc, args=(server, world, "http://%s/v" % a.plc, a.poll_ms / 1000.0, a.reel_cell,
-                                            a.events_out, a.plc.split(":")[0]),
+    counters = Counters(server, world, a.reel_cell)
+    host = a.plc.split(":")[0]
+    if a.transport == "stream":
+        target, args = stream_plc, (counters, host, a.events_out)
+    else:
+        target, args = poll_plc, (counters, "http://%s/v" % a.plc, a.poll_ms / 1000.0, a.events_out, host)
+    threading.Thread(target=target, args=args,
                      daemon=True).start()
     server.serve()
 

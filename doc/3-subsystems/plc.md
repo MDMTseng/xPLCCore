@@ -299,7 +299,10 @@ time (owner's targets):
 edges, motion segment start/idle, reel move start/end and FSM changes;
 the renderer adds marks (`SYS EVT_MARK`: vision results in, vibration
 on/off, feeder light) on the same clock. `GET /e?s=<seq>` on :8126
-serves it; `tools/sim/event_log.py` collects and analyses, and
+serves it, and port 8128 streams it over one persistent connection
+(`e` event lines plus `v` camera-trigger counter lines every 20 ms, the
+transport `vision_mock.py` uses -- HTTP polling dropped SYNs on the
+one-connection server and delayed vision replies by up to 2.5 s); `tools/sim/event_log.py` collects and analyses, and
 `tools/sim/run_virtual.py` does both on every run
 (`sim_logs/events.csv`).
 

@@ -46,6 +46,30 @@ VAR
     // it after a few such scans (debounced: xBusy may lag the enable).
     uiDeadScans     : UINT;
     udiRearms       : UDINT;
+
+    // ---- Stream on :8128: one persistent connection, the PLC pushes lines
+    // (no request, no reconnect per sample -- the HTTP polling above costs
+    // a connect/close per request and stalls when a SYN is dropped).
+    //   e <seq> <t_ms> <kind> <val>      every GVL.EvHead event, from connect time
+    //   v <sd> <bt> <ff> <tp> <ad> <rp> <bx> <by>   PRG_SimIo counters, every 20 ms
+    // Used by tools/sim/vision_mock.py.
+    fbStreamSrv     : NBS.TCP_Server := (itfIPAddress:=ipAny, uiPort:=8128, xEnable:=TRUE, udiMaxConnections:=1);
+    fbStream        : NBS.TCP_Connection;
+    xStreamReset    : BOOL;
+    xStreamOn       : BOOL;
+    uiStreamDead    : UINT;
+    udiStreamSeq    : UDINT;
+    udiStreamHead   : UDINT;
+    udiStreamSlot   : UDINT;
+    udiStreamLen    : UDINT;
+    iStreamLines    : INT;
+    lStreamLastV    : LINT;
+    sStreamLine     : STRING(120);
+    abyStream       : ARRAY[0..4095] OF BYTE;
+    eStreamTx       : NBS.ERROR;
+    udiStreamClients : UDINT;
+    udiStreamLost   : UDINT;
+    udiStreamWriteErr : UDINT;
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
 fbServer();
@@ -179,3 +203,84 @@ IF fbConn.xError THEN
     xReset := TRUE;
 END_IF
 
+
+// ---- Event / counter stream on :8128 -------------------------------------
+fbStreamSrv();
+fbStream(itfServer := fbStreamSrv.itfServer, xEnable := (fbStreamSrv.itfServer <> 0) AND NOT xStreamReset);
+IF xStreamReset AND NOT fbStream.xActive AND NOT fbStream.xBusy THEN
+    xStreamReset := FALSE;
+    xStreamOn := FALSE;
+    uiStreamDead := 0;
+END_IF
+// Same re-arm as the HTTP connection: enabled but neither busy nor active.
+IF (fbStreamSrv.itfServer <> 0) AND NOT xStreamReset AND NOT fbStream.xBusy AND NOT fbStream.xActive THEN
+    uiStreamDead := uiStreamDead + 1;
+    IF uiStreamDead > 10 THEN
+        xStreamReset := TRUE;
+    END_IF
+ELSE
+    uiStreamDead := 0;
+END_IF
+
+IF fbStream.xActive AND NOT xStreamReset THEN
+    IF NOT xStreamOn THEN
+        xStreamOn := TRUE;
+        udiStreamSeq := GVL.EvHead;          // from now on
+        lStreamLastV := 0;
+        udiStreamClients := udiStreamClients + 1;
+    END_IF
+    udiStreamLen := 0;
+    udiStreamHead := GVL.EvHead;
+    IF (udiStreamHead > 1000) AND (udiStreamSeq < udiStreamHead - 1000) THEN
+        udiStreamLost := udiStreamLost + (udiStreamHead - 1000 - udiStreamSeq);
+        udiStreamSeq := udiStreamHead - 1000;
+    END_IF
+    iStreamLines := 0;
+    WHILE (udiStreamSeq < udiStreamHead) AND (iStreamLines < 60) DO
+        udiStreamSlot := udiStreamSeq MOD 1024;
+        sStreamLine := CONCAT('e ', UDINT_TO_STRING(udiStreamSeq));
+        sStreamLine := CONCAT(sStreamLine, ' ');
+        sStreamLine := CONCAT(sStreamLine, UDINT_TO_STRING(GVL.EvT[udiStreamSlot]));
+        sStreamLine := CONCAT(sStreamLine, ' ');
+        sStreamLine := CONCAT(sStreamLine, BYTE_TO_STRING(GVL.EvKind[udiStreamSlot]));
+        sStreamLine := CONCAT(sStreamLine, ' ');
+        sStreamLine := CONCAT(sStreamLine, UDINT_TO_STRING(GVL.EvVal[udiStreamSlot]));
+        sStreamLine := CONCAT(sStreamLine, '$N');
+        MEMUtils.MemCpy(ADR(abyStream[udiStreamLen]), ADR(sStreamLine), INT_TO_UINT(LEN(sStreamLine)));
+        udiStreamLen := udiStreamLen + INT_TO_UDINT(LEN(sStreamLine));
+        udiStreamSeq := udiStreamSeq + 1;
+        iStreamLines := iStreamLines + 1;
+    END_WHILE
+    IF (AxisGroupSM.RuntimeMs - lStreamLastV) >= 20 THEN
+        lStreamLastV := AxisGroupSM.RuntimeMs;
+        sStreamLine := CONCAT('v ', UDINT_TO_STRING(PRG_SimIo.udiSide));
+        sStreamLine := CONCAT(sStreamLine, ' ');
+        sStreamLine := CONCAT(sStreamLine, UDINT_TO_STRING(PRG_SimIo.udiBtm));
+        sStreamLine := CONCAT(sStreamLine, ' ');
+        sStreamLine := CONCAT(sStreamLine, UDINT_TO_STRING(PRG_SimIo.udiFeeder));
+        sStreamLine := CONCAT(sStreamLine, ' ');
+        sStreamLine := CONCAT(sStreamLine, UDINT_TO_STRING(PRG_SimIo.udiTop));
+        sStreamLine := CONCAT(sStreamLine, ' ');
+        sStreamLine := CONCAT(sStreamLine, UDINT_TO_STRING(PRG_SimIo.udiReelAdv));
+        sStreamLine := CONCAT(sStreamLine, ' ');
+        sStreamLine := CONCAT(sStreamLine, LREAL_TO_STRING(reelpullmotor.fActPosition));
+        sStreamLine := CONCAT(sStreamLine, ' ');
+        sStreamLine := CONCAT(sStreamLine, REAL_TO_STRING(PRG_SimIo.rBtmX));
+        sStreamLine := CONCAT(sStreamLine, ' ');
+        sStreamLine := CONCAT(sStreamLine, REAL_TO_STRING(PRG_SimIo.rBtmY));
+        sStreamLine := CONCAT(sStreamLine, '$N');
+        MEMUtils.MemCpy(ADR(abyStream[udiStreamLen]), ADR(sStreamLine), INT_TO_UINT(LEN(sStreamLine)));
+        udiStreamLen := udiStreamLen + INT_TO_UDINT(LEN(sStreamLine));
+    END_IF
+    IF udiStreamLen > 0 THEN
+        eStreamTx := fbStream.Write(ADR(abyStream), udiStreamLen);
+        IF eStreamTx <> NBS.ERROR.NO_ERROR THEN
+            // client gone or send buffer full: drop it, it reconnects
+            udiStreamWriteErr := udiStreamWriteErr + 1;
+            xStreamReset := TRUE;
+        END_IF
+    END_IF
+END_IF
+IF fbStream.xError THEN
+    xStreamReset := TRUE;
+END_IF
