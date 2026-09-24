@@ -22,11 +22,37 @@ VAR
     xResponded      : BOOL;
     uiCloseDelay    : UINT;
     udiRequests     : UDINT;
+    // One connection at a time: a client that connects and never sends a
+    // request (killed mid-request) held it forever and every later request
+    // was refused (seen 2026-09-24). Drop it after 1 s.
+    tonIdle         : TON;
+    udiIdleDrops    : UDINT;
+    // Also seen: after a client vanished the connection FB sat enabled but
+    // neither busy nor active -- no error, never listening again. Re-arm
+    // it after a few such scans (debounced: xBusy may lag the enable).
+    uiDeadScans     : UINT;
+    udiRearms       : UDINT;
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
 fbServer();
 itfServer := fbServer.itfServer;
 fbConn(itfServer := itfServer, xEnable := (itfServer <> 0) AND NOT xReset);
+// A reset is complete once the FB has been called disabled and is idle;
+// the next scan enables it again (a clean enable edge).
+IF xReset AND NOT fbConn.xActive AND NOT fbConn.xBusy THEN
+    xReset := FALSE;
+    xResponded := FALSE;
+    uiDeadScans := 0;
+END_IF
+IF (itfServer <> 0) AND NOT xReset AND NOT fbConn.xBusy AND NOT fbConn.xActive THEN
+    uiDeadScans := uiDeadScans + 1;
+    IF uiDeadScans > 10 THEN
+        udiRearms := udiRearms + 1;
+        xReset := TRUE;
+    END_IF
+ELSE
+    uiDeadScans := 0;
+END_IF
 
 IF fbConn.xActive AND NOT xResponded THEN
     eRx := fbConn.Read(ADR(abyReq), SIZEOF(abyReq), udiCount => udiReqCount);
@@ -85,6 +111,12 @@ IF fbConn.xActive AND NOT xResponded THEN
     END_IF
 END_IF
 
+tonIdle(IN := fbConn.xActive AND NOT xResponded, PT := T#1S);
+IF tonIdle.Q THEN
+    udiIdleDrops := udiIdleDrops + 1;
+    xReset := TRUE;
+END_IF
+
 // Give the stack a few cycles to flush, then close ("Connection: close").
 IF xResponded THEN
     uiCloseDelay := uiCloseDelay + 1;
@@ -95,7 +127,4 @@ END_IF
 IF fbConn.xError THEN
     xReset := TRUE;
 END_IF
-IF xReset AND NOT fbConn.xActive THEN
-    xReset := FALSE;
-    xResponded := FALSE;
-END_IF
+
