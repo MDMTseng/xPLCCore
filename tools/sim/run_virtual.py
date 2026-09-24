@@ -34,6 +34,7 @@ diagnostics and exit code 2 -- no waiting out a blanket timeout.
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -52,6 +53,10 @@ LIMIT_LINK = 20
 LIMIT_READY = 40
 LIMIT_FIRST_CHECK = 25
 LIMIT_BETWEEN_CHECKS = 12
+
+
+# "HH:MM:SS push 134500 ..." in the vision mock log, one per tape check.
+TOP_PUSH = re.compile(r"^\d\d:\d\d:\d\d push 134500 ")
 
 
 class Stall(RuntimeError):
@@ -179,7 +184,7 @@ def top_checks():
     try:
         with open(os.path.join(LOGS, "vision_mock.log"), encoding="utf-8", errors="replace") as f:
             # "HH:MM:SS push 134500 ..." -- not "MUTED push" (fault injection)
-            return sum(1 for l in f if l[8:21] == " push 134500")
+            return sum(1 for l in f if TOP_PUSH.match(l))
     except OSError:
         return 0
 
