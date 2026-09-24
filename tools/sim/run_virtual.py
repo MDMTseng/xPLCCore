@@ -10,8 +10,8 @@ Order matters and is encoded here:
      the CODESYS daemon. Requires the delta arms to be virtual -- checked.
   2. remote_harness.py (:8127), vision_mock.py (:7950, polls PLC :8126/v).
   3. The standalone UI with XPLC_HARNESS=1.
-  4. Through the harness: connect the PLC, *then* vision (vision callbacks
-     only register while the PLC socket exists), then the MOCK feeder;
+  4. Through the harness: connect the PLC and vision (either order,
+     --vision-first), then the MOCK feeder;
      bring the motion FSM to Ready; press RUN.
   5. Watch: running state, vision mock log, until --cycles tape checks or
      an error.
@@ -166,6 +166,7 @@ def main():
     ap.add_argument("--cycles", type=int, default=20, help="stop after this many tape checks")
     ap.add_argument("--home", choices=("go", "skip"), default="skip",
                     help="'skip' (default): EV_HOME_GO_FORCE_SKIP, allowed while the delta trio is simulated; 'go': real homing")
+    ap.add_argument("--vision-first", action="store_true", help="connect vision before the PLC")
     ap.add_argument("--no-ui-start", action="store_true", help="UI already running with XPLC_HARNESS=1")
     a = ap.parse_args()
 
@@ -185,10 +186,18 @@ def main():
         wait_for("UI to poll the harness", lambda: push("ping", timeout=5), timeout=90)
         log("UI up:", push("get_state"))
 
-        push("connect_tcp", {"host": a.plc, "port": 8125})
-        wait_for("PLC link", lambda: push("get_state")["tcpConnected"], timeout=20)
-        push("connect_vision", {"host": "localhost", "port": 7950})
-        wait_for("vision link", lambda: push("get_state")["visionStatus"] == 2, timeout=20)
+        def link_plc():
+            push("connect_tcp", {"host": a.plc, "port": 8125})
+            wait_for("PLC link", lambda: push("get_state")["tcpConnected"], timeout=20)
+
+        def link_vision():
+            push("connect_vision", {"host": "localhost", "port": 7950})
+            wait_for("vision link", lambda: push("get_state")["visionStatus"] == 2, timeout=20)
+
+        # Either order must work (review 2026-09-24 R-P0-2); --vision-first
+        # exercises the one that used to drop every vision reply.
+        for step in ((link_vision, link_plc) if a.vision_first else (link_plc, link_vision)):
+            step()
         push("connect_feeder", {"port": "MOCK"})
         wait_for("feeder bridge", lambda: push("get_state")["feederStatus"] == 2, timeout=20)
         log("links up:", push("get_state"))

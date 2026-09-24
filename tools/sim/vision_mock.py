@@ -58,6 +58,9 @@ BTM_PX_PER_MM = 1.0 / BTM_MMPP
 # VISION_MOCK_BTM_STUCK=1: report the nozzle at the image centre whatever
 # the arm pose -- exercises the BtmCheckCalib degenerate-calibration path.
 BTM_STUCK = os.environ.get("VISION_MOCK_BTM_STUCK") == "1"
+# VISION_MOCK_MUTE=134500[,...]: never send these check results -- a lost
+# vision reply, for the renderer's reply timeout.
+MUTE_IDS = {int(x) for x in os.environ.get("VISION_MOCK_MUTE", "").split(",") if x.strip()}
 
 # Feeder camera pixel area covered by default/calib.json.
 FEED_X = (2420.0, 3520.0)
@@ -213,6 +216,9 @@ class Server:
         def run():
             time.sleep(delay)
             data = make()
+            if trig_id in MUTE_IDS:
+                log("MUTED push", trig_id)
+                return
             self.send(trig_id, data)
             log("push", trig_id, json.dumps(data)[:160])
         threading.Thread(target=run, daemon=True).start()
@@ -289,7 +295,7 @@ def poll_plc(server, world, url, period, reel_cell):
             world.reel_adv(d["ad"])
         if "rp" in v:                         # ReelGo: reel travel in whole cells
             cells = int(round(v["rp"] / reel_cell))
-            if reel_cells is None:
+            if reel_cells is None or cells < reel_cells:   # first poll, or axis re-referenced
                 reel_cells = cells
             elif cells > reel_cells:
                 world.reel_adv(cells - reel_cells)

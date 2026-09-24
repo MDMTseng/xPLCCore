@@ -874,7 +874,10 @@ export const PluginHello: React.FC<{
   }, [sendTcp2, tcp2Status]);
 
   const VP_regTcpMsgCB = useCallback((tarID: number, cb: ((data: any) => void) | undefined) : boolean=> {
-    if (!tcpSocketRef.current) return false;
+    // Registration only edits VP_RX_lookup; it needs no link. It used to
+    // bail out when the *PLC* socket was down, so connecting vision before
+    // the PLC left every check-ID callback unregistered and all vision
+    // replies were dropped (review 2026-09-24 R-P0-2).
     // console.log("VP_regTcpMsgCB",tarID,cb,_this.RX_lookup);
     //no registered and user wanna unregister
     if(_this.VP_RX_lookup[tarID]==undefined && cb==undefined){

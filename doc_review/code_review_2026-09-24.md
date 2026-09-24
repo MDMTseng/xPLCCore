@@ -91,6 +91,10 @@ keyed on received packets. `tools/sim/queue_test.py` covers it.
   the watchdog sets it again; they give up after 10 s.
 
 **R-P0-2. Vision results are dropped unless the PLC connects first**
+*Fixed 2026-09-24:* `VP_regTcpMsgCB` no longer needs the PLC socket;
+the four check waits time out after 10 s and the cycle ends with the
+reason instead of hanging (`run_virtual.py --vision-first`,
+`VISION_MOCK_MUTE`).
 - `VP_regTcpMsgCB` refuses to register when the **PLC** socket is null
   (`PluginHello.tsx:877`) -- it checks `tcpSocketRef`, not the vision
   link.

@@ -250,41 +250,27 @@ export const CalibPage: React.FC<{
 
 
   
-  let waitForFFeederCheckData=async():Promise<any> =>{
-    // if(_this.TOPCheckData!==undefined){
-    //   return _this.TOPCheckData;
-    // }
+  // Resolved by the vision callbacks registered above (registerPromiseTunnel).
+  // Bounded: a reply that never comes (vision down, callback not
+  // registered, trigger lost) used to stall the cycle forever with no
+  // error (review 2026-09-24 R-P0-2).
+  const VISION_REPLY_TIMEOUT_MS=10000;
+  function waitForCheckData(name:string):Promise<any>{
     return new Promise((resolve, reject)=>{
-      _this.FFeederCheckData_Promise={resolve, reject};
+      const slot:any={};
+      const timer=setTimeout(()=>{
+        if(_this[name+"_Promise"]===slot)_this[name+"_Promise"]=undefined;
+        reject(new Error(`no ${name} reply from vision within ${VISION_REPLY_TIMEOUT_MS} ms`));
+      },VISION_REPLY_TIMEOUT_MS);
+      slot.resolve=(data:any)=>{clearTimeout(timer);resolve(data);};
+      slot.reject=(err:any)=>{clearTimeout(timer);reject(err);};
+      _this[name+"_Promise"]=slot;
     });
   }
-
-  let waitForTOPCheckData=async():Promise<any> =>{
-    // if(_this.TOPCheckData!==undefined){
-    //   return _this.TOPCheckData;
-    // }
-    return new Promise((resolve, reject)=>{
-      _this.TOPCheckData_Promise={resolve, reject};
-    });
-  }
-
-  let waitForSideCheckData=async():Promise<any> =>{
-    // if(_this.SideCheckData!==undefined){
-    //   return _this.SideCheckData;
-    // }
-    return new Promise((resolve, reject)=>{
-      _this.SideCheckData_Promise={resolve, reject};
-    });
-  }
-
-  let waitForBTMCheckData=async():Promise<any> =>{
-    // if(_this.BTMCheckData!==undefined){
-    //   return _this.BTMCheckData;
-    // }
-    return new Promise((resolve, reject)=>{
-      _this.BTMCheckData_Promise={resolve, reject};
-    });
-  }
+  let waitForFFeederCheckData=()=>waitForCheckData("FFeederCheckData");
+  let waitForTOPCheckData=()=>waitForCheckData("TOPCheckData");
+  let waitForSideCheckData=()=>waitForCheckData("SideCheckData");
+  let waitForBTMCheckData=()=>waitForCheckData("BTMCheckData");
 
   let speed = 2000
   let jerk = speed * 800
@@ -1573,6 +1559,12 @@ export const CalibPage: React.FC<{
       
     }
     catch(error){
+      // A stop rejects the checkpoint with no reason: end quietly. A real
+      // failure (e.g. a vision reply timeout) must be visible.
+      if(error instanceof Error){
+        console.error("run cycle aborted:",error);
+        setRunningState(JSON.stringify({errorString:error.message}));
+      }
     }
     //setLatestObjArr(newLatestObjArr);
 
