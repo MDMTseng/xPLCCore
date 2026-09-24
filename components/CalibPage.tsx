@@ -718,7 +718,10 @@ export const CalibPage: React.FC<{
 
     await runinng_checkpoint("start",{time:Date.now()});
 
-    async function checkSlot_and_reelAdv(nxt_adv_count:number,waitForReelVisualClearPromise:Promise<any> | undefined):Promise<{is_clear:number[],is_OK:number[],post_check_advCount:number,locHole:{status:number,x:number,y:number,mmpp:number}}> { 
+    // trig: when the tape may move, as a WAIT_FOR_TRIGGER_MOTION_PROGRESS
+    // relative to the motion queued when this is called.
+    async function checkSlot_and_reelAdv(nxt_adv_count:number,waitForReelVisualClearPromise:Promise<any> | undefined,
+        trig:{motion_id_offset:number,motion_progress:number}={motion_id_offset:-1,motion_progress:0}):Promise<{is_clear:number[],is_OK:number[],post_check_advCount:number,locHole:{status:number,x:number,y:number,mmpp:number}}> { 
       
       
       if(waitForReelVisualClearPromise!=undefined){
@@ -734,7 +737,7 @@ export const CalibPage: React.FC<{
       //    under a nozzle that is still placing), then waits for the reel
       //    to stop -- PLC-confirmed, not a fixed delay.
       if(nxt_adv_count>0){
-        await sendTcpMsgPack(cmd.WaitForTriggerMotionProgress({motion_id_offset:-1,motion_progress:0}));
+        await sendTcpMsgPack(cmd.WaitForTriggerMotionProgress(trig));
         await sendTcpMsgPack(cmd.ReelGo({Distance:nxt_adv_count*REEL_CELL_DISTANCE,...REEL_ADV_MOVE}));
         await sendTcpMsgPack(cmd.WaitForReelStop({timeout_ms:REEL_STOP_TIMEOUT_MS}));
       }
@@ -1026,6 +1029,32 @@ export const CalibPage: React.FC<{
         continue;
       }
       
+      // Start the tape step (advance + top shots) before waiting for a feeder
+      // refill: it only needs the arm off the tape, not the feeder. It used
+      // to start after the pick move, so a refill in the same cycle delayed
+      // it ~0.6 s (event log, 2026-09-24).
+      let slotCheckPromise:Promise<{is_clear:number[],is_OK:number[],post_check_advCount:number,locHole:{status:number,x:number,y:number,mmpp:number}}> | undefined = slotCheckPromise_BK;
+      await runinng_checkpoint("TOP_CAM check slot",i);
+      if(slotCheckPromise==undefined){
+
+        if(nxt_adv_count>2)nxt_adv_count=2;
+        packCounter+=nxt_adv_count;
+        console.log("nxt_adv_count",nxt_adv_count,"packCounter",packCounter);
+        // Tape step: may start as soon as the last queued move (the Z rise
+        // after placing, or the end of a toss) starts.
+        slotCheckPromise= checkSlot_and_reelAdv(nxt_adv_count,waitForReelVisualClearPromise,{motion_id_offset:0,motion_progress:0});
+
+        await runinng_checkpoint("[STEP][REEL ADV]",{
+          adv_count:nxt_adv_count,
+          type:"pack",
+          packCounter:packCounter,
+        });
+        waitForReelVisualClearPromise=undefined;
+        nxt_adv_count=0;
+      }
+      await runinng_checkpoint("_PACK_INFO_",{packCounter:packCounter});
+      slotCheckPromise_BK=slotCheckPromise;
+
       if(feederCheckPromise!=undefined){
         await sendTcpMsgPack(cmd.G1({ "Z": safe_z}))
         await sendTcpMsgPack(cmd.G1({X:wait_flexfeeder_location.X,Y:wait_flexfeeder_location.Y }))
@@ -1082,25 +1111,6 @@ export const CalibPage: React.FC<{
       //  waitForReelVisualClearPromise = _waitForReelVisualClearPromise as Promise<any>;
       }
 
-      let slotCheckPromise:Promise<{is_clear:number[],is_OK:number[],post_check_advCount:number,locHole:{status:number,x:number,y:number,mmpp:number}}> | undefined = slotCheckPromise_BK;
-      await runinng_checkpoint("TOP_CAM check slot",i);
-      if(slotCheckPromise==undefined){
-
-        if(nxt_adv_count>2)nxt_adv_count=2;
-        packCounter+=nxt_adv_count;
-        console.log("nxt_adv_count",nxt_adv_count,"packCounter",packCounter);
-        slotCheckPromise= checkSlot_and_reelAdv(nxt_adv_count,waitForReelVisualClearPromise);
-
-        await runinng_checkpoint("[STEP][REEL ADV]",{
-          adv_count:nxt_adv_count,
-          type:"pack",
-          packCounter:packCounter,
-        });
-        waitForReelVisualClearPromise=undefined;
-        nxt_adv_count=0;
-      }
-      await runinng_checkpoint("_PACK_INFO_",{packCounter:packCounter});
-      slotCheckPromise_BK=slotCheckPromise;
       await sendTcpMsgPack(cmd.G1({ "Z": predicted_location.Z+pickZ_lift }))
 
 

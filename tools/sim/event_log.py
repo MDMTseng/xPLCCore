@@ -109,10 +109,12 @@ def load(path):
         return [tuple(int(x) for x in row) for i, row in enumerate(csv.reader(f)) if i > 0]
 
 
-def _next(events, i, pred, t_limit):
-    """First event after index i matching pred, within t_limit ms of events[i]."""
+def _next(events, i, pred, t_limit, end=None):
+    """First event after index i matching pred, within t_limit ms of
+    events[i] and before index end (the next anchor, so a cycle never
+    picks up the following cycle's events)."""
     t0 = events[i][1]
-    for j in range(i + 1, len(events)):
+    for j in range(i + 1, len(events) if end is None else end):
         if events[j][1] - t0 > t_limit:
             return None
         if pred(events[j]):
@@ -139,13 +141,19 @@ def analyze(events, out=print):
 
     anchors = [i for i, e in enumerate(events) if e[2] == OUT_ON and e[3] == 1]
     out("tape path, from the vacuum break after placing (Nozzle_blow on), %d places:" % len(anchors))
-    cols = {"reel start": [], "reel stop": [], "top shot 1": [], "top shot 2": [], "top result": []}
-    for i in anchors:
-        cols["reel start"].append(_next(events, i, lambda e: e[2] == REEL_START, 1500))
-        cols["reel stop"].append(_next(events, i, lambda e: e[2] == REEL_END, 2000))
-        cols["top shot 1"].append(_next(events, i, is_out_on(3), 2000))
-        cols["top shot 2"].append(_next(events, i, is_out_on(15), 2000))
-        cols["top result"].append(_next(events, i, is_mark(MARK["TOP_RESULT"]), 3000))
+    cols = {"reel start": [], "reel stop": [], "top shot 1": [], "top shot 2": [], "top result": [],
+            "shot 2 -> result (vision)": []}
+    for n, i in enumerate(anchors):
+        end = anchors[n + 1] if n + 1 < len(anchors) else None
+        cols["reel start"].append(_next(events, i, lambda e: e[2] == REEL_START, 1500, end))
+        cols["reel stop"].append(_next(events, i, lambda e: e[2] == REEL_END, 2000, end))
+        cols["top shot 1"].append(_next(events, i, is_out_on(14), 2000, end))
+        shot2 = _next(events, i, is_out_on(15), 2000, end)
+        res = _next(events, i, is_mark(MARK["TOP_RESULT"]), 3000)
+        cols["top shot 2"].append(shot2)
+        cols["top result"].append(res)
+        cols["shot 2 -> result (vision)"].append(res - shot2 if res is not None and shot2 is not None else None)
+    out("  (%d of %d places advanced the tape)" % (sum(1 for x in cols["reel start"] if x is not None), len(anchors)))
     for k, v in cols.items():
         out(_stats(k, v, 700 if k == "top result" else None))
     gaps = [events[b][1] - events[a][1] for a, b in zip(anchors, anchors[1:])]
