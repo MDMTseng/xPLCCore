@@ -446,6 +446,10 @@ const feederLamp = tel("rect",{x:fr.x-6,y:fr.y-6,width:fr.width+12,height:fr.hei
 // wait point
 tel("path",{d:`M${X(ST.wait[0])-6} ${Y(ST.wait[1])} h12 M${X(ST.wait[0])} ${Y(ST.wait[1])-6} v12`,stroke:"var(--muted)","stroke-width":1.5});
 label(X(ST.wait[0]), Y(ST.wait[1])-10, "等待位");
+if (ST.pre){
+  tel("path",{d:`M${X(ST.pre[0])-6} ${Y(ST.pre[1])} h12 M${X(ST.pre[0])} ${Y(ST.pre[1])-6} v12`,stroke:"var(--muted)","stroke-width":1.5});
+  label(X(ST.pre[0])+10, Y(ST.pre[1])+4, "等結果位", "start");
+}
 
 // inspection station: bottom camera (circle) and side camera (bar)
 tel("circle",{cx:X(ST.insp[0]),cy:Y(ST.insp[1]),r:7*SC,fill:"var(--grid2)",stroke:"var(--cam)","stroke-width":2});

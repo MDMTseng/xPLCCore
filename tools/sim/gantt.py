@@ -33,6 +33,7 @@ SLOT_PITCH = 8.0
 REEL_MODULO = 200.0                       # reelpullmotor is a modulo axis (seen wrapping 200 -> 0)
 TOSS = [((-61.074, 60.775), "回柔震盤"), ((-31.0, 8.7), "NG 區 1"), ((-63.321, 9.870), "NG 區 2")]
 WAIT_FEEDER = (-46.350, 30.181)
+PRE_PLACE_FRACTION = 0.5                  # CalibPage: park this far from inspection toward slot 2
 
 REASON_ZH = [
     ("SideCam measure failed", "側面量測 NG"),
@@ -269,6 +270,8 @@ def build(events, reasons, tops=(), ngpicks=0):
         "insp": INSP_LOCATION, "slot": SLOT_LOCATION, "pitch": SLOT_PITCH,
         "toss": [{"x": x, "y": y, "name": n} for (x, y), n in TOSS],
         "wait": WAIT_FEEDER,
+        "pre": [INSP_LOCATION[0] + (SLOT_LOCATION[0] + SLOT_PITCH - INSP_LOCATION[0]) * PRE_PLACE_FRACTION,
+                INSP_LOCATION[1] + (SLOT_LOCATION[1] - INSP_LOCATION[1]) * PRE_PLACE_FRACTION],
         "picks": [[p[1], p[2]] for p in picks],
         "side": [med([p[1] for p in sides]), med([p[2] for p in sides])] if sides else None,
     }

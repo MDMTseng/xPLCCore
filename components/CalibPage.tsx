@@ -722,6 +722,11 @@ export const CalibPage: React.FC<{
     // Without it a place with no tape advance shot ~50 ms after the vacuum
     // break, straight into the arm. Tune on the machine.
     const TOP_CAM_CLEAR_MM=40;
+    // While the second side-camera result is pending, the arm waits part of
+    // the way from inspection to the target slot (0 = stay at inspection,
+    // 1 = above the slot). Parking right above the tape made it shake badly
+    // on the machine (owner, 2026-09-24); the place move finishes the trip.
+    const PRE_PLACE_FRACTION=0.5;
     let topShotEventId=900000;
 
 
@@ -1251,7 +1256,13 @@ export const CalibPage: React.FC<{
           await sendTcpMsgPack(cmd.M4({ "pin": trigPin, "state":trigPin,reset_ms:5, "motion_progress":1}))
 
           // await runinng_checkpoint("[TOSS] object angle",{angOffset:angOffset});
-          await sendTcpMsgPack(cmd.G1({X:slotLocation.X+slotDist, Y:slotLocation.Y, "Z": safe_z}))//GO TO THE SECOND SLOT LOCATION IN ADVANCE TO SPEED UP
+          // Head toward the tape while the result is pending, but only to a
+          // midpoint (PRE_PLACE_FRACTION), not above the slot itself.
+          const preTarget={X:slotLocation.X+slotDist, Y:slotLocation.Y};
+          await sendTcpMsgPack(cmd.G1({
+            X:inspLocation_withObject.X+(preTarget.X-inspLocation_withObject.X)*PRE_PLACE_FRACTION,
+            Y:inspLocation_withObject.Y+(preTarget.Y-inspLocation_withObject.Y)*PRE_PLACE_FRACTION,
+            "Z": safe_z}))
 
           let sideCam_rectified_repData = await waitTime(sideCam_rectified_repReg,"SideCam rectified report")  ;//WAIT: SideCam rectified report
 
