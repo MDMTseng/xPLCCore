@@ -14,6 +14,7 @@ import type { Machine } from '../lib/production/machine';
 import { tapeStep, type TopView } from '../lib/production/tape';
 import { refillFeeder, type FeederPart } from '../lib/production/feeder';
 import { pickFromFeeder, pickFromTape, placePart, tossTo } from '../lib/production/nozzle';
+import { judgePlacement, type Bin } from '../lib/production/judge';
 import type { PlanState } from '../lib/protocol';
 
 
@@ -775,6 +776,10 @@ export const CalibPage: React.FC<{
       delay,
     };
 
+    // Toss bins (lib/production/judge.ts Bin) and where they are.
+    const BIN_LOCATION:Record<Bin,{X:number,Y:number,Z:number}>={feeder:tossLocation_0, tape_ng:tossLocation_1, part_ng:tossLocation_2};
+    const binOf=(loc:{X:number,Y:number,Z:number}):Bin=>loc===tossLocation_0?'feeder':loc===tossLocation_1?'tape_ng':'part_ng';
+
     // Tape step + top check (lib/production/tape.ts). Keeps the PLC's cell
     // count for the end-of-run comparison and flags plan disagreements.
     async function advanceTape(cells:number, kind:'pack'|'empty',
@@ -1182,7 +1187,7 @@ export const CalibPage: React.FC<{
           mmpp:btmCheckCalibInfo.mmpp};
         console.log("btm_check_rep_data",btm_check_rep_data,"sideCam_rep_data",sideCam_rep_data);
 
-        let tossReasons:string[]=[];
+        let tossReasons:string[]=[];   // reasons collected before the top result; judgePlacement adds the rest
         if(sideTimedOut) tossReasons.push("vision timeout: side");
         if(btmTimedOut) tossReasons.push("vision timeout: bottom");
 
@@ -1260,225 +1265,55 @@ export const CalibPage: React.FC<{
         // postInspPromise=VP_sendTcpMsgPack("SideCheck");//second trigger
         // sendTcpMsgPack({ "type": "M", "cmd": "M4","group":1, "pin": 3, "state":3,reset_ms:5,"motion_id_offset": 0, "motion_progress":0.9, })
 
-        console.log("slotCheckPromise",slotCheckPromise);
-        let slotStatus=await waitTime(slotCheckPromise,"TOP CAM report");//WAIT: TOP CAM report
-        // Timed out: the slots are unknown. Do not place, do not pick an
-        // "NG" out of the tape, do not advance; the part goes back to the
-        // feeder and the next cycle checks the tape again.
-        const topTimedOut = slotStatus===undefined;
-        if(topTimedOut){
-          slotStatus={is_clear:[0,0,0],is_OK:[0,0,0],post_check_advCount:0,locHole:{status:0,x:0,y:0,mmpp:0}};
-          tossReasons.push("vision timeout: top");
-          ETC_NG_Location=tossLocation_0;
-        }
-
-        {
-
-        }
-        // await send({ "type": "M", "cmd": "G1",X: slotLocation.X, Y: slotLocation.Y})
-
-
-
-        
+        const slotStatus=await waitTime(slotCheckPromise as Promise<TopView>,"TOP CAM report");//WAIT: TOP CAM report
         slotCheckPromise_BK=undefined;
-        let isSlotOKArr=slotStatus.is_OK.slice(slotStatus.post_check_advCount);  //remove slotStatus.advCount elements from index 0
-        let isSlotClearArr=slotStatus.is_clear.slice(slotStatus.post_check_advCount);  //remove slotStatus.advCount elements from index 0
 
+        const armOffset=BtmCheckObjLoc2ArmOffset(
+          btmCheckCalibInfo,{
+          X:btm_check_rep_data.obj_pose.x,
+          Y:btm_check_rep_data.obj_pose.y},angOffset);
 
-
-        nxt_adv_count=0;
-        let saveImgName:(string|undefined)[]=[undefined,undefined,undefined];
-        {
-          for(let i=0;i<isSlotOKArr.length;i++){
-            if(isSlotOKArr[i]==1&&isSlotClearArr[i]==0){//slot has object and object is right
-              saveImgName[nxt_adv_count]="OK_"+Date.now();
-              nxt_adv_count++;
-            }
-            else{
-              break;
-            }
-          }
-        }
-
-
-        let targetPlaceSlotIdx=NaN;
-        let targetPickSlotIdx=NaN;
-
-        {
-          targetPlaceSlotIdx=isSlotClearArr.findIndex((clear: number) => clear === 1); //first 0 value index
-          
-          targetPickSlotIdx=isSlotClearArr.findIndex((clear: number, idx: number) => clear === 0 && isSlotOKArr[idx] === 0); //first SlotClear==0 && SlotOK==0 value index
-          if(targetPlaceSlotIdx==-1){
-            targetPlaceSlotIdx=NaN;
-          }
-          if(targetPickSlotIdx==-1){
-            targetPickSlotIdx=NaN;
-          }
-          if(topTimedOut){
-            targetPlaceSlotIdx=NaN;
-            targetPickSlotIdx=NaN;
-            nxt_adv_count=0;
-          }
-        
-
-          console.log("isSlotClearArr",isSlotClearArr);
-          console.log("isSlotOKArr",isSlotOKArr);
-          console.log("targetPlaceSlotIdx",targetPlaceSlotIdx);
-          console.log("targetPickSlotIdx",targetPickSlotIdx);
-
-          if(!Number.isNaN(targetPickSlotIdx))
-          {
-            TOP_NG_Location=tossLocation_1;
-          }
-        }
-
-        if(!Number.isNaN(targetPickSlotIdx))
-        {
-          saveImgName[targetPickSlotIdx]="NG_pick_"+Date.now();
-        }
+        // Place or toss (lib/production/judge.ts): tape view, corrections
+        // and the plan, in the order the checks always ran.
+        const production_plan=(await runinng_checkpoint("GetProductionPlan",i)).production_plan;
+        const J=judgePlacement({
+          reasons:tossReasons,
+          partBin:binOf(ETC_NG_Location),
+          sideStatus:sideCam_rep_data.status,
+          btmPoseStatus:btm_check_rep_data.obj_pose.status,
+          armOffset,
+          btmMmpp:btmCheckCalibInfo.mmpp,
+          top:slotStatus,
+          plan:production_plan,
+        });
+        console.log("[JUDGE]",JSON.stringify({place:J.place,reasons:J.reasons,bin:J.partBin,slot:J.placeSlot,ng:J.ngSlot,next:J.nextAdvance}));
+        tossReasons=J.reasons;
+        nxt_adv_count=J.nextAdvance;
+        ETC_NG_Location=BIN_LOCATION[J.partBin];
+        TOP_NG_Location=BIN_LOCATION[J.tapeNgBin];
+        const targetPlaceSlotIdx=J.placeSlot;
+        const targetPickSlotIdx=J.ngSlot;
+        const compensationIsNG=J.compensationNg;
+        const slotHoleOffset=J.holeOffset;
 
         // Image bookkeeping for vision; nothing here depends on its reply
         // (vision_contract.md: fire-and-forget). It was awaited, with no
         // timeout, right before every place.
         (async()=>VP_sendTcpMsgPack({"type":"TopInsp","cmd_type":"save_target",
-          t0:saveImgName[0],
-          t1:saveImgName[1],
-          t2:saveImgName[2]}))().catch((e:any)=>console.warn("save_target failed",e?.message??e));
+          t0:J.saveNames[0],
+          t1:J.saveNames[1],
+          t2:J.saveNames[2]}))().catch((e:any)=>console.warn("save_target failed",e?.message??e));
 
-
-
-
-        if(sideCam_rep_data.status!=1)
-        {
-          tossReasons.push("SideCheck failed");
-          ETC_NG_Location=tossLocation_2;// object NG
-        }
-
-
-
-
-        let armOffset=BtmCheckObjLoc2ArmOffset(
-          btmCheckCalibInfo,{
-          X:btm_check_rep_data.obj_pose.x,
-          Y:btm_check_rep_data.obj_pose.y},angOffset);
-          // armOffset.X=0;
-          // armOffset.Y=0;
-
-        console.log("armOffset",armOffset);
-
-        let compensationIsNG=false;
-
-        if(btm_check_rep_data.obj_pose.status !== 1){
-          compensationIsNG=true;
-          tossReasons.push("btm check failed");
-          ETC_NG_Location=tossLocation_2;// object NG
-        }
-
-        // if(ifPlaceComplete==true)
-        // {
-        //   tossReasons.push("place complete");
-
-          
-        //   //_this.production_plan=[1,-2,2,-2,1];
-        // }
-
-        let armOffsetDistance=Math.hypot(armOffset.X,armOffset.Y);
-        if(armOffsetDistance>5){
-          console.log("armOffset is too far, skip place");
-          console.log("armOffset",armOffset);
-          console.log("btm_check_rep_data",btm_check_rep_data);
-          tossReasons.push("armOffset is too far");
-          ETC_NG_Location=tossLocation_0;//not object NG, drop back to feeder
-          compensationIsNG=true;
-          
-          console.log("armOffset is too far, skip place",armOffset,angOffset);
-        }
-
-
-
-
-        let slotHoleOffset={X:NaN,Y:NaN,A:0};
-        if(slotStatus.locHole.status==1)
-        {
-          slotHoleOffset.X=slotStatus.locHole.x*slotStatus.locHole.mmpp;
-          slotHoleOffset.Y=-slotStatus.locHole.y*btmCheckCalibInfo.mmpp;
-
-          console.log("slotHoleOffset",slotHoleOffset);
-        }
-        if(Number.isNaN(slotHoleOffset.X))
-        {
-
-          tossReasons.push("slotHoleOffset is NaN");
-          ETC_NG_Location=tossLocation_0;//not object NG, drop back to feeder
-          compensationIsNG=true;
-        }
-
-        let slotHoleOffsetDistance=Math.hypot(slotHoleOffset.X,slotHoleOffset.Y);
-        if(slotHoleOffsetDistance>1.5)
-        {
-          tossReasons.push("slotHoleOffset is too far");
-          ETC_NG_Location=tossLocation_0;//not object NG, drop back to feeder
-                    
+        if(J.holeTooFar){
           try{
-            await runinng_checkpoint("ERROR",{errorString:"slotHoleOffset is too far",slotHoleOffset:slotHoleOffset,distance:slotHoleOffsetDistance});
+            await runinng_checkpoint("ERROR",{errorString:"slotHoleOffset is too far",slotHoleOffset,distance:Math.hypot(slotHoleOffset.X,slotHoleOffset.Y)});
           }
           catch(error){
             break;
           }
-
-          compensationIsNG=true;
-        }
-        console.log("slotHoleOffsetDistance",slotHoleOffsetDistance);
-
-
-
-        if(Number.isNaN(targetPlaceSlotIdx))
-        {
-
-          tossReasons.push("no slot to place");
-          ETC_NG_Location=tossLocation_0;//not object NG, drop back to feeder
-          // compensationIsNG=true;
         }
 
-        
-        {
-          let production_plan=(await runinng_checkpoint("GetProductionPlan",i)).production_plan;
-
-          if(production_plan.length>0 && ((production_plan[0]<=nxt_adv_count)))
-          {
-            console.log("[DBG]production plan place count hit",production_plan[0]," "+nxt_adv_count.toString());
-            tossReasons.push("production plan place count hit"+production_plan[0]+" "+nxt_adv_count.toString());
-            ETC_NG_Location=tossLocation_0;//not object NG, drop back to feeder
-            if(production_plan[0]>0)
-            {
-              nxt_adv_count=production_plan[0];
-            }
-          }
-
-          // The reel only advances past a run of OK cells from slot 0, so
-          // every cell up to the target slot ends up packed. A slot past the
-          // plan's remaining count would pack one too many once the cells
-          // before it are refilled (e.g. slot 0 NG, picked out, part placed
-          // in slot 1 with 1 left: chaos seed 38, 2026-09-25).
-          if(production_plan.length>0 && production_plan[0]>0 && tossReasons.length==0
-             && !Number.isNaN(targetPlaceSlotIdx) && targetPlaceSlotIdx+1>production_plan[0])
-          {
-            console.log("[DBG]production plan slot past count",production_plan[0],targetPlaceSlotIdx);
-            tossReasons.push("production plan: slot "+targetPlaceSlotIdx+" past count "+production_plan[0]);
-            ETC_NG_Location=tossLocation_0;//not object NG, drop back to feeder
-          }
-
-          if(production_plan.length==0)
-          {
-            console.log("[DBG]production plan is empty");
-            tossReasons.push("production plan is empty");
-            ETC_NG_Location=tossLocation_0;//not object NG, drop back to feeder
-
-          }
-        }
-
-
-        if(sideCam_rep_data.status==1 && !Number.isNaN(targetPlaceSlotIdx) && compensationIsNG==false && tossReasons.length==0){
+        if(J.place){
           
           
           evtMark(EVT.PLACE);
