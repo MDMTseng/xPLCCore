@@ -181,3 +181,42 @@ Expected effect of phases 0-1 on the measured run (estimate): about 10 s
 of stalls and ~5 wasted cycles removed from a 62 s run, i.e. 20-25 %
 shorter for plans with empty segments; ordinary place-to-place is only
 affected by phase 2.
+
+## 8. Status (end of 2026-09-25)
+
+Verified on the PC soft-PLC sim, plan `1,-10,60,-11,1` at 0.5 % NG (no
+stops, 6 random stops, 6 simulated renderer crashes) and `4,-5,3,-3,2` at
+10 % NG. All PASS; the renderer's and the PLC's plan books match.
+
+| Item | Status | Commit |
+|---|---|---|
+| B1 error hold / resume | fixed | cb5320f |
+| B2 watchdog outlives the run | fixed | cb5320f |
+| B3 ReelGo acks a dropped move | fixed (NAK reel_busy / tape_busy) | cb5320f |
+| B4 TAPE_CYCLE slot claimed late | fixed (Reserved slot at accept) | cb5320f |
+| B5 ReelGo overwrites a running TAPE_CYCLE | fixed (tape_busy) | cb5320f |
+| B6 digital-input group unchecked | fixed (bad_group) | cb5320f |
+| B7 overlength packets dropped silently | fixed (packet_too_long NAK) | cb5320f |
+| B8 fly events survive Error | fixed (cleared on Error/UnInited); outputs deliberately kept (vacuum) | cb5320f |
+| B9 hole Y in bottom-camera mm/px | fixed, owner: keep X+Y, top-camera scale | eb8022b |
+| B10 `await false` on no socket | fixed (send/sendNoWait) | cb5320f |
+| MoveLeft MemCpy overlap, TO_INT delay wrap, overflowed reply pushed, Modbus split lines | fixed | 3977a07 |
+| WAIT_FOR_TRIGGER inherits stale stages | fixed (FlyEventBlank) | fd666a3 |
+| Plan decided before picking; empty segments in one step, overlapped with the pick; save_target async | done: no-stop run 71 s -> 61 s, plan tosses 4 -> 0 | cb5320f, eb8022b |
+| PLC keeps the plan (whole plan + cells advanced, packed/empty, kind check), renderer resumes after a crash | done | cb5320f |
+| Comm task 1 ms, time-based send stall | done on the sim; `set_comm_task_period.py` for the machine | d8b181c |
+| Renderer structure: params.ts, plan/tape/feeder/nozzle/judge modules behind `Machine`, 64 unit tests | done (loop body itself still in CalibPage) | cb5320f..5c316af |
+| Offline pytest in CI, HMR off during harness runs | done | cb5320f |
+
+Needs the machine (not changed):
+- Error stop sequence (let GroupStop finish before power off, `Update.st`).
+- Feeder brake / vibration timings (the largest remaining arm idle in the sim).
+- Real-machine latency (top shot 205 vs 121 ms in the sim): measure with
+  `compare_runs.py` after installing this build.
+- Install checklist for the real PLC (one on-site `install`): the new
+  retained plan variables, the TYPE change (Reserved), Comm 1 ms
+  (`set_comm_task_period.py` first), FlyEventBufferSize 32.
+
+Next in code: move the loop body of `runAllObjects` into
+`lib/production/cycle.ts` (typed context and checkpoints), then the
+command-set work of §3 (composite PICK/PLACE/FEEDER_CYCLE, batch frames).
