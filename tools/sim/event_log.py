@@ -9,7 +9,8 @@ by SYS EVT_MARK) and serves it at GET /e?s=<seq> on :8126 as lines
 the PLC's TCP port; run_virtual.py runs a collector during its run.
 
 Kinds: 1/2 output on/off (val = bit), 3/4 input on/off, 5 motion segment
-start (val = movement id), 6 group idle, 7/8 reel move start/end,
+start (val = movement id), 6 group idle, 7/8 reel move start/end (val =
+reel position, see signed()),
 9 FSM state, 10 host mark (val = MARKS code, sent by CalibPage.tsx),
 11/12/13 arm X/Y/Z (0.01 mm, every 50 ms while moving; see signed()).
 

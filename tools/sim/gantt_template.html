@@ -224,6 +224,9 @@ if (gp != null && gt != null){
     : d < 0 ? ["good", "NG 不拖慢節拍", `丟料一輪中位數 ${gt} ms，比放料一輪 ${gp} ms 還短：丟料不必放入載帶。`]
             : ["warn", "NG 一輪比較慢", `丟料一輪中位數 ${gt} ms，比放料一輪 ${gp} ms 多 ${d} ms。`]);
 }
+F.push(S.suspicious
+  ? ["warn", `可疑的載帶前進 ${S.suspicious} 次`, `前進時要離開相機的格子裡不是 OK 件（甘特圖捲料軌道上的紅框，滑鼠移上去看原因）。`]
+  : ["good", "載帶前進時機正確", `${D.lanes.reel.length} 次捲料，前進時離開相機的格子都是 OK 件。俯視圖上的物件會跟著載帶一起前進。`]);
 if (S.waits){
   const known = S.wait_why.filter(w => w.startsWith("等待")).map(w => w.replace("等待", "等"));
   const other = S.wait_why.length - known.length;
@@ -301,7 +304,8 @@ function render(){
         else if (it.k === "flight"){ fill = "var(--flight)"; y = top + 27; h = 9; }
         else if (it.k === "shot"){ fill = "var(--cam)"; }
         else if (it.k === "light"){ fill = "var(--lamp)"; y = top + LANE_H - 13; h = 6; }
-        else if (it.k === "reel"){ fill = "var(--reel)"; }
+        else if (it.k === "reel"){ fill = "var(--reel)";
+          if (it.bad){ el("rect",{x:x0-3,y:top+3,width:w+6,height:LANE_H-6,rx:3,fill:"none",stroke:"var(--ng)","stroke-width":2},svg); } }
         node = el("rect",{x:x0,y,width:it.k==="shot"?Math.max(2.5,w):w,height:h,fill,rx:1},svg);
       }
       node.__it = it;
@@ -335,6 +339,7 @@ svg.addEventListener("mousemove", e => {
   const dur = it.e > it.s ? ` · <b>${it.e - it.s} ms</b>` : "";
   let extra = it.k === "move" ? ` #${it.id}` : "";
   if (it.why) extra += `<br>${it.why}`;
+  if (it.k === "reel") extra += `<br>前進 ${it.cells} 格` + (it.bad ? `<br><b style="color:var(--ng)">可疑：${it.bad}</b>` : "");
   if (it.slots) extra += `<br>載帶：${it.slots.map((x,i) => `${i+1} ${({empty:"空",ok:"OK",ng:"NG"})[x]}`).join("、")}`;
   tip.innerHTML = `${NAMES[it.k] || it.k}${extra}<br><b>${(it.s/1000).toFixed(3)} s</b>${dur}`;
   tip.hidden = false;
@@ -501,6 +506,45 @@ function setSlot(i, st){
   s.tag.setAttribute("fill", st === "ok" ? "var(--ok)" : st === "ng" ? "var(--ng)" : "var(--muted)");
 }
 const topResults = L.top.filter(x => x.k === "result" && x.slots);
+const TP = (D.tape && D.tape.parts) || [];
+const reelsU = L.reel;
+function Rt(t){
+  let u = 0;
+  for (const r of reelsU){
+    if (t >= r.e) u = r.u1;
+    else if (t > r.s) return r.u0 + (r.u1 - r.u0) * (t - r.s) / Math.max(1, r.e - r.s);
+    else break;
+  }
+  return u;
+}
+const partState = (p, t) => { let s = null; for (const [ts, st] of p.st){ if (ts <= t) s = st; else break; } return s; };
+const partsG = tel("g",{"clip-path":"url(#tapeclip)"});
+const PART_FILL = {ok:"var(--ok)", ng:"var(--ng)", placed:"var(--muted)", missing:"none", picked:"var(--ng)"};
+const partEls = TP.map(() => { const r = tel("rect",{width:4.4*SC,height:4.4*SC,rx:1.5,opacity:0},partsG); return r; });
+function drawParts(t){
+  const R0 = Rt(t);
+  TP.forEach((p, i) => {
+    const el2 = partEls[i];
+    const alive = p.t0 <= t && (p.t1 == null || t < p.t1);
+    const st = alive ? partState(p, t) : null;
+    if (!st){ el2.setAttribute("opacity", 0); return; }
+    const x = X(ST.slot[0] + (p.u - R0));
+    el2.setAttribute("x", x - 2.2*SC); el2.setAttribute("y", tapeY - 2.2*SC);
+    el2.setAttribute("fill", PART_FILL[st] || "var(--muted)");
+    el2.setAttribute("stroke", st === "missing" ? "var(--ng)" : "none");
+    el2.setAttribute("stroke-dasharray", st === "missing" ? "3 2" : "");
+    el2.setAttribute("opacity", st === "picked" ? .5 : 1);
+  });
+}
+// slot i state from the tape model (falls back to the last result)
+function modelSlots(t){
+  const R0 = Rt(t);
+  return [0,1,2].map(i => {
+    const p = TP.find(p => p.t0 <= t && (p.t1 == null || t < p.t1) && Math.abs(p.u - (R0 + i*ST.pitch)) < ST.pitch/2);
+    const st = p ? partState(p, t) : "empty";
+    return st === "missing" ? "empty" : st === "picked" ? "ng" : st;
+  });
+}
 // Slot states at time t: the last top result, then places into a slot
 // ("placed, not yet checked"); after a reel move, unknown until the next
 // result (the move distance is not in the log).
@@ -587,8 +631,10 @@ function drawTop(t){
   $("insetReel").textContent = r ? "◀ 捲料中" : "";
   chip.reel.classList.toggle("on", !!r);
   chip.wait.classList.toggle("on", active(L.arm, "wait", t));
-  const slots = slotsAt(t);
+  const slots = TP.length ? modelSlots(t) : slotsAt(t);
   slots.forEach((st, i) => setSlot(i, st));
+  slotG.forEach(s => s.g.setAttribute("opacity", TP.length ? 0 : 1));   // parts drawn by drawParts
+  drawParts(t);
   const move = L.arm.find(x => x.k === "move" && x.s <= t && t < x.e);
   $("dl").innerHTML = `<dt>時間</dt><dd>${(t/1000).toFixed(3)} s</dd>
     <dt>手臂 X / Y / Z</dt><dd>${p ? `${p[1].toFixed(1)} / ${p[2].toFixed(1)} / ${p[3].toFixed(1)}` : "—"}</dd>

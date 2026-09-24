@@ -30,6 +30,7 @@ LOGS = os.path.join(REPO, "standalone", "data", "sim_logs")
 INSP_LOCATION = (15.618, 10.330)          # bottom camera
 SLOT_LOCATION = (41.7, -79.752)           # tape, first slot; slots 8 mm apart in X
 SLOT_PITCH = 8.0
+REEL_MODULO = 200.0                       # reelpullmotor is a modulo axis (seen wrapping 200 -> 0)
 TOSS = [((-61.074, 60.775), "回柔震盤"), ((-31.0, 8.7), "NG 區 1"), ((-63.321, 9.870), "NG 區 2")]
 WAIT_FEEDER = (-46.350, 30.181)
 
@@ -150,11 +151,17 @@ def build(events, reasons, tops=(), ngpicks=0):
                 lanes["top"].append(dict(item, k="light"))
 
     reel = None
+    cum = 0.0                              # unwrapped tape travel, mm
     for e in events:
         if e[2] == E.REEL_START:
-            reel = T(e)
+            reel = (T(e), E.signed(e[3]))
         elif e[2] == E.REEL_END and reel is not None:
-            lanes["reel"].append({"s": reel, "e": T(e), "k": "reel"})
+            d = E.signed(e[3]) - reel[1]
+            if d < -REEL_MODULO / 2:
+                d += REEL_MODULO
+            lanes["reel"].append({"s": reel[0], "e": T(e), "k": "reel", "u0": round(cum, 2),
+                                  "u1": round(cum + d, 2), "cells": round(d / SLOT_PITCH, 2)})
+            cum += d
             reel = None
 
     vib = light = None
@@ -265,7 +272,90 @@ def build(events, reasons, tops=(), ngpicks=0):
         "picks": [[p[1], p[2]] for p in picks],
         "side": [med([p[1] for p in sides]), med([p[2] for p in sides])] if sides else None,
     }
-    return {"lanes": lanes, "rows": rows, "summary": summary, "pose": pose, "stations": stations}
+    tape = tape_model(lanes, pose_at)
+    summary["suspicious"] = sum(1 for r in lanes["reel"] if r.get("bad"))
+    return {"lanes": lanes, "rows": rows, "summary": summary, "pose": pose, "stations": stations, "tape": tape}
+
+
+def tape_model(lanes, pose_at):
+    """Parts riding on the tape. A part sits at tape position u (mm of tape
+    travel); under the camera, slot i is at travel R(t) + i * pitch, so a
+    part is drawn at SLOT_LOCATION.x + (u - R(t)) and moves with every reel
+    move. Parts appear at a place (slot from the arm X), take their state
+    from each top-camera result, vanish when an NG is picked back out of
+    the tape (suction on above the tape) or when a result shows their slot
+    empty. Every reel move is checked: advancing while the slots that leave
+    the camera do not hold an OK part is flagged (bad)."""
+    reels = lanes["reel"]
+
+    def R(t):
+        u = 0.0
+        for r in reels:
+            if t >= r["e"]:
+                u = r["u1"]
+            elif t > r["s"]:
+                return r["u0"] + (r["u1"] - r["u0"]) * (t - r["s"]) / max(1, r["e"] - r["s"])
+            else:
+                break
+        return u
+
+    parts = []
+
+    def at(u, t):
+        return next((p for p in parts if p["t1"] is None and abs(p["u"] - u) < SLOT_PITCH / 2 and p["t0"] <= t), None)
+
+    events = []
+    for r in lanes["result"]:
+        if r["k"] == "place" and r.get("slot") is not None:
+            events.append((r["at"], "place", r))
+    for x in lanes["top"]:
+        if x["k"] == "result" and "slots" in x:
+            events.append((x["s"], "top", x))
+    for x in lanes["nozzle"]:
+        if x["k"] == "suck":
+            events.append((x["s"], "suck", x))
+    for x in reels:
+        events.append((x["s"], "reel", x))
+    events.sort(key=lambda e: e[0])
+
+    for t, kind, x in events:
+        if kind == "place":
+            u = R(t) + x["slot"] * SLOT_PITCH
+            old = at(u, t)
+            if old:
+                old["t1"] = t
+            parts.append({"u": round(u, 2), "t0": t, "t1": None, "st": [[t, "placed"]]})
+        elif kind == "top":
+            for i, s in enumerate(x["slots"][:3]):
+                u = R(t) + i * SLOT_PITCH
+                p = at(u, t)
+                if s == "empty":
+                    if p:
+                        p["st"].append([t, "missing"])
+                        p["t1"] = t + 400
+                elif p:
+                    p["st"].append([t, s])
+                else:
+                    parts.append({"u": round(u, 2), "t0": t, "t1": None, "st": [[t, s]]})
+        elif kind == "suck":
+            p0 = pose_at(t)
+            if p0 and p0[2] < SLOT_LOCATION[1] + 20:          # suction above the tape: NG pick
+                p = at(R(t) + (p0[1] - SLOT_LOCATION[0]), t)
+                if p:
+                    p["st"].append([t, "picked"])
+                    p["t1"] = t + 200
+        elif kind == "reel":
+            n = max(1, int(round(x["cells"])))
+            leaving = []
+            for i in range(n):
+                p = at(R(t) + i * SLOT_PITCH, t)
+                state = p["st"][-1][1] if p else "empty"
+                leaving.append(state)
+            if any(s != "ok" for s in leaving):
+                names = {"empty": "空", "ng": "NG", "placed": "待檢", "missing": "不見", "picked": "已取出"}
+                x["bad"] = "前進時第 %s 格是%s" % ("、".join(str(i + 1) for i, s in enumerate(leaving) if s != "ok"),
+                                                "、".join(names.get(s, s) for s in leaving if s != "ok"))
+    return {"parts": parts}
 
 
 def main():

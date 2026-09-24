@@ -73,7 +73,9 @@ udiMovePrev := udiMove;
 xReel := AxisGroupSM.reelMoveRelative.Busy OR AxisGroupSM.reelMoveRelative2.Busy;
 IF (xReel <> xReelPrev) AND (n < 80) THEN
     IF xReel THEN abyK[n] := 7; ELSE abyK[n] := 8; END_IF
-    audiV[n] := 0;
+    // reel position, 0.01 axis units, DINT bits: a viewer can tell how far
+    // each move went (how many tape cells)
+    audiV[n] := DINT_TO_UDINT(LREAL_TO_DINT(reelpullmotor.fActPosition * 100.0));
     n := n + 1;
 END_IF
 xReelPrev := xReel;

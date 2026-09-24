@@ -226,7 +226,7 @@ VAR_GLOBAL
 	     1 output on (val = bit)      2 output off
 	     3 input on  (val = bit)      4 input off
 	     5 motion segment start (val = movement id)   6 group idle
-	     7 reel move start             8 reel move end
+	     7 reel move start             8 reel move end  (val = reel position, 0.01 units, DINT bits)
 	     9 FSM state (val = E_RobotState)
 	    10 host mark (val = code, see tools/sim/event_log.py)
 	    11/12/13 arm X/Y/Z, 0.01 mm, DINT bit pattern (every 50 ms
