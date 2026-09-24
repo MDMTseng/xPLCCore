@@ -59,6 +59,8 @@ INSP_X, INSP_Y = 15.618, 10.330
 BTM_CENTER = (1000.0, 1000.0)
 BTM_MMPP = 0.0124
 BTM_PX_PER_MM = 1.0 / BTM_MMPP
+# tape: first slot under the top camera, slots 8 mm apart in X (CalibPage SLOT_LOCATION)
+SLOT_X, SLOT_Y, SLOT_PITCH = 41.7, -79.752, 8.0
 # VISION_MOCK_BTM_STUCK=1: report the nozzle at the image centre whatever
 # the arm pose -- exercises the BtmCheckCalib degenerate-calibration path.
 BTM_STUCK = os.environ.get("VISION_MOCK_BTM_STUCK") == "1"
@@ -87,6 +89,13 @@ class World:
         self.pending_place = False  # an OK part is on the way to the tape
         self.slots = [None, None, None]   # None empty, True OK, False NG
         self.adv_since_top = 0
+        # With the :8128 stream the mock sees the PLC's own events: a place
+        # is the vacuum break (output 1) with the arm above the tape, an NG
+        # pick is suction on (output 0) there. Until the first such event
+        # it falls back to guessing a place from its side-shot bookkeeping
+        # (which lost places whenever trigger counts drifted).
+        self.use_events = False
+        self.arm_x = self.arm_y = None
         self.lock = threading.Lock()
 
     # --- feeder -------------------------------------------------------
@@ -173,10 +182,48 @@ class World:
     # --- tape ---------------------------------------------------------
     def reel_adv(self, n):
         with self.lock:
-            self.adv_since_top += n
+            if self.use_events:               # tape moves now; places index the moved slots
+                n = min(n, 3)
+                self.slots = self.slots[n:] + [None] * n
+            else:
+                self.adv_since_top += n
+
+    def on_event(self, kind, val):
+        """PLC event-log entry (event_log.py kinds)."""
+        if kind in (11, 12):                  # arm X / Y, 0.01 mm DINT bits
+            v = (val - (1 << 32) if val >= (1 << 31) else val) / 100.0
+            if kind == 11:
+                self.arm_x = v
+            else:
+                self.arm_y = v
+            return
+        if kind != 1 or val not in (0, 1) or self.arm_x is None:
+            return
+        if abs(self.arm_y - SLOT_Y) > 20:     # not above the tape
+            return
+        idx = int(round((self.arm_x - SLOT_X) / SLOT_PITCH))
+        if not 0 <= idx <= 2:
+            return
+        with self.lock:
+            self.use_events = True
+            if val == 1:                      # vacuum break: part left in the slot
+                if self.slots[idx] is None:
+                    self.slots[idx] = self.rng.random() >= self.ng_tape
+                log("tape: place into slot %d -> %s" % (idx, self.slots[idx]))
+            else:                             # suction on above the tape: NG pick
+                log("tape: pick from slot %d (%s)" % (idx, self.slots[idx]))
+                self.slots[idx] = None
 
     def top_check(self):
         with self.lock:
+            if self.use_events:
+                r = self.rng
+                return {
+                    "is_clear": [1 if s is None else 0 for s in self.slots],
+                    "is_OK": [1 if s is True else 0 for s in self.slots],
+                    "locHole": {"status": 1, "x": round(r.uniform(-3, 3), 2),
+                                "y": round(r.uniform(-3, 3), 2), "mmpp": 0.02},
+                    "_advanced": 0}
             # An NG part reported by the previous check is gone by now: the
             # renderer picks NG parts back out of the tape. (It used to be
             # removed in the same check that found it, so the renderer never
@@ -367,7 +414,9 @@ def stream_plc(counters, host, events_out=None, port=8128):
                 for line in lines:
                     f = line.decode("ascii", "replace").split()
                     if len(f) == 5 and f[0] == "e":
-                        sink.add(*(int(x) for x in f[1:]))
+                        seq, t, k, val = (int(x) for x in f[1:])
+                        sink.add(seq, t, k, val)
+                        counters.world.on_event(k, val)
                     elif len(f) == 9 and f[0] == "v":
                         counters.feed({"sd": int(f[1]), "bt": int(f[2]), "ff": int(f[3]), "tp": int(f[4]),
                                        "ad": int(f[5]), "rp": float(f[6]), "bx": float(f[7]), "by": float(f[8])})
