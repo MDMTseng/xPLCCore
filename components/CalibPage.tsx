@@ -9,6 +9,11 @@ import { useHarnessAction } from '../harness/registry';
 import { cmd } from '../lib/protocol';
 import { GEOMETRY, TAPE, INSPECTION, NOZZLE, FEEDER, VISION, WATCHDOG, MOTION, feedConfig } from '../lib/production/params';
 import { applyAdvance, cellsDone, nextCycleAction, remainingPlan } from '../lib/production/plan';
+import { VISION_CHECK } from '../lib/production/io';
+import type { Machine } from '../lib/production/machine';
+import { tapeStep, type TopView } from '../lib/production/tape';
+import { refillFeeder, type FeederPart } from '../lib/production/feeder';
+import { pickFromFeeder, pickFromTape, placePart, tossTo } from '../lib/production/nozzle';
 import type { PlanState } from '../lib/protocol';
 
 
@@ -224,6 +229,14 @@ export const CalibPage: React.FC<{
     let cancelled = false;
     const tick = async () => {
       if (cancelled) return;
+      // While a run is on, the input watchdog already reads the same
+      // counters every WATCHDOG.POLL_MS and publishes them (_this.latestInputs):
+      // don't send a second poller's worth of packets to the PLC.
+      if (_this.isRunning === true) {
+        const w = _this.latestInputs;
+        if (w) setFlipCountSnapshot({ raw: w.raw, fc: [...w.fc] });
+        return;
+      }
       try {
         const rep: any = await COMCtrlObj.sendTcpMsgPack(cmd.GetDigitalInputFlipCount());
         if (!cancelled && rep && Array.isArray(rep.fc)) {
@@ -753,67 +766,28 @@ export const CalibPage: React.FC<{
 
     // trig: when the tape may move, as a WAIT_FOR_TRIGGER_MOTION_PROGRESS
     // relative to the motion queued when this is called.
-    async function checkSlot_and_reelAdv(nxt_adv_count:number,waitForReelVisualClearPromise:Promise<any> | undefined,
-        trig:{motion_id_offset:number,motion_progress:number}={motion_id_offset:-1,motion_progress:0},
-        kind:'pack'|'empty'='pack'):Promise<{is_clear:number[],is_OK:number[],post_check_advCount:number,locHole:{status:number,x:number,y:number,mmpp:number}}> { 
-      
-      
-      if(waitForReelVisualClearPromise!=undefined){
-        console.log("wait for reel visual clear");
-        let cur_time=Date.now();
-        await waitForReelVisualClearPromise;
-        let end_time=Date.now();
-        console.log("reel visual clear time",end_time-cur_time);
-      }
+    // The cell as the cycle modules see it (lib/production/machine.ts).
+    const machine:Machine={
+      send, sendNoWait, mark:evtMark,
+      waitVision:(c)=>waitForCheckData(VISION_CHECK[c].name),
+      sendVision:(pkt)=>VP_sendTcpMsgPack(pkt),
+      feeder:FlexVibCtrl,
+      delay,
+    };
 
-      // The tape step is one PLC command (TAPE_CYCLE, plc.md §Direction
-      // step 3), sequenced on the PLC's 1 ms task instead of four host
-      // round trips:
-      //  1. wait for the last queued move (the Z rise after placing) to
-      //     start -- even without an advance: the place moves are only
-      //     queued when this runs, so the arm may still be on its way *to*
-      //     the tape;
-      //  2. advance nxt_adv_count cells and wait for the reel to stop;
-      //  3. arm the two top-camera shots (side light, then front light
-      //     80 ms later) to fire once the arm is TOP_CAM_CLEAR_MM away from
-      //     above the middle slot.
-      let lastPinOpSeq=[//top check camera trigger IO
-        REEL_SETTLE_MS, 1<<IO_Pins.O.CAM_Top_SideLight|1<<IO_Pins.O.CAM_Top, 1<<IO_Pins.O.CAM_Top_SideLight|1<<IO_Pins.O.CAM_Top,
-        1, 1<<IO_Pins.O.CAM_Top_SideLight|1<<IO_Pins.O.CAM_Top, 0,
-       80, 1<<IO_Pins.O.CAM_Top_Light0|1<<IO_Pins.O.CAM_Top, 1<<IO_Pins.O.CAM_Top_Light0|1<<IO_Pins.O.CAM_Top,
-       1, 1<<IO_Pins.O.CAM_Top_Light0|1<<IO_Pins.O.CAM_Top, 0,]
-      const tapeRep=await send(cmd.TapeCycle({
-        ...trig,
-        distance: nxt_adv_count>0 ? nxt_adv_count*REEL_CELL_DISTANCE : 0,
-        ...REEL_ADV_MOVE,
-        x:slotLocation.X+slotDist, y:slotLocation.Y, z:safe_z, radius:TOP_CAM_CLEAR_MM,
-        pin_op_seq:lastPinOpSeq, event_id:++topShotEventId,
-        timeout_ms:REEL_STOP_TIMEOUT_MS+3000,
-        cells:nxt_adv_count, kind,
-      }), true, REEL_STOP_TIMEOUT_MS+5000);
-      if(typeof tapeRep?.cells_done==="number") _this.plc_cells_done=tapeRep.cells_done;
-      if(tapeRep?.plan_err===true){
+    // Tape step + top check (lib/production/tape.ts). Keeps the PLC's cell
+    // count for the end-of-run comparison and flags plan disagreements.
+    async function advanceTape(cells:number, kind:'pack'|'empty',
+        trigger?:{motion_id_offset:number,motion_progress:number}):Promise<TopView>{
+      const r=await tapeStep(machine,{cells,kind,trigger});
+      if(r.cellsDone!==undefined) _this.plc_cells_done=r.cellsDone;
+      if(r.planErr){
         // The PLC's plan puts a different segment kind (or fewer cells) at
         // this point of the tape than the renderer just advanced.
-        console.error("[PLAN] PLC disagrees with this advance",kind,nxt_adv_count,"cells_done",tapeRep.cells_done);
+        console.error("[PLAN] PLC disagrees with this advance",kind,cells,"cells_done",r.cellsDone);
         _this.plan_mismatch=(_this.plan_mismatch??0)+1;
       }
-      console.log("TAPE_CYCLE",tapeRep);
-
-      // The shots fire only after this reply (the arm must still leave the
-      // sphere, and vision needs its processing time), so registering the
-      // wait now cannot miss the result -- and its 10 s budget is not spent
-      // on the reel.
-      let topCheckDataPromise=waitForTOPCheckData();
-      console.log("TRIGGER top check data");
-
-      console.log("wait for top check data");
-      let topCheckData=(await topCheckDataPromise) as ReturnType<typeof waitForTOPCheckData>;
-      console.log("topCheckData",topCheckData);
-
-      if(topCheckData===undefined) return undefined as any;   // timed out: caller decides
-      let retData={...topCheckData,post_check_advCount:0};
-      return retData;
+      return r.view as TopView;   // undefined on a vision timeout: callers check
     }
     let start_time=Date.now();
 
@@ -846,96 +820,7 @@ export const CalibPage: React.FC<{
 
 
     
-    type FlexFeeder_object_data_type = {
-      x:number;
-      y:number;
-      angle_deg:number;
-      surround_clear:number;
-      center_clear:number;
-    }
-    let FF_mode_counter=0;
-    async function checkFlexFeederPlate(doShake:boolean=false,doStorageFeed:boolean=false){
-      // await send({ "type": "M", "cmd": "G1", "X": -5,Y:-50 })
-      // await send({ "type": "M", "cmd": "G1", "Z": safe_z,"A":0})
-      if(doShake){
-        await send(cmd.WaitForTriggerMotionProgress({"motion_progress": 0}));
-
-        if(doStorageFeed)
-        {
-          FlexVibCtrl.von(0x1D);
-        }
-
-       
-        await FVib(10,160);
-  
-        await delay(120);
-        await send(cmd.M4({ "pin": 1<<IO_Pins.O.FlexVib_brake, "state": 1<<IO_Pins.O.FlexVib_brake, "motion_id_offset": 0, "motion_progress": 0, "reset_ms": 700 }))
-
-        console.log("FF_mode_counter",FF_mode_counter);
-
-        FF_mode_counter++;
-
-
-        
-        await delay(700);
-        FlexVibCtrl.voff(0x1D);
-
-      }
-      else
-      {
-        await send(cmd.WaitForTriggerMotionProgress({"motion_progress": 1}));
-        console.log("wait for motion progress 1");
-      }
-      //sendTcpMsgPack({ "type": "M", "cmd": "M4", "pin": 1, "state": 1, "motion_id_offset": 0, "motion_progress": 1, "reset_ms": 100 })
-      
-      let repReg=waitForFFeederCheckData();
-      (async()=>{
-        evtMark(EVT.FEEDER_LIGHT_ON);
-        FlexVibCtrl.top_light_on();
-        await delay(10);
-        await send(cmd.M4({ "pin": 1<<IO_Pins.O.CAM_FlexFeeder, "state": 1<<IO_Pins.O.CAM_FlexFeeder, reset_ms:50 }));
-
-        await delay(50);
-
-        evtMark(EVT.FEEDER_LIGHT_OFF);
-        FlexVibCtrl.top_light_off();
-      })();
-
-      // Timed out: treat the plate as empty; the next cycle shakes and looks again.
-      let ret_str_arr_data = (await repReg) ?? [];
-
-
-      let data=ret_str_arr_data.map((item:{x:number,y:number,ang:number,inner:number,outer:number}):FlexFeeder_object_data_type=>{
-        //2310.54;1520.57;3.86173;1;1;id;4 format
-        return {
-          x:item.x,
-          y:item.y,
-          angle_deg:item.ang,
-          surround_clear:item.outer,
-          center_clear:item.inner,
-        };
-      })
-      
-      console.log(data);
-
-      return data;
-      // setLatestObjArr(data);
-    }
-
-
-     async function goCheckFlexFeederPlate():Promise<any>{
-      await send(cmd.WaitForTriggerMotionProgress({ "motion_id_offset": 0, "motion_progress": 0.02 }));
-      let new_candidate_obj_arr=(await checkFlexFeederPlate(true,false)) as FlexFeeder_object_data_type[];
-
-      if(new_candidate_obj_arr.length<25){
-        FVib(0x1D,700);
-        // FF_mode_counter=0;
-      }
-
-      return new_candidate_obj_arr.filter((item)=>item.surround_clear == 1 && item.center_clear ==1);
-
-    }
-
+    type FlexFeeder_object_data_type = FeederPart;   // lib/production/feeder.ts
 
 
     await runinng_checkpoint("BtmCheckCalib",{time:Date.now()});
@@ -950,7 +835,8 @@ export const CalibPage: React.FC<{
     // return;
 
     await send(cmd.G1({ "Z": safe_z,"A":0,...getFeedSpeedConfig(2000) }))
-    let slotCheckPromise_BK:ReturnType<typeof checkSlot_and_reelAdv> | undefined = undefined;
+    // The top-camera view for the next cycle, when a tape step already made it.
+    let slotCheckPromise_BK:Promise<TopView> | undefined = undefined;
 
 
 
@@ -1004,6 +890,7 @@ export const CalibPage: React.FC<{
         let ReelPressRollerInPlace =(raw>>IO_Pins.I.ReelPressRollerInPlace) &1;
 
         latestInputObj={PackedReelNoProtrusion,ReelLacking,ReelTapeHTension,ReelPressRollerInPlace,raw_data:{raw,fc}};
+        _this.latestInputs={raw,fc};
         // console.log("ReelPressRollerInPlace",ReelPressRollerInPlace);
 
 
@@ -1081,7 +968,7 @@ export const CalibPage: React.FC<{
         nxt_adv_count=0;
         const action=nextCycleAction(_PP_, placedUncounted);
         const adv_count=action.kind==='skip_empty' ? action.cells : Math.min(2,-_PP_[0]);
-        const emptyStep=checkSlot_and_reelAdv(adv_count,waitForReelVisualClearPromise,undefined,'empty');
+        const emptyStep=advanceTape(adv_count,'empty');
         const emptyView=await emptyStep;
 
         await runinng_checkpoint("[STEP][REEL ADV]",{
@@ -1097,7 +984,7 @@ export const CalibPage: React.FC<{
       // refill: it only needs the arm off the tape, not the feeder. It used
       // to start after the pick move, so a refill in the same cycle delayed
       // it ~0.6 s (event log, 2026-09-24).
-      let slotCheckPromise:Promise<{is_clear:number[],is_OK:number[],post_check_advCount:number,locHole:{status:number,x:number,y:number,mmpp:number}}> | undefined = slotCheckPromise_BK;
+      let slotCheckPromise:Promise<TopView> | undefined = slotCheckPromise_BK;
       await runinng_checkpoint("TOP_CAM check slot",i);
       if(slotCheckPromise==undefined){
 
@@ -1107,7 +994,7 @@ export const CalibPage: React.FC<{
         console.log("nxt_adv_count",nxt_adv_count,"packCounter",packCounter);
         // Tape step: may start as soon as the last queued move (the Z rise
         // after placing, or the end of a toss) starts.
-        slotCheckPromise= checkSlot_and_reelAdv(nxt_adv_count,waitForReelVisualClearPromise,{motion_id_offset:0,motion_progress:0});
+        slotCheckPromise= advanceTape(nxt_adv_count,'pack',{motion_id_offset:0,motion_progress:0});
 
         await runinng_checkpoint("[STEP][REEL ADV]",{
           adv_count:nxt_adv_count,
@@ -1161,7 +1048,7 @@ export const CalibPage: React.FC<{
             await runinng_checkpoint("[STEP][REEL ADV]",{adv_count:adv,type:"pack",packCounter:packCounter});
             await runinng_checkpoint("_PACK_INFO_",{packCounter:packCounter});
             placedUncounted=Math.max(0,placedUncounted-adv);
-            const settledView=await checkSlot_and_reelAdv(adv,undefined,{motion_id_offset:0,motion_progress:0});
+            const settledView=await advanceTape(adv,'pack',{motion_id_offset:0,motion_progress:0});
             if((_this.production_plan ?? []).length==0){ slotCheckPromise_BK=undefined; break; }
             // More plan left (e.g. an empty segment next): the top check
             // after this advance is the next cycle's view.
@@ -1184,7 +1071,7 @@ export const CalibPage: React.FC<{
 
       if(candidate_obj_arr.length==0){//still no available object, shake and check flex feeder now
 
-        let candidate_obj_arr_promise=goCheckFlexFeederPlate(); 
+        let candidate_obj_arr_promise=refillFeeder(machine); 
         if(candidate_obj_arr_promise!=undefined){
             candidate_obj_arr=await candidate_obj_arr_promise;
         }
@@ -1219,27 +1106,12 @@ export const CalibPage: React.FC<{
       isZinSafeZone=false;
       
       await runinng_checkpoint("go to predicted location",i);
-      await send(cmd.G1({ "X": predicted_location.X,"Y":predicted_location.Y,"A":-item.angle_deg}))
-      waitForReelVisualClearPromise=undefined;
-
-      await send(cmd.G1({ "Z": predicted_location.Z+pickZ_lift }))
-
-
-
-          
-
-      
-      sendNoWait(cmd.M4({ "pin": 1<<IO_Pins.O.Nozzle_suck, "state": 1<<IO_Pins.O.Nozzle_suck }))//pick
-      sendNoWait(cmd.G4(0.02))
-
-
-
-      await send(cmd.G1({ "Z": safe_z }))
+      await pickFromFeeder(machine,{X:predicted_location.X,Y:predicted_location.Y,Z:predicted_location.Z,A:-item.angle_deg});
 
       
       if(candidate_obj_arr.length==0){//no available object, shake and check flex feeder plate
 
-        feederCheckPromise=goCheckFlexFeederPlate();
+        feederCheckPromise=refillFeeder(machine);
 
       }
 
@@ -1473,33 +1345,6 @@ export const CalibPage: React.FC<{
           t1:saveImgName[1],
           t2:saveImgName[2]}))().catch((e:any)=>console.warn("save_target failed",e?.message??e));
 
-        async function placeObject(location:{X:number|undefined,Y:number|undefined,Z:number,A:number|undefined}){
-            
-
-          //if value is undefined, the target value will not be changed
-          // await send({ "type": "M", "cmd": "G1", "X":location.X,"Y":location.Y,"Z": safe_z })
-          
-          // await send({ "type": "M", "cmd": "G1", "X":location.X,"Y":location.Y, "A":location.A,"abort":true})
-          
-          await send(cmd.G1({ "X":location.X,"Y":location.Y, "Z":  location.Z+5,"A":location.A}))
-          
-          await runinng_checkpoint("[STEP] place object",i);
-          // sendTcpMsgPack({ "type": "M", "cmd": "G4", "P": 2 })//DBG
-          await send(cmd.G1({ "Z":  location.Z}))
-  
-  
-          // let repReg=VP_sendTcpMsgPack("SideCheck");
-          // let ret_str_arr_data = await repReg;
-          // console.log(ret_str_arr_data);
-  
-          await send(cmd.G4(0.01))
-          await send(cmd.M4({ "pin": 1<<IO_Pins.O.Nozzle_suck, "state":0 }))//suck off
-          await send(cmd.M4({ "pin": 1<<IO_Pins.O.Nozzle_blow, "state": 1<<IO_Pins.O.Nozzle_blow, reset_ms:20 }))//vacuum break
-          // await send({ "type": "M", "cmd": "G1", "A":(location.A??0)+5 })
-          await send(cmd.G4(0.02))
-          
-          await send(cmd.G1({ "Z": safe_z }));
-        }
 
 
 
@@ -1642,7 +1487,9 @@ export const CalibPage: React.FC<{
 
           let x_place_offset=targetPlaceSlotIdx*slotDist;
 
-          await placeObject({X:slotLocation.X+x_place_offset-armOffset.X+slotHoleOffset.X,Y:slotLocation.Y-armOffset.Y+slotHoleOffset.Y,Z:slotLocation.Z,A:inspBasAngle+angOffset});
+          await placePart(machine,
+            {X:slotLocation.X+x_place_offset-armOffset.X+slotHoleOffset.X,Y:slotLocation.Y-armOffset.Y+slotHoleOffset.Y,Z:slotLocation.Z,A:inspBasAngle+angOffset},
+            ()=>runinng_checkpoint("[STEP] place object",i));
 
 
           // await send({ "type": "M", "cmd": "M4","group":0, "pin": 1<<7, "state": 1<<7,reset_ms:50,"motion_id_offset":-1 })//reel adv
@@ -1660,31 +1507,8 @@ export const CalibPage: React.FC<{
           //console.log("toss object",sideCam_rep_data.status,targetPlaceSlotIdx,compensationIsNG);
           console.log("toss object",tossReasons);
 
-          await send(cmd.G1({ "X":ETC_NG_Location.X,"Y":ETC_NG_Location.Y,"Z": safe_z }))
-          // await send({ "type": "M", "cmd": "G1", "Z": tossLocation.Z })
-          if(ETC_NG_Location==tossLocation_0)//drop back to feeder
-          {
-
-            await runinng_checkpoint("NG_COUNT",{class:0,count:1});
-          }
-          else if(ETC_NG_Location==tossLocation_1)//drop back to feeder
-          {
-            await runinng_checkpoint("NG_COUNT",{class:1,count:1});
-          }
-          else
-          {
-            await runinng_checkpoint("NG_COUNT",{class:2,count:1});
-          }
-  
-          // let repReg=VP_sendTcpMsgPack("SideCheck");
-          // let ret_str_arr_data = await repReg;
-          // console.log(ret_str_arr_data);
-  
-          sendNoWait(cmd.G4(0.01))
-          sendNoWait(cmd.M4({ "pin": 1<<IO_Pins.O.Nozzle_suck, "state":0 }))//suck off
-          // await send({ "type": "M", "cmd": "G1", "Z": -18.9 })
-          sendNoWait(cmd.M4({ "pin": 1<<IO_Pins.O.Nozzle_blow, "state": 1<<IO_Pins.O.Nozzle_blow, reset_ms:5 }))//vacuum break
-          sendNoWait(cmd.G4(0.01))
+          await tossTo(machine,ETC_NG_Location);
+          await runinng_checkpoint("NG_COUNT",{class:ETC_NG_Location==tossLocation_0?0:ETC_NG_Location==tossLocation_1?1:2,count:1});
 
           // await send({ "type": "M", "cmd": "G1", "Z": safe_z })
           isZinSafeZone=true;
@@ -1700,43 +1524,10 @@ export const CalibPage: React.FC<{
           
           await runinng_checkpoint("[NG PICK] object",{ng_x_pick_offset:ng_x_pick_offset,compensationIsNG:compensationIsNG});
           // await runinng_checkpoint("go to NG location and pick",i);
-          await send(cmd.G1({ "X":slotLocation.X+ng_x_pick_offset+slotHoleOffset.X,"Y":slotLocation.Y+slotHoleOffset.Y }))//go NG location
-        
-          await send(cmd.G1({ "Z":  slotLocation.Z-0.5}))
-          sendNoWait(cmd.G4(0.01))
-          sendNoWait(cmd.M4({ "pin": 1<<IO_Pins.O.Nozzle_suck, "state": 1<<IO_Pins.O.Nozzle_suck }))//pick NG
-          sendNoWait(cmd.G4(0.1))
-          await send(cmd.G1({ "Z": safe_z }));
-
-          {//go to toss location
-            // await runinng_checkpoint("go to toss location",i);
-            await send(cmd.G1({ "X":TOP_NG_Location.X,"Y":TOP_NG_Location.Y,"Z": safe_z }))
-            // await send({ "type": "M", "cmd": "G1", "Z": tossLocation.Z })
-    
-            if(TOP_NG_Location==tossLocation_0)//drop back to feeder
-            {
-  
-              await runinng_checkpoint("NG_COUNT",{class:0,count:1});
-            }
-            else if(TOP_NG_Location==tossLocation_1)//drop back to feeder
-            {
-              await runinng_checkpoint("NG_COUNT",{class:1,count:1});
-            }
-            else
-            {
-              await runinng_checkpoint("NG_COUNT",{class:2,count:1});
-            }
-            // let repReg=VP_sendTcpMsgPack("SideCheck");
-            // let ret_str_arr_data = await repReg;
-            // console.log(ret_str_arr_data);
-    
-            sendNoWait(cmd.G4(0.01))
-            sendNoWait(cmd.M4({ "pin": 1<<IO_Pins.O.Nozzle_suck, "state":0 }))//suck off
-            // await send({ "type": "M", "cmd": "G1", "Z": -18.9 })
-            sendNoWait(cmd.M4({ "pin": 1<<IO_Pins.O.Nozzle_blow, "state": 1<<IO_Pins.O.Nozzle_blow, reset_ms:5 }))//vacuum break
-            sendNoWait(cmd.G4(0.01))
-            isZinSafeZone=true;
-          }
+          await pickFromTape(machine,slotLocation.X+ng_x_pick_offset+slotHoleOffset.X,slotLocation.Y+slotHoleOffset.Y);
+          await tossTo(machine,TOP_NG_Location);
+          await runinng_checkpoint("NG_COUNT",{class:TOP_NG_Location==tossLocation_0?0:TOP_NG_Location==tossLocation_1?1:2,count:1});
+          isZinSafeZone=true;
         }
         isZinSafeZone=true;
         // if(postInspPromise!=null){
