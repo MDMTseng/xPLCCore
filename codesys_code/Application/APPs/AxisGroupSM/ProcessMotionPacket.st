@@ -757,10 +757,12 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
                 AxisGroup := AxisGroupManagerFb._agAxisGroup,
                 Execute := 1,
                 Position := G1TargetPose,
-                Velocity := LatestFeedRate,
-                Acceleration := LatestAcceleration,
-                Deceleration := LatestDeceleration,
-                Jerk := LatestJerk,
+                Velocity := LatestFeedRate * OverrideNow,
+                // speed override (GVL.OverrideFactor, see AxisGroupSM):
+                // velocity x f, acceleration x f^2, jerk x f^3
+                Acceleration := LatestAcceleration * OverrideNow * OverrideNow,
+                Deceleration := LatestDeceleration * OverrideNow * OverrideNow,
+                Jerk := LatestJerk * OverrideNow * OverrideNow * OverrideNow,
                 CoordSystem := G1CoordSystem,
                 BufferMode := SEL(G1AbortMode,
                     SEL(CornerTransition >= 1, SM3_Common.MC_BUFFER_MODE.Buffered, SM3_Common.MC_BUFFER_MODE.BlendingNext),

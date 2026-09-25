@@ -253,9 +253,7 @@ PROGRAM AxisGroupSM
         TapeIdx         : INT;
         TapeSlotIdx     : INT := -1;   // FlyEventBuffer slot reserved at TAPE_CYCLE accept
         TapePlanCells   : DINT;
-        // Speed override (GVL.OverrideFactor).
-        GroupOverrideFb : MC_GroupSetOverride;
-        ReelOverrideFb  : MC_SetOverride;
+        // Speed override (GVL.OverrideFactor), applied per move.
         OverrideNow     : LREAL;
         // Servo peak monitor (GVL.MotionPeak*).
         PeakAxis        : ARRAY[0..5] OF POINTER TO AXIS_REF_SM3;
@@ -821,20 +819,15 @@ PROGRAM AxisGroupSM
 
     UpdateMotionProgress();
 
-    // ---- Speed override: time-scale every motion by GVL.OverrideFactor ----
+    // ---- Speed override: time-scale every new move by GVL.OverrideFactor ----
+    // velocity x f, acceleration x f^2, jerk x f^3 where each move is
+    // issued (G1 in ProcessMotionPacket, the reel moves below): the same
+    // path, slower. MC_GroupSetOverride / MC_SetOverride were tried first
+    // and dropped: measured on the sim (2026-09-25) their Acc/JerkFactor
+    // had no effect and the VelFactor only some of the time, so short
+    // moves did not slow down at all. Moves already queued (at most
+    // MOTION_BUFFER_THRESHOLD, under a second) keep their speed.
     OverrideNow := LIMIT(0.01, GVL.OverrideFactor, 1.0);
-    GroupOverrideFb(
-        AxisGroup := AxisGroupManagerFb._agAxisGroup,
-        Enable := TRUE,
-        VelFactor := OverrideNow,
-        AccFactor := OverrideNow * OverrideNow,
-        JerkFactor := OverrideNow * OverrideNow * OverrideNow);
-    ReelOverrideFb(
-        Axis := reelpullmotor,
-        Enable := TRUE,
-        VelFactor := OverrideNow,
-        AccFactor := OverrideNow * OverrideNow,
-        JerkFactor := OverrideNow * OverrideNow * OverrideNow);
 
     // ---- Servo peak monitor: max |v|, |a|, |j| of the set values per axis ----
     PeakAxis[0] := ADR(IoConfig_Globals.EAxis0);
@@ -1226,20 +1219,20 @@ IF TRUE THEN
         Axis         := reelpullmotor,
         Execute      := reelGoRequest,
         Distance     := reelGoDistance,
-        Velocity     := reelGoVelocity,
-        Acceleration := reelGoAccel,
-        Deceleration := reelGoDecel,
-        Jerk         := reelGoJerk,
+        Velocity     := reelGoVelocity * OverrideNow,
+        Acceleration := reelGoAccel * OverrideNow * OverrideNow,
+        Deceleration := reelGoDecel * OverrideNow * OverrideNow,
+        Jerk         := reelGoJerk * OverrideNow * OverrideNow * OverrideNow,
         BufferMode   := MC_BUFFER_MODE.BlendingHigh
     );
     reelMoveRelative2(
         Axis         := reelpullmotor,
         Execute      := reelGoRequest2,
         Distance     := reelGoDistance,
-        Velocity     := reelGoVelocity,
-        Acceleration := reelGoAccel,
-        Deceleration := reelGoDecel,
-        Jerk         := reelGoJerk,
+        Velocity     := reelGoVelocity * OverrideNow,
+        Acceleration := reelGoAccel * OverrideNow * OverrideNow,
+        Deceleration := reelGoDecel * OverrideNow * OverrideNow,
+        Jerk         := reelGoJerk * OverrideNow * OverrideNow * OverrideNow,
         BufferMode   := MC_BUFFER_MODE.BlendingHigh
     );
 

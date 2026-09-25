@@ -209,6 +209,25 @@ def report_peaks():
         log(line)
 
 
+def override_check():
+    """Same square (4 stop-to-stop moves of ~42 mm, and a blended 24-gon)
+    at 100 % and 30 %: how do the peaks scale?"""
+    for label, n, cor in (("square, stop at corners", 4, 0.5), ("24-gon, blended", 24, 3)):
+        base = None
+        for pct in (100, 30):
+            push("set_speed", {"percent": pct}, timeout=10)
+            daemon({"cmd": "write", "symbol": "GVL.MotionPeakReset", "value": "TRUE"})
+            daemon({"cmd": "logout"})
+            r = push("path_test", {"n": n, "radius": 30, "feed": 1000, "mode": "queue", "cor": cor}, timeout=120)
+            pk = read_peaks()
+            v = max(p[2][0] for p in pk[:3]); acc = max(p[2][1] for p in pk[:3]); j = max(p[2][2] for p in pk[:3])
+            if base is None:
+                base = (r["ms"], v, acc, j)
+            log("override: %-24s %3d %%  %5d ms (x%.2f)  |v| %6.0f (x%.2f)  |a| %7.0f (x%.3f)  |j| %9.0f (x%.4f)"
+                % (label, pct, r["ms"], r["ms"] / base[0], v, v / base[1], acc, acc / base[2], j, j / base[3]))
+    push("set_speed", {"percent": 100}, timeout=10)
+
+
 def abort_test_matrix(a):
     """Peaks and redirect time for each way of turning toward the bin."""
     cases = [("blend", 1.0), ("abort", 1.0), ("stepped", 4), ("stepped", 6)]
@@ -413,6 +432,8 @@ def main():
     ap.add_argument("--peaks", action="store_true",
                     help="report each servo's peak |velocity|, |acceleration| and |jerk| over the run "
                          "(GVL.MotionPeak*, reset at RUN)")
+    ap.add_argument("--override-check", action="store_true",
+                    help="instead of production: the same moves at 100 % and 30 % speed, servo peaks of each")
     ap.add_argument("--abort-test", action="store_true",
                     help="instead of production: redirect toward the NG bin mid-move, abort (dynamics "
                          "scaled) vs blend, with the servo peaks of each")
@@ -478,6 +499,9 @@ def main():
 
         bring_to_ready(a.home)
         push("set_tab", {"tab": "Calib"}, timeout=10)
+        if a.override_check:
+            override_check()
+            return
         if a.abort_test:
             abort_test_matrix(a)
             return
