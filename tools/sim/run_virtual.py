@@ -76,7 +76,7 @@ def log(*a):
 def daemon(req, timeout=60):
     r = rpc.call(req, timeout)
     for _ in range(3):
-        if r.get("ok") or "Not logged in" not in str(r.get("error", "")):
+        if r.get("ok") or "not logged in" not in str(r.get("error", "")).lower():
             break
         # Right after a write the daemon's session sometimes reports "Not
         # logged in" for a second or so; drop it, wait, retry.
@@ -156,6 +156,66 @@ def bring_to_ready(home):
                 {"type": "M", "cmd": "G1", "X": 0, "Y": 0, "Z": 10, "A": 90},
                 {"type": "M", "cmd": "G1", "A": 0}):
         log("send", pkt["cmd"], push("send_tcp_msgpack", {"data": pkt}, timeout=10))
+
+
+def path_test_matrix(a):
+    """Feed a circle of a.path_n G1 moves under every combination and log
+    how long the arm took against the time its moves need."""
+    rows = []
+    for per_scan in (1, 4):
+        daemon({"cmd": "write", "symbol": "GVL.CommPacketsPerScan", "value": str(per_scan)})
+        daemon({"cmd": "logout"})
+        for nodelay in (False, True):
+            push("tcp_nodelay", {"on": nodelay}, timeout=10)
+            for feed in (200, 1000):
+                for mode in ("await", "queue"):
+                    r = push("path_test", {"n": a.path_n, "radius": 20, "feed": feed, "mode": mode},
+                             timeout=120)
+                    ideal = r["pathMm"] / feed * 1000.0
+                    row = (per_scan, nodelay, feed, mode, r["ms"], r["sendMs"], ideal)
+                    rows.append(row)
+                    log("path: pkts/scan=%d nodelay=%-5s feed=%4d %-5s  %5d ms (send %5d ms)  "
+                        "moves alone %4.0f ms  x%.2f" % (row + (r["ms"] / ideal,)))
+    daemon({"cmd": "write", "symbol": "GVL.CommPacketsPerScan", "value": "4"})
+    daemon({"cmd": "logout"})
+    push("tcp_nodelay", {"on": True}, timeout=10)
+    return rows
+
+
+def path_jerk_matrix(a):
+    """Blended circle (Cor 3): does the per-segment floor follow the jerk?
+    feedConfig uses JERK = F*400 with ACC = F*100, i.e. 0.25 s to reach
+    full acceleration, so short moves never do."""
+    for n in (25, 50, 200):
+        for feed in (200, 1000):
+            for jr in (400, 2000, 10000):
+                r = push("path_test", {"n": n, "radius": 20, "feed": feed, "mode": "queue", "cor": 3,
+                                       "jerkRatio": jr}, timeout=120)
+                ideal = r["pathMm"] / feed * 1000.0
+                log("jerk: n=%3d seg=%5.2f mm feed=%4d JERK=F*%-5d %5d ms  %5.1f ms/seg  moves alone %4.0f ms  x%.2f"
+                    % (n, r["segmentMm"], feed, jr, r["ms"], r["ms"] / n, ideal, r["ms"] / ideal))
+    push("path_test", {"n": 4, "radius": 1, "feed": 200, "mode": "queue", "cor": 45, "jerkRatio": 400}, timeout=60)
+
+
+def path_motion_matrix(a):
+    """Same circle, transport fixed (queue, 4 packets/scan, NoDelay): vary
+    the number of segments and the corner blending to see whether the time
+    follows the path length (moves blend) or the segment count (the arm
+    stops at every point)."""
+    def retries():
+        v = daemon({"cmd": "read", "symbol": "GVL.G1RetryCount"})["value"]
+        return int(str(v).split("#")[-1])
+    for n in (25, 50, 200):
+        for cor in (0.5, 3):
+            for feed in (200, 1000):
+                before = retries()
+                r = push("path_test", {"n": n, "radius": 20, "feed": feed, "mode": "queue", "cor": cor},
+                         timeout=120)
+                ideal = r["pathMm"] / feed * 1000.0
+                log("motion: n=%3d seg=%5.2f mm Cor=%4.1f feed=%4d  %5d ms  %5.1f ms/seg  "
+                    "moves alone %4.0f ms  x%.2f  G1 retries %d" % (n, r["segmentMm"], cor, feed, r["ms"],
+                                                    r["ms"] / n, ideal, r["ms"] / ideal, retries() - before))
+    push("path_test", {"n": 4, "radius": 1, "feed": 200, "mode": "queue", "cor": 45}, timeout=60)
 
 
 def plc_prepare():
@@ -297,6 +357,15 @@ def main():
     ap.add_argument("--chaos", type=int, default=0,
                     help="press STOP at a random moment this many times, RUN again each time, then let the plan finish")
     ap.add_argument("--chaos-seed", type=int, default=1)
+    ap.add_argument("--path-test", action="store_true",
+                    help="instead of production: stream short G1 moves (path_test) under each "
+                         "combination of PLC packets/scan, TCP NoDelay and await/queue, and report")
+    ap.add_argument("--path-n", type=int, default=200)
+    ap.add_argument("--path-jerk", action="store_true",
+                    help="with --path-test: vary the jerk ratio (JERK = F * ratio)")
+    ap.add_argument("--path-motion", action="store_true",
+                    help="with --path-test: vary the segment count and corner blending (Cor) "
+                         "instead of the transport settings")
     ap.add_argument("--forget-at-stop", action="store_true",
                     help="after each chaos STOP, drop the renderer's plan so RUN resumes from the PLC's")
     ap.add_argument("--chaos-in-empty", action="store_true",
@@ -354,6 +423,14 @@ def main():
 
         bring_to_ready(a.home)
         push("set_tab", {"tab": "Calib"}, timeout=10)
+        if a.path_test:
+            if a.path_jerk:
+                path_jerk_matrix(a)
+            elif a.path_motion:
+                path_motion_matrix(a)
+            else:
+                path_test_matrix(a)
+            return
         if a.plan:
             plan = [int(x) for x in a.plan.split(",")]
         else:

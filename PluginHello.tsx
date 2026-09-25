@@ -438,6 +438,10 @@ export const PluginHello: React.FC<{
 
       socket.on('connect', () => {
         console.log('TCP Connected to', tcpHost + ':' + tcpPort);
+        // No Nagle: a burst of small command packets (a G1 chain, M4s sent
+        // without waiting) would otherwise be held back until the previous
+        // one is acknowledged. Harness action tcp_nodelay switches it.
+        try { socket.setNoDelay(_this.tcpNoDelay ?? true); } catch { }
         setTcpConnected(true);
         tcpSocketRef.current = socket;
         try {
@@ -982,12 +986,17 @@ export const PluginHello: React.FC<{
         }
         return { sync: result };
       }
+      case 'tcp_nodelay': {
+        _this.tcpNoDelay = payload.on !== false;
+        try { tcpSocketRef.current?.setNoDelay(_this.tcpNoDelay); } catch { }
+        return { noDelay: _this.tcpNoDelay };
+      }
       case 'wait_ms':
         await new Promise((res) => setTimeout(res, Number(payload.ms ?? 0)));
         return { waited_ms: Number(payload.ms ?? 0) };
       case 'list_actions':
         return {
-          builtins: ['ping', 'get_state', 'connect_tcp', 'disconnect_tcp', 'connect_vision', 'disconnect_vision', 'connect_feeder', 'send_tcp_msgpack', 'wait_ms', 'list_actions', 'reload'],
+          builtins: ['ping', 'get_state', 'connect_tcp', 'disconnect_tcp', 'connect_vision', 'disconnect_vision', 'connect_feeder', 'send_tcp_msgpack', 'tcp_nodelay', 'wait_ms', 'list_actions', 'reload'],
           registered: listHarnessActions(),
         };
       case 'reload':

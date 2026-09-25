@@ -18,6 +18,7 @@ function fakeMachine(opts: { replies?: Record<string, any>; vision?: Partial<Rec
   const m: Machine = {
     send: async (pkt: any) => { sent.push({ pkt, waited: true }); return opts.replies?.[pkt.cmd] ?? { ack: true }; },
     sendNoWait: (pkt: any) => { sent.push({ pkt, waited: false }); },
+    queue: async (pkt: any) => { sent.push({ pkt, waited: false }); },
     mark: (c) => { if (c !== undefined) marks.push(c); },
     waitVision: async (c) => opts.vision?.[c],
     sendVision: async () => ({}),

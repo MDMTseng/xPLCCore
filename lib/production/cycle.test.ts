@@ -46,6 +46,7 @@ function fakeCell(opts: { ngAt?: number[] } = {}) {
       return { ack: true };
     },
     sendNoWait: (pkt) => { void m.send(pkt); },
+    queue: async (pkt) => { void m.send(pkt); },
     mark: () => {},
     waitVision: async (c) => {
       if (c === 'top') {

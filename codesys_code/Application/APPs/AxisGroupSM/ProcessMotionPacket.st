@@ -797,6 +797,7 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
                 CommandAck := TRUE;
             ELSE
                 RetryMotionCommandCooldown := RETRY_COOLDOWN_G1_MS;
+                GVL.G1RetryCount := GVL.G1RetryCount + 1;
             END_IF;
             END_IF; // frame validation / MoveLinear
             END_IF; // dedupe / coord-gate / execute

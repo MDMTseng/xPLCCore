@@ -35,13 +35,32 @@ export const GEOMETRY = {
 export const MOTION = {
   /** Default feed (mm/s); ACC/DEA/JERK derive from it (feedConfig). */
   FEED: 2000,
+  /** Commands sent with Machine.queue that may await their reply at once.
+   *  Below the PLC's MOTION_BUFFER_THRESHOLD (12), so queued moves never
+   *  back up into its packet ring. */
+  MAX_IN_FLIGHT: 8,
   /** Corner blending for the setup moves. */
   CORNER: 45,
 };
 
-/** F/ACC/DEA/JERK for a feed rate, the ratios the cell was tuned with. */
+/** Acceleration and jerk per unit of feed (the ratios the cell was tuned
+ *  with). At 400/100 the arm needs 0.25 s to reach full acceleration, so
+ *  short moves never do: on the PC sim a blended 0.63 mm segment costs
+ *  ~16 ms at JERK = F*400 and ~7 ms at F*2000 (path_test, 2026-09-25).
+ *  Raise JERK only after trying it on the machine (vibration, the tape). */
+export const DYNAMICS = {
+  ACC_PER_FEED: 100,
+  JERK_PER_FEED: 400,
+};
+
+/** F/ACC/DEA/JERK for a feed rate. */
 export function feedConfig(feed: number = 25) {
-  return { F: feed, JERK: feed * 400, ACC: feed * 100, DEA: feed * 100 };
+  return {
+    F: feed,
+    JERK: feed * DYNAMICS.JERK_PER_FEED,
+    ACC: feed * DYNAMICS.ACC_PER_FEED,
+    DEA: feed * DYNAMICS.ACC_PER_FEED,
+  };
 }
 
 export const TAPE = {

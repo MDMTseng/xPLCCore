@@ -161,10 +161,20 @@ errs = 0; warns = 0
 # matched nothing on a non-English CODESYS and silently reported every
 # build as clean. Severity is safe as text: it is a .NET enum whose
 # ToString() gives the member name, not a translation.
+def _msg_field(m, name, default):
+    # A message can point into a project that is no longer open; reading
+    # its position then raises StandardError ("project handle N is
+    # invalid"), which getattr's default does not catch (2026-09-25).
+    try:
+        return getattr(m, name, default)
+    except Exception:
+        return default
+
+
 for m in system.get_message_objects("{97f48d64-a2a3-4856-b640-75c046e37ea9}"):
-    sev = str(getattr(m, "severity", ""))
-    txt = getattr(m, "text", None) or str(m)
-    pos = getattr(m, "position_text", "") or ""
+    sev = str(_msg_field(m, "severity", ""))
+    txt = _msg_field(m, "text", None) or "?"
+    pos = _msg_field(m, "position_text", "") or ""
     if "error" in sev.lower():
         errs += 1
         print("  [ERR] {} {}".format(txt, pos))

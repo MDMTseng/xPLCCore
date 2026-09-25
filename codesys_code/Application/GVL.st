@@ -172,6 +172,13 @@ VAR_GLOBAL
 	   producer of the reply ring). One pending id; a second overlength
 	   packet before it is sent only bumps OverlenDropCount. *)
 	OverlenNakId      : DINT := 0;
+	(* Host packets taken in, and replies sent, per Comm scan. It was one of
+	   each: two back-to-back G1s took two scans to even reach the ring.
+	   1 = the old behaviour (A/B switch, online-writable). *)
+	CommPacketsPerScan : INT := 4;
+	(* G1s the axis group did not accept at once (CommandAccepted FALSE):
+	   each costs a RETRY_COOLDOWN_G1_MS wait before the retry. *)
+	G1RetryCount : UDINT := 0;
 	OverlenNakPending : BOOL := FALSE;
 	ReMpDropCount    : UDINT := 0;
 

@@ -20,6 +20,12 @@ export interface Machine {
   /** PLC command the cycle does not wait on; a failure raises the cycle
    *  error (the run holds at the next checkpoint) instead of being lost. */
   sendNoWait(pkt: unknown): void;
+  /** Like sendNoWait, but at most MOTION.MAX_IN_FLIGHT such commands wait
+   *  for their reply at once: resolves when this one is sent, which is at
+   *  once unless the window is full. Order is kept (one FIFO on the PLC).
+   *  Keeps a G1 chain from waiting a round trip per move without piling
+   *  more onto the PLC than its motion buffer (12) takes. */
+  queue(pkt: unknown): Promise<void>;
   /** Host timestamp in the PLC event log; never throws. */
   mark(code: number | undefined): void;
   /** Register for the next result of a camera. Resolves undefined when

@@ -12,6 +12,8 @@ import { applyAdvance, cellsDone, nextCycleAction, remainingPlan } from '../lib/
 import { VISION_CHECK } from '../lib/production/io';
 import type { Machine } from '../lib/production/machine';
 import { runCycles } from '../lib/production/cycle';
+import { createSendWindow } from '../lib/production/window';
+import { runPathTest } from '../lib/production/pathTest';
 import type { PlanState } from '../lib/protocol';
 
 
@@ -709,6 +711,51 @@ export const CalibPage: React.FC<{
   }
 
 
+  // The cell as the cycle modules see it (lib/production/machine.ts).
+  // sendTcpMsgPack returns `false` when there is no socket, and `await
+  // false` used to carry on as if the command had been accepted: `send`
+  // throws instead, so the run stops visibly. `sendNoWait` and `queue` are
+  // for commands the cycle does not wait on: a NAK (e.g.
+  // flyevent_buffer_full, so a camera never fires) used to be lost; it now
+  // raises current_error and the cycle holds at the next checkpoint.
+  function makeMachine(){
+    const send=(pkt:any, ...rest:any[]):Promise<any>=>{
+      const r=(sendTcpMsgPack as any)(pkt, ...rest);
+      if(r===false) return Promise.reject(new Error("PLC not connected ("+(pkt?.cmd??pkt?.type)+")"));
+      return Promise.resolve(r);
+    };
+    const failed=(pkt:any,e:any)=>{
+      console.error("command failed",pkt?.cmd,e?.message??e);
+      if(_this.current_error==undefined) _this.current_error={errorString:"PLC 指令失敗 ("+(pkt?.cmd??"?")+"): "+(e?.message??e)};
+    };
+    const sendNoWait=(pkt:any):void=>{ send(pkt).catch((e:any)=>failed(pkt,e)); };
+    const window=createSendWindow((pkt)=>send(pkt), MOTION.MAX_IN_FLIGHT, failed);
+    const machine:Machine={
+      send, sendNoWait, queue:window.queue, mark:evtMark,
+      waitVision:(c)=>waitForCheckData(VISION_CHECK[c].name),
+      sendVision:(pkt)=>VP_sendTcpMsgPack(pkt),
+      feeder:FlexVibCtrl,
+      delay,
+    };
+    return {send, sendNoWait, machine};
+  }
+
+  // Path feed test (lib/production/pathTest.ts): stream short G1 moves
+  // around a circle at travel height, per-move round trip vs send window.
+  // The FSM must be Ready with a coordinate system set (run_virtual does).
+  useHarnessAction('path_test', async (payload: any) => {
+    const {machine}=makeMachine();
+    return runPathTest(machine,{
+      n:Number(payload?.n ?? 200),
+      radius:Number(payload?.radius ?? 20),
+      center:payload?.center ?? {X:0,Y:0,Z:SAFE_Z},
+      feed:Number(payload?.feed ?? 200),
+      mode:payload?.mode==='queue' ? 'queue' : 'await',
+      cor:payload?.cor===undefined ? undefined : Number(payload.cor),
+      jerkRatio:payload?.jerkRatio===undefined ? undefined : Number(payload.jerkRatio),
+    });
+  }, [sendTcpMsgPack]);
+
   const runAllObjects=(async(runinng_checkpoint:(checkpoint_name:string,data:any)=>Promise<any>)=>{
 
     if(_this.isRunning==true){
@@ -732,25 +779,7 @@ export const CalibPage: React.FC<{
     const {PRE_PLACE_FRACTION}=INSPECTION;
     let topShotEventId=TAPE.TOP_SHOT_EVENT_ID_BASE;
 
-    // PLC sends for the cycle. sendTcpMsgPack returns `false` when there is
-    // no socket, and `await false` used to carry on as if the command had
-    // been accepted. `send` throws instead, so the run stops visibly.
-    // `sendNoWait` is for commands the cycle does not wait on: a NAK
-    // (e.g. flyevent_buffer_full, so a camera never fires) used to be
-    // lost; it now raises current_error and the cycle holds at the next
-    // checkpoint instead of running into a vision timeout.
-    const send=(pkt:any, ...rest:any[]):Promise<any>=>{
-      const r=(sendTcpMsgPack as any)(pkt, ...rest);
-      if(r===false) return Promise.reject(new Error("PLC not connected ("+(pkt?.cmd??pkt?.type)+")"));
-      return Promise.resolve(r);
-    };
-    const sendNoWait=(pkt:any):void=>{
-      send(pkt).catch((e:any)=>{
-        console.error("command failed",pkt?.cmd,e?.message??e);
-        if(_this.current_error==undefined) _this.current_error={errorString:"PLC 指令失敗 ("+(pkt?.cmd??"?")+"): "+(e?.message??e)};
-      });
-    };
-
+    const {send, sendNoWait, machine}=makeMachine();
 
     _this.plan_mismatch=0;
     try{
@@ -761,17 +790,6 @@ export const CalibPage: React.FC<{
     }
 
     await runinng_checkpoint("start",{time:Date.now()});
-
-    // trig: when the tape may move, as a WAIT_FOR_TRIGGER_MOTION_PROGRESS
-    // relative to the motion queued when this is called.
-    // The cell as the cycle modules see it (lib/production/machine.ts).
-    const machine:Machine={
-      send, sendNoWait, mark:evtMark,
-      waitVision:(c)=>waitForCheckData(VISION_CHECK[c].name),
-      sendVision:(pkt)=>VP_sendTcpMsgPack(pkt),
-      feeder:FlexVibCtrl,
-      delay,
-    };
 
     // Every tape step (lib/production/tape.ts): keep the PLC's cell count
     // for the end-of-run comparison and flag plan disagreements.

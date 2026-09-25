@@ -62,6 +62,7 @@ VAR
 	RouteType     : STRING;
 	RouteCmd      : STRING;
 	RouteToSys    : BOOL;
+	CommIter      : INT;     // packets taken / replies sent this scan
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
 
@@ -77,6 +78,10 @@ END_IF
 
 // --- 4. Call the server function block instance ---
 // The PKT_ALLOW_NEXT input is now controlled by our logic.
+// Up to GVL.CommPacketsPerScan packets per scan: the FB exposes one packet
+// per call, so it is called again while the last call produced one and
+// both rings still have room. Bytes already in its buffer need no new read.
+FOR CommIter := 1 TO MAX(1, GVL.CommPacketsPerScan) DO
 fbMyServer(
     ENABLE:= bEnableServer,
     IP_ADDRESS:= ipServerAddress,
@@ -137,10 +142,20 @@ IF fbMyServer.PKT_IDX > TMP_PKT_IDX THEN
 END_IF;
 
 // Update the packet index tracker
+IF fbMyServer.PKT_IDX = TMP_PKT_IDX THEN
+	EXIT;                  // no packet this call: nothing more buffered
+END_IF;
 TMP_PKT_IDX := fbMyServer.PKT_IDX;
+END_FOR;
 
 
 DBG_reMP_info_ridx_size:=GVL.reMP_info_ridx.Size();
+// Up to GVL.CommPacketsPerScan replies per scan (acks, events, MOVE_DONE,
+// heartbeat all queue here); stop at the first one that cannot be sent.
+FOR CommIter := 1 TO MAX(1, GVL.CommPacketsPerScan) DO
+IF GVL.reMP_info_ridx.Size() = 0 THEN
+	EXIT;
+END_IF;
 IF GVL.reMP_info_ridx.Size()>0 THEN
 	IF fbMyServer.xResetting OR NOT fbMyServer.CLIENT.xActive THEN
 		// Socket is dying (reset in flight) or already dead. Continuing
@@ -191,9 +206,11 @@ IF GVL.reMP_info_ridx.Size()>0 THEN
 					consecutive_stall_drops := 0;
 				END_IF;
 			END_IF;
+			EXIT;              // TX not draining: try again next scan
 		END_IF;
 	END_IF;
 END_IF
+END_FOR;
 
 // --- MsgPack self-test harness hook (Comm task; runs cyclically).
 // See doc/2-contracts/msgpack.md and FB_MsgPackTests. Toggle GVL.bRunMsgPackTests
