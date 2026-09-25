@@ -179,6 +179,17 @@ VAR_GLOBAL
 	(* G1s the axis group did not accept at once (CommandAccepted FALSE):
 	   each costs a RETRY_COOLDOWN_G1_MS wait before the retry. *)
 	G1RetryCount : UDINT := 0;
+
+	(* Servo peak monitor: largest |set velocity|, |set acceleration| and
+	   |jerk| (d acc / dt, per EC scan) of each axis since the last reset,
+	   in axis units (joints: deg, deg/s, deg/s^2, deg/s^3 at the joint;
+	   reel: its units). Index 0-2 EAxis0-2, 3 SM_Drive_GenericDSP402 (the
+	   group's A axis), 4 EAXIS_A, 5 reelpullmotor. Set MotionPeakReset to
+	   clear. Read by tools/sim/run_virtual.py (--peaks). *)
+	MotionPeakReset : BOOL := FALSE;
+	MotionPeakVel   : ARRAY[0..5] OF LREAL;
+	MotionPeakAcc   : ARRAY[0..5] OF LREAL;
+	MotionPeakJerk  : ARRAY[0..5] OF LREAL;
 	OverlenNakPending : BOOL := FALSE;
 	ReMpDropCount    : UDINT := 0;
 

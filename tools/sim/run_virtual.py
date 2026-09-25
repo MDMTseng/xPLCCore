@@ -182,6 +182,33 @@ def path_test_matrix(a):
     return rows
 
 
+# Peak monitor axes (GVL.MotionPeak* index) and joint -> motor gearing.
+PEAK_AXES = [("EAxis0", 31), ("EAxis1", 31), ("EAxis2", 31),
+             ("SM_Drive_GenericDSP402 (group A)", 1), ("EAXIS_A", 1), ("reelpullmotor", 1)]
+
+
+def read_peaks():
+    out = []
+    for i, (name, ratio) in enumerate(PEAK_AXES):
+        v = [float(str(daemon({"cmd": "read", "symbol": "GVL.MotionPeak%s[%d]" % (k, i)})["value"]).split("#")[-1])
+             for k in ("Vel", "Acc", "Jerk")]
+        out.append((name, ratio, v))
+    daemon({"cmd": "logout"})
+    return out
+
+
+def report_peaks():
+    """Joint values as the PLC plans them, and the motor side (x gearing):
+    motor speed in rpm, acceleration in rev/s^2, jerk in rev/s^3."""
+    log("servo peaks (set values, whole run):")
+    for name, ratio, (vel, acc, jerk) in read_peaks():
+        line = "  %-34s |v| %9.1f  |a| %11.1f  |j| %13.1f  (axis units/s^n)" % (name, vel, acc, jerk)
+        if ratio != 1:
+            line += "   motor: %6.0f rpm  %7.1f rev/s2  %9.1f rev/s3" % (
+                vel * ratio / 6.0, acc * ratio / 360.0, jerk * ratio / 360.0)
+        log(line)
+
+
 def path_jerk_matrix(a):
     """Blended circle (Cor 3): does the per-segment floor follow the jerk?
     feedConfig uses JERK = F*400 with ACC = F*100, i.e. 0.25 s to reach
@@ -361,6 +388,9 @@ def main():
                     help="instead of production: stream short G1 moves (path_test) under each "
                          "combination of PLC packets/scan, TCP NoDelay and await/queue, and report")
     ap.add_argument("--path-n", type=int, default=200)
+    ap.add_argument("--peaks", action="store_true",
+                    help="report each servo's peak |velocity|, |acceleration| and |jerk| over the run "
+                         "(GVL.MotionPeak*, reset at RUN)")
     ap.add_argument("--path-jerk", action="store_true",
                     help="with --path-test: vary the jerk ratio (JERK = F * ratio)")
     ap.add_argument("--path-motion", action="store_true",
@@ -440,6 +470,9 @@ def main():
         log("plan:", push("set_plan", {"plan": plan}, timeout=10))
         open(events_csv + ".start", "w").close()      # vision_mock starts collecting
         collector = events_csv
+        if a.peaks:
+            daemon({"cmd": "write", "symbol": "GVL.MotionPeakReset", "value": "TRUE"})
+            daemon({"cmd": "logout"})
         log("run_cycle:", push("run_cycle", timeout=10))
         if a.chaos:
             chaos(a)                        # runs the plan to its end itself
@@ -476,6 +509,8 @@ def main():
                 raise Stall("no new tape check for %d s (after %d)" % (LIMIT_BETWEEN_CHECKS, checks))
         push("stop_cycle", timeout=15)
         log("stop_cycle sent")
+        if a.peaks:
+            report_peaks()
         try:
             plc = push("get_plc_plan", timeout=10)
             log("PLC plan: seg %s cells_done %s -> remaining %s" % (

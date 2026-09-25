@@ -93,10 +93,24 @@ export const INSPECTION = {
   BASE_ANGLE_DEG: 90,
   /** Fixed A trim (deg) added to the bottom-camera angle correction. */
   ANGLE_TRIM_DEG: -8,
-  /** While the rectified side result is pending, park this fraction of
+  /** While the rectified side result is pending, head this fraction of
    *  the way from inspection toward the slot (0 = stay, 1 = above slot).
-   *  Right above the tape made it shake on the machine (2026-09-24). */
+   *  0.5 keeps the arm ~48 mm from the middle slot, outside the top
+   *  camera's TAPE.TOP_CAM_CLEAR_MM: the tape step's shots only fire with
+   *  the arm out of view, so parking inside it before they fired would
+   *  deadlock until the vision timeout. Parking right above the tape also
+   *  made it shake on the machine (2026-09-24). */
   PRE_PLACE_FRACTION: 0.5,
+  /** The same once this cycle's top result is in (no shot left to wait
+   *  for): closer to the slot. The move is not waited on: an OK part
+   *  blends straight into the place move, an NG one aborts it toward its
+   *  bin (G1 abort). */
+  PRE_PLACE_FRACTION_TOP_READY: 0.8,
+  /** An NG part found while heading for the tape: abort that move toward
+   *  its bin (true) or let it finish and blend into the bin move (false).
+   *  Sim, 10 % NG: aborting raised one joint's peak acceleration ~21 %
+   *  (63 500 -> 77 100 deg/s^2); jerk unchanged. */
+  ABORT_TOWARD_BIN: true,
   /** Reject when the bottom-camera part offset exceeds this (mm). */
   MAX_ARM_OFFSET_MM: 5,
   /** Reject (and raise ERROR) when the tape hole offset exceeds this (mm). */

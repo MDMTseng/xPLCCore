@@ -252,7 +252,14 @@ PROGRAM AxisGroupSM
         TapeErr         : STRING(31);
         TapeIdx         : INT;
         TapeSlotIdx     : INT := -1;   // FlyEventBuffer slot reserved at TAPE_CYCLE accept
-        TapePlanCells   : DINT;        // cells this TAPE_CYCLE advances, counted into GVL.PlanCellsDone once the reel has moved
+        TapePlanCells   : DINT;
+        // Servo peak monitor (GVL.MotionPeak*).
+        PeakAxis        : ARRAY[0..5] OF POINTER TO AXIS_REF_SM3;
+        PeakPrevAcc     : ARRAY[0..5] OF LREAL;
+        PeakHavePrev    : BOOL;
+        PeakIdx         : INT;
+        PeakDt          : LREAL;
+        PeakJerkNow     : LREAL;        // cells this TAPE_CYCLE advances, counted into GVL.PlanCellsDone once the reel has moved
         TapePlanKind    : INT;         // what they are: 1 packed, 2 left empty, 0 not said
         TapePlanErr     : BOOL;        // kind/size disagreed with the plan at PlanCellsDone
         TapePlanAt      : UDINT;       // scratch: cells walked while locating the segment
@@ -809,6 +816,37 @@ PROGRAM AxisGroupSM
 
 
     UpdateMotionProgress();
+
+    // ---- Servo peak monitor: max |v|, |a|, |j| of the set values per axis ----
+    PeakAxis[0] := ADR(IoConfig_Globals.EAxis0);
+    PeakAxis[1] := ADR(IoConfig_Globals.EAxis1);
+    PeakAxis[2] := ADR(IoConfig_Globals.EAxis2);
+    PeakAxis[3] := ADR(SM_Drive_GenericDSP402);
+    PeakAxis[4] := ADR(EAXIS_A);
+    PeakAxis[5] := ADR(reelpullmotor);
+    IF GVL.MotionPeakReset THEN
+        FOR PeakIdx := 0 TO 5 DO
+            GVL.MotionPeakVel[PeakIdx] := 0;
+            GVL.MotionPeakAcc[PeakIdx] := 0;
+            GVL.MotionPeakJerk[PeakIdx] := 0;
+        END_FOR;
+        PeakHavePrev := FALSE;
+        GVL.MotionPeakReset := FALSE;
+    END_IF;
+    FOR PeakIdx := 0 TO 5 DO
+        GVL.MotionPeakVel[PeakIdx] := MAX(GVL.MotionPeakVel[PeakIdx], ABS(PeakAxis[PeakIdx]^.fSetVelocity));
+        GVL.MotionPeakAcc[PeakIdx] := MAX(GVL.MotionPeakAcc[PeakIdx], ABS(PeakAxis[PeakIdx]^.fSetAcceleration));
+        PeakDt := PeakAxis[PeakIdx]^.fTaskCycle;
+        IF PeakDt <= 0 THEN
+            PeakDt := 0.001;
+        END_IF;
+        IF PeakHavePrev THEN
+            PeakJerkNow := ABS(PeakAxis[PeakIdx]^.fSetAcceleration - PeakPrevAcc[PeakIdx]) / PeakDt;
+            GVL.MotionPeakJerk[PeakIdx] := MAX(GVL.MotionPeakJerk[PeakIdx], PeakJerkNow);
+        END_IF;
+        PeakPrevAcc[PeakIdx] := PeakAxis[PeakIdx]^.fSetAcceleration;
+    END_FOR;
+    PeakHavePrev := TRUE;
 
 
     // Phase 4 step 3: COORD1 tracking window-exit detector. Once Coord1
