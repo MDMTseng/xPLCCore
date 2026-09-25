@@ -292,6 +292,19 @@ export const CalibPage: React.FC<{
         }
       });
     }
+    // The vision link dropped: the camera replies the run waits for will
+    // not come -- say so now rather than as a timeout (review 2026-09-26 #12).
+    const onVisionLink=(ev:Event)=>{
+      if((ev as CustomEvent).detail?.status===2) return;
+      for(const name of ["TOPCheckData","BTMCheckData","FFeederCheckData","SideCheckData"]){
+        const slot=_this[name+"_Promise"];
+        if(slot!=undefined){
+          _this[name+"_Promise"]=undefined;
+          slot.reject(new Error("視覺連線中斷 / vision link lost ("+name+")"));
+        }
+      }
+    };
+    window.addEventListener('vision:link', onVisionLink as EventListener);
     registerPromiseTunnel(TOPCheckID,"TOPCheckData");
     registerPromiseTunnel(BTMCheckID,"BTMCheckData");
     registerPromiseTunnel(FFeederCheckID,"FFeederCheckData");
@@ -301,6 +314,7 @@ export const CalibPage: React.FC<{
 
 
     return () => {
+      window.removeEventListener('vision:link', onVisionLink as EventListener);
       COMCtrlObj.VP_regTcpMsgCB(TOPCheckID,undefined);
       COMCtrlObj.VP_regTcpMsgCB(BTMCheckID,undefined);
       COMCtrlObj.VP_regTcpMsgCB(FFeederCheckID,undefined);
@@ -918,7 +932,7 @@ export const CalibPage: React.FC<{
             
     await send(cmd.G1({ "Z": safe_z,"A":0,Cor:cor,...getFeedSpeedConfig(1000) }))
     // A part may still hang on the nozzle (a fault or a STOP mid-cycle):
-    // back into the feeder bowl with it, to be inspected again.
+    // into the part-NG bin with it (lib/production/recovery.ts).
     await emptyNozzle(machine);
     
     await send(cmd.G1({"X":44,"Y":89}))

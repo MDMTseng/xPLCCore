@@ -26,12 +26,12 @@ Status column is kept up to date as items are fixed.
 |---|---------|-------|--------|
 | 10 | A hold longer than the top-shot TTL (3 s) with the arm over the tape: the PLC drops the shots (TRIGGER_ERR, not handled in production), the run later dies on a misleading vision timeout with a part on the nozzle. | `cycle.ts`, `tape.ts` | Fixed: top-shot TTL 60 s (`TAPE.TOP_SHOT_TTL_MS`, x speed override); vision waits do not count time held at a checkpoint; a TRIGGER_ERR for the shots fails the step at once with a clear message. |
 | 11 | Error/UnInited flushes fly events silently: a pending WaitForTriggerMotionProgress is never answered, outputs can stay mid-sequence; M4s from a dropped session survive into the next one. | `UpdateRuntimeAndInputEvent.st` | Fixed: `FlushFlyEvents` on Error / reset / host disconnect NAKs pending waits (`group_not_ready`), fast-forwards pin sequences under way (single-stage outputs such as the vacuum untouched), reports unfired pin ops as TRIGGER_ERR 101, writes the outputs; disconnect also clears the duplicate filter. |
-| 12 | Any vision-link status change rejects pending vision waits with a misleading message; vision requests have no timeout. | `PluginHello.tsx`, `CalibPage.tsx` |  |
+| 12 | Any vision-link status change rejects pending vision waits with a misleading message; vision requests have no timeout. | `PluginHello.tsx`, `CalibPage.tsx` || Fixed: the vision send no longer changes with the link state (status via a ref; the hook's `send` is stable), so a link change no longer rejects the run's waits as "left over promise"; vision requests time out (`VISION.REPLY_TIMEOUT_MS`) and fail at once when not sent; a dropped link rejects the pending requests and the camera waits with "vision link lost"; the link reconnects every 2 s by itself. |
 | 13 | Every plan-sync failure is swallowed as "older PLC"; plan mismatches are console only. | `CalibPage.tsx` | Fixed: only an unknown-command NAK (older PLC program) falls back; other plan-sync / tape-check failures stop the RUN. Plan-book differences at the end of a run are shown to the operator. |
 | 14 | Manual debug buttons stay live during a run (steal vision replies, move the reel). | `CalibPage.tsx` | Fixed: the manual/debug section ignores clicks while a run is on. |
 | 15 | A NAK'd pack tape step surfaces only after pick and inspection (part on nozzle); the renderer plan is decremented before the PLC acks. | `cycle.ts` | Fixed: a failed tape step (pack or empty) is raised before the next pick; a plan ending in an empty segment waits for its last step. (Renderer plan still decremented before the ack: the PLC's count is the truth at the next RUN.) |
-| 16 | Feeder Modbus writes are not awaited (failures unseen); a refill in flight is not settled when the loop ends. | `feeder.ts`, `PluginHello.tsx` |  |
-| 17 | An NG part can be re-judged into the feeder bin; emptyNozzle returns tape NG parts to the feeder. | `judge.ts`, `recovery.ts` |  |
+| 16 | Feeder Modbus writes are not awaited (failures unseen); a refill in flight is not settled when the loop ends. | `feeder.ts`, `PluginHello.tsx` || Fixed: feeder bridge writes stay unawaited (host timings) but a failure is kept and fails the next feeder step ("feeder bridge write failed"); a refill still in flight is settled before the page's clean-up. |
+| 17 | An NG part can be re-judged into the feeder bin; emptyNozzle returns tape NG parts to the feeder. | `judge.ts`, `recovery.ts` || Fixed: a part that failed its own inspection (rectified measure, side / bottom check) stays part_ng whatever else goes wrong; `emptyNozzle` drops into the part-NG bin (one part scrapped per interruption, D.11), never back into the feeder. |
 | 18 | PLC-side timeouts (tape 6 s, shot TTL 3 s) do not scale with the speed override. | PLC, `tape.ts` | Partly: the top-shot TTL and the TAPE_CYCLE timeouts scale with the override (tape.ts); PLC defaults apply only when the host sends none. |
 
 ## Low
@@ -58,3 +58,12 @@ old 3 s shot TTL), no error, plan PASS. Faults anywhere, E-stops mid tape
 move with reel jitter, chaos STOPs with the renderer plan forgotten, the
 UI guards and a normal run: all PASS, 83 = 83 cells. A PLC fault now
 reads "PLC left Ready" instead of "input read failed". 95 unit tests.
+
+## Batch 3 verification (sim, 2026-09-26)
+
+Items 12, 16, 17. `--vision-drop-at 15`: the link cut mid-run ends the
+run within 3 s on "vision link lost (SideCheckData)"; after reconnecting,
+RUN finishes the plan (PASS, 83 = 83). Regression: normal run, faults,
+E-stops with reel jitter, chaos + forget, UI guards, 12 s holds, sensor
+glitch: all PASS, 83 = 83. 97 unit tests (feeder bridge failure and the
+part-NG verdict covered offline).

@@ -10,8 +10,10 @@
 //    If the PLC restarted meanwhile the travel is unknown
 //    (reel_pos_lost): that needs the operator, not a guess.
 //  - The nozzle: a part may still hang on it (or the vacuum may have gone
-//    with the fault). `emptyNozzle` drops whatever is there back into the
-//    feeder bowl, so it is inspected again instead of lost.
+//    with the fault). Nobody knows what it is -- a good part, or an NG
+//    one being picked out of the tape -- so `emptyNozzle` drops it into
+//    the part-NG bin: one part scrapped per interruption (decision D.11),
+//    never an NG part back in the feeder (review 2026-09-26 #17).
 
 import { cmd, type PlanState } from '../protocol';
 import { GEOMETRY, TAPE } from './params';
@@ -55,8 +57,8 @@ export async function finishTapeMove(m: Machine): Promise<TapeRecovery> {
   return { state: 'finished', restMm, cellsDone: now.cells_done };
 }
 
-/** Drop whatever the nozzle holds into the feeder bowl (from travel height). */
+/** Drop whatever the nozzle holds into the part-NG bin (from travel height). */
 export async function emptyNozzle(m: Machine) {
   await m.send(cmd.G1({ Z: GEOMETRY.SAFE_Z }));
-  await tossTo(m, GEOMETRY.TOSS_FEEDER);
+  await tossTo(m, GEOMETRY.TOSS_PART_NG);
 }

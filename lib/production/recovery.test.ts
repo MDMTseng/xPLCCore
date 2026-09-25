@@ -1,6 +1,6 @@
 // Tape and nozzle recovery against a fake PLC: an interrupted tape move is
 // finished with REEL_RESUME before the run, a lost position is left to the
-// operator, and the nozzle is emptied over the feeder.
+// operator, and the nozzle is emptied over the part-NG bin.
 import { describe, it, expect } from 'vitest';
 import type { Machine } from './machine';
 import { GEOMETRY, TAPE } from './params';
@@ -76,11 +76,11 @@ describe('finishTapeMove', () => {
 });
 
 describe('emptyNozzle', () => {
-  it('lifts, goes over the feeder bowl and drops', async () => {
+  it('lifts, goes over the part-NG bin and drops', async () => {
     const { m, sent } = fakePlc([]);
     await emptyNozzle(m);
     expect(sent[0]).toMatchObject({ cmd: 'G1', Z: GEOMETRY.SAFE_Z });
-    expect(sent[1]).toMatchObject({ cmd: 'G1', X: GEOMETRY.TOSS_FEEDER.X, Y: GEOMETRY.TOSS_FEEDER.Y, Z: GEOMETRY.SAFE_Z });
+    expect(sent[1]).toMatchObject({ cmd: 'G1', X: GEOMETRY.TOSS_PART_NG.X, Y: GEOMETRY.TOSS_PART_NG.Y, Z: GEOMETRY.SAFE_Z });
     expect(sent.filter((p) => p.cmd === 'M4')).toHaveLength(2);   // suck off, blow
   });
 });

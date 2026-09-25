@@ -43,6 +43,17 @@ describe('judgePlacement', () => {
     expect(b.compensationNg).toBe(true);
   });
 
+  it('a part that failed its own inspection stays NG whatever else goes wrong', () => {
+    // rectified measure failed (inspection) and no slot to place in
+    const measured = judgePlacement(good({ reasons: ['SideCam measure failed'], top: top([1, 1, 1], [0, 0, 0]) }));
+    expect(measured.partBin).toBe('part_ng');
+    // side check failed and the tape hole is lost
+    const side = judgePlacement(good({ sideStatus: 0, top: top([1, 0, 0], [0, 1, 1], { status: 0, x: 0, y: 0, mmpp: 0 }) }));
+    expect(side.partBin).toBe('part_ng');
+    // a good part with no slot: back to the feeder
+    expect(judgePlacement(good({ top: top([1, 1, 1], [0, 0, 0]) })).partBin).toBe('feeder');
+  });
+
   it('a correction out of range is not the part\'s fault: back to the feeder', () => {
     const j = judgePlacement(good({ armOffset: { X: 5, Y: 1 } }));
     expect(j.place).toBe(false);

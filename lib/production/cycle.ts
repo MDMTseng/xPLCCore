@@ -26,7 +26,7 @@ import { EVT, IO_PINS, camTrig, bit } from './io';
 import type { Machine } from './machine';
 import { nextCycleAction, leadingOkRun } from './plan';
 import { tapeStep, type TapeStepResult, type TopView } from './tape';
-import { refillFeeder, type FeederPart } from './feeder';
+import { clearFeederFault, refillFeeder, type FeederPart } from './feeder';
 import { pickFromFeeder, pickFromTape, placePart, tossTo } from './nozzle';
 import { judgePlacement, placePose, type Bin } from './judge';
 
@@ -101,9 +101,20 @@ async function timed<T>(p: Promise<T>, name: string): Promise<T> {
 }
 
 export async function runCycles(ctx: CycleContext): Promise<CycleResult> {
-  const { m, checkpoint } = ctx;
+  clearFeederFault();
   const s: CycleState = { nextAdvance: 0, placedUncounted: 0, packed: 0, parts: [], armAtSafeZ: false,
     emptyRefills: 0, tossesInARow: 0, ngPicksInARow: 0 };
+  try {
+    return await runCyclesIn(ctx, s);
+  } finally {
+    // A refill still in flight (vibration, light, strobe): let it finish
+    // before the page's clean-up turns the feeder off, not after it.
+    if (s.pendingFeeder) await s.pendingFeeder.catch(() => {});
+  }
+}
+
+async function runCyclesIn(ctx: CycleContext, s: CycleState): Promise<CycleResult> {
+  const { m, checkpoint } = ctx;
   // Stop the run on something that would otherwise repeat forever.
   const stop = async (errorString: string): Promise<CycleResult> => {
     try { await checkpoint('ERROR', { errorString }); } catch { /* the page ends the run */ }
@@ -208,7 +219,10 @@ export async function runCycles(ctx: CycleContext): Promise<CycleResult> {
     await checkpoint('go to predicted location', i);
     await pickFromFeeder(m, { X: at.X, Y: at.Y, Z: at.Z, A: -part.angle_deg });
     // Last part off the plate: refill while this one is inspected and placed.
-    if (s.parts.length === 0) s.pendingFeeder = refillFeeder(m);
+    if (s.parts.length === 0) {
+      s.pendingFeeder = refillFeeder(m);
+      s.pendingFeeder.catch(() => {});      // surfaces where it is awaited
+    }
     await checkpoint('[STEP] object picked', i);
 
     // ── Inspect, then decide with the top view.

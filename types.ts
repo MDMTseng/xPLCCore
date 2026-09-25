@@ -10,6 +10,6 @@ export type COMCtrlObj = {
   // request/reply via auto-stamped `id`; no fire-and-forget mode and no
   // per-call timeout (callers rely on upstream `delay()` aborts). See
   // doc/2-contracts/vision_contract.md.
-  VP_sendTcpMsgPack: (data: any) => Promise<any>;
+  VP_sendTcpMsgPack: (data: any, timeoutMs?: number) => Promise<any>;
   FlexVibCtrl: any;
 };

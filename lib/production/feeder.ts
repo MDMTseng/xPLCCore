@@ -21,19 +21,45 @@ export type FeederPart = {
 };
 
 /** Vibration channels on the feeder bridge. */
-const VIB_SPREAD = 10;
-const VIB_STORAGE = 0x1D;
+export const VIB_SPREAD = 10;
+export const VIB_STORAGE = 0x1D;
+
+// Feeder bridge writes (Modbus) are not awaited -- the vibration and light
+// timings run on host timers -- but they are no longer ignored: a failed
+// write is kept here and fails the next feeder step, so a dead bridge
+// (plate never shaken, light never on) stops the run instead of feeding
+// an empty plate forever (review 2026-09-26 #16).
+let feederFault: unknown;
+
+/** Forget a failure from an earlier run (runCycles, at its start). */
+export function clearFeederFault() {
+  feederFault = undefined;
+}
+
+function raiseFeederFault() {
+  if (feederFault === undefined) return;
+  const e: any = feederFault;
+  feederFault = undefined;
+  throw new Error('送料盤控制失敗 / feeder bridge write failed: ' + (e?.message ?? e));
+}
+
+function track(r: unknown) {
+  if (r && typeof (r as any).then === 'function') {
+    (r as Promise<unknown>).catch((e) => { feederFault ??= e; });
+  }
+}
 
 async function vibrate(m: Machine, channel: number, ms: number) {
   m.mark(EVT.VIB_ON);
-  m.feeder.von(channel);
+  track(m.feeder.von(channel));
   await m.delay(ms);
   m.mark(EVT.VIB_OFF);
-  m.feeder.voff(channel);
+  track(m.feeder.voff(channel));
 }
 
 /** Shoot the plate and return what the camera saw (all parts). */
 export async function inspectFeeder(m: Machine, o: { shake: boolean }): Promise<FeederPart[]> {
+  raiseFeederFault();
   if (o.shake) {
     // start once the arm has begun leaving the plate
     await m.send(cmd.WaitForTriggerMotionProgress({ motion_progress: 0 }));
@@ -44,7 +70,7 @@ export async function inspectFeeder(m: Machine, o: { shake: boolean }): Promise<
       motion_id_offset: 0, motion_progress: 0, reset_ms: FEEDER.BRAKE_MS,
     }));
     await m.delay(FEEDER.BRAKE_MS);
-    m.feeder.voff(VIB_STORAGE);
+    track(m.feeder.voff(VIB_STORAGE));
   } else {
     await m.send(cmd.WaitForTriggerMotionProgress({ motion_progress: 1 }));
   }
@@ -52,7 +78,7 @@ export async function inspectFeeder(m: Machine, o: { shake: boolean }): Promise<
   const result = m.waitVision('feeder');
   void (async () => {
     m.mark(EVT.FEEDER_LIGHT_ON);
-    m.feeder.top_light_on();
+    track(m.feeder.top_light_on());
     await m.delay(FEEDER.LIGHT_LEAD_MS);
     await m.send(cmd.M4({
       pin: bit(IO_PINS.O.CAM_FlexFeeder), state: bit(IO_PINS.O.CAM_FlexFeeder),
@@ -60,11 +86,12 @@ export async function inspectFeeder(m: Machine, o: { shake: boolean }): Promise<
     }));
     await m.delay(FEEDER.CAMERA_STROBE_MS);
     m.mark(EVT.FEEDER_LIGHT_OFF);
-    m.feeder.top_light_off();
-  })().catch((e) => console.warn('feeder light/strobe failed', e?.message ?? e));
+    track(m.feeder.top_light_off());
+  })().catch((e) => { feederFault ??= e; });
 
   // Timed out: treat the plate as empty; the next cycle shakes and looks again.
   const raw = ((await result) ?? []) as { x: number; y: number; ang: number; inner: number; outer: number }[];
+  raiseFeederFault();
   return raw.map((p) => ({
     x: p.x, y: p.y, angle_deg: p.ang, surround_clear: p.outer, center_clear: p.inner,
   }));

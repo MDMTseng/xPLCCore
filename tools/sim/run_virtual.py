@@ -402,6 +402,27 @@ def hold_test(a):
         log("hold #%d: %g s at %r, error %r" % (k + 1, a.hold_s, rs.get("runningState"), rs.get("currentError")))
 
 
+def vision_drop(a):
+    """The vision link drops mid-run: the run must end on a clear "vision
+    link lost" (not "left over promise", not a 10 s timeout), and RUN after
+    the link is back must finish the plan."""
+    time.sleep(a.vision_drop_at)
+    t0 = time.time()
+    push("disconnect_vision", timeout=10)
+    log("vision drop: link cut")
+    try:
+        wait_for("the run to end", lambda: not push("get_running_state", timeout=10).get("isRunning"),
+                 timeout=30, period=0.2)
+    except Exception:
+        log("vision drop: run did NOT end within 30 s")
+        return
+    rs = push("get_running_state", timeout=10)
+    log("vision drop: run ended %.1f s after the cut: %s" % (time.time() - t0, rs.get("runningState")))
+    push("connect_vision", {"host": "localhost", "port": 7950}, timeout=10)
+    wait_for("vision link", lambda: push("get_state")["visionStatus"] == 2, timeout=LIMIT_LINK)
+    log("vision drop: link back, RUN -> %s" % push("run_cycle", timeout=10))
+
+
 def override_check():
     """Same square (4 stop-to-stop moves of ~42 mm, and a blended 24-gon)
     at 100 % and 30 %: how do the peaks scale?"""
@@ -727,6 +748,8 @@ def main():
     ap.add_argument("--peaks", action="store_true",
                     help="report each servo's peak |velocity|, |acceleration| and |jerk| over the run "
                          "(GVL.MotionPeak*, reset at RUN)")
+    ap.add_argument("--vision-drop-at", type=float, default=0,
+                    help="N s into the run, cut the vision link; expect a clear stop, then reconnect and RUN again")
     ap.add_argument("--hold-test", type=int, default=0,
                     help="hold the run (step mode) N times for --hold-s seconds each, mid-run")
     ap.add_argument("--hold-s", type=float, default=12.0)
@@ -870,6 +893,8 @@ def main():
             glitch(a)
         if a.hold_test:
             hold_test(a)
+        if a.vision_drop_at:
+            vision_drop(a)
         if a.chaos:
             chaos(a)                        # runs the plan to its end itself
         elif a.fault:

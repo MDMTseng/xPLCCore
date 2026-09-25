@@ -11,6 +11,11 @@ export const useTcpStringConnection = (
   const [status, setStatus] = useState(0);
   const socketRef = useRef<any | null>(null);
   const rxHandlerRef = useRef(onReceive);
+  // Bumped RECONNECT_MS after the link drops while it should be up: the
+  // effect below then connects again (vision restarting used to need the
+  // operator to reconnect by hand).
+  const [retry, setRetry] = useState(0);
+  const RECONNECT_MS = 2000;
 
   useEffect(() => {
     rxHandlerRef.current = onReceive;
@@ -39,16 +44,24 @@ export const useTcpStringConnection = (
           rxHandlerRef.current?.(data_str);
         });
 
+        let retrying = false;
+        const retryLater = () => {
+          if (retrying) return;
+          retrying = true;
+          setTimeout(() => setRetry((n) => n + 1), RECONNECT_MS);
+        };
         client.on('close', () => {
           setStatus(0);
-          socketRef.current = null;
+          if (socketRef.current === client) socketRef.current = null;
+          retryLater();
         });
 
         client.on('error', (error: Error) => {
           console.error('TCP connection error:', error);
           setStatus(-1);
           client.destroy();
-          socketRef.current = null;
+          if (socketRef.current === client) socketRef.current = null;
+          retryLater();
         });
       }
     } else if (socketRef.current) {
@@ -63,8 +76,10 @@ export const useTcpStringConnection = (
         socketRef.current = null;
       }
     };
-  }, [host, port, shouldConnect]);
+  }, [host, port, shouldConnect, retry]);
 
+  // Stable: it reads the socket from the ref, so users of `send` do not
+  // change (and re-run their effects) on every status change.
   const send = useCallback(
     (payload: string) => {
       if (socketRef.current && !socketRef.current.destroyed) {
@@ -73,7 +88,7 @@ export const useTcpStringConnection = (
       }
       return false;
     },
-    [status],
+    [],
   );
 
   return {

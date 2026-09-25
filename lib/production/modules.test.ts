@@ -7,7 +7,7 @@ import { IO_PINS, bit } from './io';
 import { GEOMETRY, NOZZLE, TAPE } from './params';
 import { tapeStep } from './tape';
 import { pickFromFeeder, placePart, tossTo, pickFromTape } from './nozzle';
-import { refillFeeder } from './feeder';
+import { clearFeederFault, refillFeeder } from './feeder';
 
 type Sent = { pkt: any; waited: boolean };
 
@@ -34,6 +34,16 @@ function fakeMachine(opts: { replies?: Record<string, any>; vision?: Partial<Rec
 }
 
 const view = { is_clear: [0, 1, 1], is_OK: [1, 0, 0], locHole: { status: 1, x: 0, y: 0, mmpp: 0.01 } };
+
+describe('feeder bridge failures', () => {
+  it('a failed vibration write fails the refill instead of being ignored', async () => {
+    const { m } = fakeMachine({ vision: { feeder: [{ x: 1, y: 1, ang: 0, inner: 1, outer: 1 }] } });
+    m.feeder.von = () => Promise.reject(new Error('Modbus write request timed out.'));
+    clearFeederFault();
+    await expect(refillFeeder(m)).rejects.toThrow(/feeder bridge write failed: Modbus write request timed out/);
+    clearFeederFault();
+  });
+});
 
 describe('tapeStep', () => {
   it('fails at once when the PLC drops its top shots (TRIGGER_ERR), not on a vision timeout', async () => {

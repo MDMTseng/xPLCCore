@@ -8,6 +8,7 @@ import { useTcpStringConnection } from './hooks/useTcpStringConnection';
 import { t, type UILang } from './i18n';
 import { hasHarnessAction, dispatchHarnessAction, listHarnessActions, registerHarnessAction, unregisterHarnessAction } from './harness/registry';
 import { cmd, validateReply } from './lib/protocol';
+import { VISION } from './lib/production/params';
 
 // Bump when shipping changes to the TCP/msgpack dispatcher or PLC protocol.
 // Shown as a pill next to the app title so you can tell at a glance whether
@@ -835,15 +836,37 @@ export const PluginHello: React.FC<{
 
 
 
-  const VP_sendTcpMsgPack = useCallback((data: any): Promise<any> => {
-    if (tcp2Status !== 2) {
-      throw new Error('not connected');
+  // Vision link state for VP_sendTcpMsgPack, through a ref: with
+  // tcp2Status in its deps the function -- and COMCtrlObj with it --
+  // changed on every link change, which re-ran the page's vision
+  // registration and rejected the run's pending vision waits as
+  // "left over promise" (review 2026-09-26 #12).
+  const tcp2StatusRef = useRef(tcp2Status);
+  tcp2StatusRef.current = tcp2Status;
+  const prevTcp2StatusRef = useRef(tcp2Status);
+  useEffect(() => {
+    const was = prevTcp2StatusRef.current;
+    prevTcp2StatusRef.current = tcp2Status;
+    if (was === 2 && tcp2Status !== 2) {
+      // The link dropped: no reply is coming for anything asked on it.
+      for (const [id, entry] of Object.entries<any>(_this.VP_RX_lookup)) {
+        if (entry?._PERSIST_ === true) continue;
+        try { entry.reject?.(new Error('vision disconnected')); } catch {}
+        delete _this.VP_RX_lookup[id as any];
+      }
+    }
+    window.dispatchEvent(new CustomEvent('vision:link', { detail: { status: tcp2Status } }));
+  }, [tcp2Status]);
+
+  const VP_sendTcpMsgPack = useCallback((data: any, timeoutMs: number = VISION.REPLY_TIMEOUT_MS): Promise<any> => {
+    if (tcp2StatusRef.current !== 2) {
+      return Promise.reject(new Error('vision not connected'));
     }
     let promise: Promise<any> | undefined = undefined;
     try {
 
-      let res_fn;
-      let rej_fn;
+      let res_fn: any;
+      let rej_fn: any;
       
     
       _this.VP_TX_id_COUNTER++;
@@ -858,24 +881,30 @@ export const PluginHello: React.FC<{
         rej_fn = reject;
       });
 
+      // Bounded: a reply that never comes (vision busy, request lost)
+      // used to leave the entry, and its caller, waiting forever.
+      const timer = setTimeout(() => {
+        if (_this.VP_RX_lookup[ava_id]?.trigger_id !== ava_id) return;
+        delete _this.VP_RX_lookup[ava_id];
+        (rej_fn as any)?.(new Error(`vision reply timeout (${data?.type}/${data?.cmd_type ?? ''}, ${timeoutMs} ms)`));
+      }, timeoutMs);
       _this.VP_RX_lookup[ava_id] = {
         type: data.type,
         trigger_id: ava_id,
         RX_str_arr: [],
-        resolve: res_fn,
-        reject: rej_fn
+        resolve: (v: any) => { clearTimeout(timer); (res_fn as any)?.(v); },
+        reject: (e: any) => { clearTimeout(timer); (rej_fn as any)?.(e); },
       }
-    
-      // console.log("sendTcpMsgPack",data);
-      sendTcp2(JSON.stringify(data)+";");
 
-
-
+      if (!sendTcp2(JSON.stringify(data)+";")) {
+        _this.VP_RX_lookup[ava_id].reject(new Error('vision not connected'));
+        delete _this.VP_RX_lookup[ava_id];
+      }
       return promise;
     } catch (e: any) {
+      return Promise.reject(e instanceof Error ? e : new Error(String(e)));
     }
-    throw new Error('sending error');
-  }, [sendTcp2, tcp2Status]);
+  }, [sendTcp2]);
 
   const VP_regTcpMsgCB = useCallback((tarID: number, cb: ((data: any) => void) | undefined) : boolean=> {
     // Registration only edits VP_RX_lookup; it needs no link. It used to

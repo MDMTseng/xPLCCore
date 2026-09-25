@@ -65,6 +65,12 @@ export type Judgement = {
 export function judgePlacement(i: JudgeInput, now: number = Date.now()): Judgement {
   const reasons = [...i.reasons];
   let partBin = i.partBin;
+  // Back to the feeder -- unless the part itself failed an inspection (the
+  // rectified measure, or the side / bottom check here): a later reason
+  // (no hole, no slot, plan full) used to turn such a part into a feeder
+  // one, and a re-shot could then pass it (review 2026-09-26 #17).
+  let partNg = i.partBin === 'part_ng' && i.reasons.length > 0;
+  const toFeeder = () => { if (!partNg) partBin = 'feeder'; };
   let tapeNgBin: Bin = 'feeder';
   let compensationNg = false;
 
@@ -75,7 +81,7 @@ export function judgePlacement(i: JudgeInput, now: number = Date.now()): Judgeme
     // tape, do not advance; the part goes back to the feeder and the next
     // cycle checks the tape again.
     reasons.push('vision timeout: top');
-    partBin = 'feeder';
+    toFeeder();
   }
 
   const slots = { isOk: view.is_OK.slice(view.post_check_advCount), isClear: view.is_clear.slice(view.post_check_advCount) };
@@ -96,15 +102,17 @@ export function judgePlacement(i: JudgeInput, now: number = Date.now()): Judgeme
   if (i.sideStatus !== 1) {
     reasons.push('SideCheck failed');
     partBin = 'part_ng';
+    partNg = true;
   }
   if (i.btmPoseStatus !== 1) {
     compensationNg = true;
     reasons.push('btm check failed');
     partBin = 'part_ng';
+    partNg = true;
   }
   if (Math.hypot(i.armOffset.X, i.armOffset.Y) > INSPECTION.MAX_ARM_OFFSET_MM) {
     reasons.push('armOffset is too far');
-    partBin = 'feeder';
+    toFeeder();
     compensationNg = true;
   }
 
@@ -119,27 +127,27 @@ export function judgePlacement(i: JudgeInput, now: number = Date.now()): Judgeme
   }
   if (Number.isNaN(holeOffset.X)) {
     reasons.push('slotHoleOffset is NaN');
-    partBin = 'feeder';
+    toFeeder();
     compensationNg = true;
   }
   let holeTooFar = false;
   if (Math.hypot(holeOffset.X, holeOffset.Y) > INSPECTION.MAX_SLOT_HOLE_OFFSET_MM) {
     reasons.push('slotHoleOffset is too far');
-    partBin = 'feeder';
+    toFeeder();
     holeTooFar = true;
     compensationNg = true;
   }
 
   if (Number.isNaN(placeSlot)) {
     reasons.push('no slot to place');
-    partBin = 'feeder';
+    toFeeder();
   }
 
   const plan = i.plan;
   if (plan.length > 0 && plan[0] <= nextAdvance) {
     // The OK run already in the tape completes the segment.
     reasons.push('production plan place count hit' + plan[0] + ' ' + nextAdvance);
-    partBin = 'feeder';
+    toFeeder();
     if (plan[0] > 0) nextAdvance = plan[0];
   }
   // The reel only advances past a run of OK cells from slot 0, so every
@@ -148,11 +156,11 @@ export function judgePlacement(i: JudgeInput, now: number = Date.now()): Judgeme
   if (plan.length > 0 && plan[0] > 0 && reasons.length === 0
       && !Number.isNaN(placeSlot) && placeSlot + 1 > plan[0]) {
     reasons.push('production plan: slot ' + placeSlot + ' past count ' + plan[0]);
-    partBin = 'feeder';
+    toFeeder();
   }
   if (plan.length === 0) {
     reasons.push('production plan is empty');
-    partBin = 'feeder';
+    toFeeder();
   }
 
   const place = i.sideStatus === 1 && !Number.isNaN(placeSlot) && !compensationNg && reasons.length === 0;
