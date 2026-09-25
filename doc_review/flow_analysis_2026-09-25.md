@@ -218,7 +218,7 @@ Needs the machine (not changed):
   (`set_comm_task_period.py` first), FlyEventBufferSize 32; the retained
   tape-move record (`GVL.ReelMv*`) and the new `PlanCountCells` method --
   run `jobs/templates/create_plan_count_cells.py` and
-  `create_update_di_watch.py` (logged out) before the
+  `create_update_di_watch.py` and `create_flush_fly_events.py` (logged out) before the
   import, see `estop_recovery_2026-09-25.md`. A download re-initialises
   the retained plan and tape-move record: install only between runs, with
   no open tape move (PLAN_GET `reel_open` false); the renderer re-sends
