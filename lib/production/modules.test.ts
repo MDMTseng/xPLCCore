@@ -36,6 +36,26 @@ function fakeMachine(opts: { replies?: Record<string, any>; vision?: Partial<Rec
 const view = { is_clear: [0, 1, 1], is_OK: [1, 0, 0], locHole: { status: 1, x: 0, y: 0, mmpp: 0.01 } };
 
 describe('tapeStep', () => {
+  it('fails at once when the PLC drops its top shots (TRIGGER_ERR), not on a vision timeout', async () => {
+    const { m, sent } = fakeMachine({ replies: { TAPE_CYCLE: { ack: true } } });
+    let emit: (msg: any) => void = () => {};
+    m.onPlcEvent = (fn) => { emit = fn; return () => { emit = () => {}; }; };
+    m.waitVision = () => new Promise(() => {});        // vision never answers
+    const step = tapeStep(m, { cells: 1, kind: 'pack' });
+    await Promise.resolve();
+    const eventId = sent[0].pkt.event_id;
+    emit({ name: 'TRIGGER_ERR', event_id: eventId + 1, error_code: 100 });   // someone else's
+    emit({ name: 'TRIGGER_ERR', event_id: eventId, error_code: 101 });
+    await expect(step).rejects.toThrow(/dropped by the PLC \(code 101\)/);
+  });
+
+  it('arms the top shots with the long TTL, stretched by the speed override', async () => {
+    const { m, sent } = fakeMachine({ replies: { TAPE_CYCLE: { ack: true } }, vision: { top: view } });
+    m.timeScale = () => 2;
+    await tapeStep(m, { cells: 1, kind: 'pack' });
+    expect(sent[0].pkt.ttl_ms).toBe(TAPE.TOP_SHOT_TTL_MS * 2);
+  });
+
   it('sends one TAPE_CYCLE with the plan cells and kind, then waits for the top result', async () => {
     const { m, sent } = fakeMachine({ replies: { TAPE_CYCLE: { ack: true, cells_done: 7 } }, vision: { top: view } });
     const r = await tapeStep(m, { cells: 2, kind: 'pack', trigger: { motion_id_offset: 0, motion_progress: 0 } });

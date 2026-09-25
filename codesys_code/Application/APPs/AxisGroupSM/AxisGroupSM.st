@@ -17,6 +17,7 @@ PROGRAM AxisGroupSM
         RETRY_COOLDOWN_G1_MS    : DINT := 101;
         // Error code reported on FlyEvent TimeToLive expiry.
         TRIGGER_TIMEOUT_ERR     : INT := 100;
+        FLY_FLUSHED_ERR         : INT := 101;   // dropped on Error / reset / host disconnect (FlushFlyEvents)
         // Sentinel used by 'G1' to detect "A not supplied" in the TryReadREAL
         // default. Any real A value is << |919191|.
         G1_A_UNSET_SENTINEL     : LREAL := -919191;
@@ -261,6 +262,7 @@ PROGRAM AxisGroupSM
         DiWatchThrottleMs : ARRAY[0..15] OF LINT;
         DiWatchPrev       : ULINT;
         DiWatchInit       : BOOL;
+        PrevClientActive  : BOOL;     // host connection last scan (FlushFlyEvents on its loss)
         DiWFlips          : ARRAY[0..15] OF UDINT;
         DiWHighMs         : ARRAY[0..15] OF DINT;
         DiWMaxHighMs      : ARRAY[0..15] OF DINT;

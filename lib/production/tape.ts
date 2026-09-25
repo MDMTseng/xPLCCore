@@ -56,6 +56,28 @@ function topShotSequence(): number[] {
 
 export async function tapeStep(m: Machine, o: TapeStepOptions): Promise<TapeStepResult> {
   const trigger = o.trigger ?? { motion_id_offset: -1, motion_progress: 0 };
+  const eventId = ++topShotEventId;
+  // The PLC drops armed shots it cannot fire (TTL, or the FSM leaving
+  // Ready) with a TRIGGER_ERR: say so at once, not as a vision timeout
+  // 10 s later (review 2026-09-26 #10).
+  let shotsLost: (e: Error) => void = () => {};
+  const lost = new Promise<never>((_, reject) => { shotsLost = reject; });
+  lost.catch(() => {});
+  const off = m.onPlcEvent?.((msg) => {
+    if (msg?.name === 'TRIGGER_ERR' && Number(msg.event_id) === eventId) {
+      shotsLost(new Error(`top-camera shots dropped by the PLC (code ${msg.error_code}) / 上方相機拍照被 PLC 取消`));
+    }
+  });
+  try {
+    return await runTapeStep(m, o, trigger, eventId, lost);
+  } finally {
+    off?.();
+  }
+}
+
+async function runTapeStep(m: Machine, o: TapeStepOptions,
+    trigger: { motion_id_offset: number; motion_progress: number }, eventId: number,
+    lost: Promise<never>): Promise<TapeStepResult> {
   const rep = await m.send(cmd.TapeCycle({
     ...trigger,
     distance: o.cells > 0 ? o.cells * TAPE.REEL_CELL_DISTANCE : 0,
@@ -67,10 +89,10 @@ export async function tapeStep(m: Machine, o: TapeStepOptions): Promise<TapeStep
     z: GEOMETRY.SAFE_Z,
     radius: TAPE.TOP_CAM_CLEAR_MM,
     pin_op_seq: topShotSequence(),
-    event_id: ++topShotEventId,
+    event_id: eventId,
     // slowed down by the speed override, the reel and the arm take longer
     timeout_ms: Math.round((TAPE.REEL_STOP_TIMEOUT_MS + 3000) * (m.timeScale?.() ?? 1)),
-    ttl_ms: Math.round(3000 * (m.timeScale?.() ?? 1)),
+    ttl_ms: Math.round(TAPE.TOP_SHOT_TTL_MS * (m.timeScale?.() ?? 1)),
     cells: o.cells,
     kind: o.kind,
   }), true, Math.round((TAPE.REEL_STOP_TIMEOUT_MS + 5000) * (m.timeScale?.() ?? 1)));
@@ -78,7 +100,9 @@ export async function tapeStep(m: Machine, o: TapeStepOptions): Promise<TapeStep
   // The shots fire only after this reply (the arm must still leave the
   // sphere, and vision needs its processing time), so registering the wait
   // now cannot miss the result -- and its budget is not spent on the reel.
-  const top = await m.waitVision('top');
+  const vision = m.waitVision('top');
+  vision.catch(() => {});           // lost to `lost`: its timeout is not ours to report
+  const top = await Promise.race([vision, lost]);
   return {
     view: top === undefined ? undefined : { ...top, post_check_advCount: 0 },
     cellsDone: typeof rep?.cells_done === 'number' ? rep.cells_done : undefined,

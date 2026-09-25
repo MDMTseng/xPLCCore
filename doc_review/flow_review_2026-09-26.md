@@ -22,17 +22,17 @@ Status column is kept up to date as items are fixed.
 
 ## Medium
 
-| # | Finding | Where |
-|---|---------|-------|
-| 10 | A hold longer than the top-shot TTL (3 s) with the arm over the tape: the PLC drops the shots (TRIGGER_ERR, not handled in production), the run later dies on a misleading vision timeout with a part on the nozzle. | `cycle.ts`, `tape.ts` |
-| 11 | Error/UnInited flushes fly events silently: a pending WaitForTriggerMotionProgress is never answered, outputs can stay mid-sequence; M4s from a dropped session survive into the next one. | `UpdateRuntimeAndInputEvent.st` |
-| 12 | Any vision-link status change rejects pending vision waits with a misleading message; vision requests have no timeout. | `PluginHello.tsx`, `CalibPage.tsx` |
-| 13 | Every plan-sync failure is swallowed as "older PLC"; plan mismatches are console only. | `CalibPage.tsx` |
-| 14 | Manual debug buttons stay live during a run (steal vision replies, move the reel). | `CalibPage.tsx` |
-| 15 | A NAK'd pack tape step surfaces only after pick and inspection (part on nozzle); the renderer plan is decremented before the PLC acks. | `cycle.ts` |
-| 16 | Feeder Modbus writes are not awaited (failures unseen); a refill in flight is not settled when the loop ends. | `feeder.ts`, `PluginHello.tsx` |
-| 17 | An NG part can be re-judged into the feeder bin; emptyNozzle returns tape NG parts to the feeder. | `judge.ts`, `recovery.ts` |
-| 18 | PLC-side timeouts (tape 6 s, shot TTL 3 s) do not scale with the speed override. | PLC, `tape.ts` |
+| # | Finding | Where | Status |
+|---|---------|-------|--------|
+| 10 | A hold longer than the top-shot TTL (3 s) with the arm over the tape: the PLC drops the shots (TRIGGER_ERR, not handled in production), the run later dies on a misleading vision timeout with a part on the nozzle. | `cycle.ts`, `tape.ts` | Fixed: top-shot TTL 60 s (`TAPE.TOP_SHOT_TTL_MS`, x speed override); vision waits do not count time held at a checkpoint; a TRIGGER_ERR for the shots fails the step at once with a clear message. |
+| 11 | Error/UnInited flushes fly events silently: a pending WaitForTriggerMotionProgress is never answered, outputs can stay mid-sequence; M4s from a dropped session survive into the next one. | `UpdateRuntimeAndInputEvent.st` | Fixed: `FlushFlyEvents` on Error / reset / host disconnect NAKs pending waits (`group_not_ready`), fast-forwards pin sequences under way (single-stage outputs such as the vacuum untouched), reports unfired pin ops as TRIGGER_ERR 101, writes the outputs; disconnect also clears the duplicate filter. |
+| 12 | Any vision-link status change rejects pending vision waits with a misleading message; vision requests have no timeout. | `PluginHello.tsx`, `CalibPage.tsx` |  |
+| 13 | Every plan-sync failure is swallowed as "older PLC"; plan mismatches are console only. | `CalibPage.tsx` | Fixed: only an unknown-command NAK (older PLC program) falls back; other plan-sync / tape-check failures stop the RUN. Plan-book differences at the end of a run are shown to the operator. |
+| 14 | Manual debug buttons stay live during a run (steal vision replies, move the reel). | `CalibPage.tsx` | Fixed: the manual/debug section ignores clicks while a run is on. |
+| 15 | A NAK'd pack tape step surfaces only after pick and inspection (part on nozzle); the renderer plan is decremented before the PLC acks. | `cycle.ts` | Fixed: a failed tape step (pack or empty) is raised before the next pick; a plan ending in an empty segment waits for its last step. (Renderer plan still decremented before the ack: the PLC's count is the truth at the next RUN.) |
+| 16 | Feeder Modbus writes are not awaited (failures unseen); a refill in flight is not settled when the loop ends. | `feeder.ts`, `PluginHello.tsx` |  |
+| 17 | An NG part can be re-judged into the feeder bin; emptyNozzle returns tape NG parts to the feeder. | `judge.ts`, `recovery.ts` |  |
+| 18 | PLC-side timeouts (tape 6 s, shot TTL 3 s) do not scale with the speed override. | PLC, `tape.ts` | Partly: the top-shot TTL and the TAPE_CYCLE timeouts scale with the override (tape.ts); PLC defaults apply only when the host sends none. |
 
 ## Low
 
@@ -49,3 +49,12 @@ refused mid-run, RUN during a pending STOP, STOP during an error hold,
 then the plan to its end): all OK, tape layout PASS, 83 = 83 cells.
 Reel jitter +-0.005 mm: normal run and 3 E-stops mid tape move PASS.
 Offline: 91 unit tests.
+
+## Batch 2 verification (sim, 2026-09-26)
+
+Items 10, 11, 13, 14, 15 (and 18 in part). `--hold-test 3 --hold-s 12`:
+three 12 s step-mode holds mid-run (past the 10 s vision budget and the
+old 3 s shot TTL), no error, plan PASS. Faults anywhere, E-stops mid tape
+move with reel jitter, chaos STOPs with the renderer plan forgotten, the
+UI guards and a normal run: all PASS, 83 = 83 cells. A PLC fault now
+reads "PLC left Ready" instead of "input read failed". 95 unit tests.

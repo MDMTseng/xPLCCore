@@ -47,18 +47,26 @@ IF TO_INT(AxisGroupManagerFb._eState) <> PrevAxisGroupState THEN
             RecentCmdMoveIds[DupeLoopIdx] := 0;
         END_FOR;
         RecentCmdRingHead := 0;
-        // Fly events belong to the session that just faulted: they are not
-        // processed outside Ready (their TTLs stop), so without this a
-        // stale distance/progress trigger could fire after recovery.
-        // Outputs are left as they are on purpose -- they include the
-        // nozzle vacuum, and dropping it here would drop a held part.
-        FOR DupeLoopIdx := 0 TO TO_INT(FlyEventBufferSize) - 1 DO
-            FlyEventBuffer[DupeLoopIdx].TriggerType := FlyEventTriggerType.NOP;
-        END_FOR;
+        // Fly events belong to the run that just faulted (FlushFlyEvents
+        // answers / reports / finishes them instead of dropping silently).
+        FlushFlyEvents(notify := TCP_MSGPAK_Server.fbMyServer.CLIENT.xActive);
     END_IF;
 
     PrevAxisGroupState := TO_INT(AxisGroupManagerFb._eState);
 END_IF;
+
+// The host went away: what it queued belongs to its session. An M4 aimed
+// at "the next move" would otherwise fire on the new session's first G1,
+// and the duplicate filter would match the new session's restarted ids.
+IF PrevClientActive AND NOT TCP_MSGPAK_Server.fbMyServer.CLIENT.xActive THEN
+    FOR DupeLoopIdx := 0 TO DUPE_RING_SIZE - 1 DO
+        RecentCmdIds[DupeLoopIdx] := 0;
+        RecentCmdMoveIds[DupeLoopIdx] := 0;
+    END_FOR;
+    RecentCmdRingHead := 0;
+    FlushFlyEvents(notify := FALSE);
+END_IF;
+PrevClientActive := TCP_MSGPAK_Server.fbMyServer.CLIENT.xActive;
 
 // ST_CHG retry pump (PH#8). PendingStChgFromState >= 0 means an edge is
 // waiting to publish; "to" is the current _eState at retry time, which

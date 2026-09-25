@@ -68,6 +68,11 @@ export const TAPE = {
   REEL_CELL_DISTANCE: 8,
   REEL_MOVE: { F: 5000, ACC: 100000, DEA: 10000, JERK: 100000 },
   REEL_STOP_TIMEOUT_MS: 3000,
+  /** How long the armed top shots wait for the arm to leave the tape
+   *  before the PLC drops them (TRIGGER_ERR). Long: an operator hold with
+   *  the arm over the tape (step mode, a sensor error) must not lose them;
+   *  it was 3 s (review 2026-09-26 #10). */
+  TOP_SHOT_TTL_MS: 60000,
   /** After the reel stops, before the top-camera lights. */
   REEL_SETTLE_MS: 20,
   /** The top shots wait until the arm is this far (mm) from above the

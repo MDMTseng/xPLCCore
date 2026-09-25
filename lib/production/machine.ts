@@ -39,4 +39,7 @@ export interface Machine {
   /** >= 1 while motion runs slowed down (the speed override): timeouts on
    *  motion-paced waits are stretched by it. Absent = 1. */
   timeScale?(): number;
+  /** Subscribe to PLC push events (`plc:event`: TRIGGER_ERR, DI, ...);
+   *  returns the unsubscribe. Absent = no events. */
+  onPlcEvent?(fn: (msg: any) => void): () => void;
 }

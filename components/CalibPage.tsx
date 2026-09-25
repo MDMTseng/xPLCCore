@@ -329,10 +329,21 @@ export const CalibPage: React.FC<{
   // Speed override (the slider below): motion runs at speedOverride of
   // normal speed on the PLC; waits paced by motion stretch by 1/that.
   const speedTimeScale=()=>1/Math.max(0.1, _this.speedOverride ?? 1);
+  // The budget runs only while the run is not held at a checkpoint (step
+  // mode, toss pause, an error hold): an operator looking at the machine
+  // used to turn into a vision timeout that aborted the run (review
+  // 2026-09-26 #10).
   function waitForCheckData(name:string):Promise<any>{
     return new Promise((resolve, reject)=>{
       const slot:any={};
-      const timer=setTimeout(()=>{
+      const budget=VISION_REPLY_TIMEOUT_MS*speedTimeScale();
+      let spent=0, last=Date.now();
+      const timer=setInterval(()=>{
+        const now=Date.now();
+        if(_this.stepMode_resolve===undefined) spent+=now-last;
+        last=now;
+        if(spent<budget) return;
+        clearInterval(timer);
         if(_this[name+"_Promise"]===slot)_this[name+"_Promise"]=undefined;
         _this.visionTimeouts=(_this.visionTimeouts??0)+1;
         if(_this.visionTimeouts>=VISION_TIMEOUT_STOP){
@@ -341,9 +352,9 @@ export const CalibPage: React.FC<{
           console.warn(`vision timeout: ${name} (${_this.visionTimeouts} in a row), part skipped`);
           resolve(undefined);
         }
-      },VISION_REPLY_TIMEOUT_MS*speedTimeScale());
-      slot.resolve=(data:any)=>{clearTimeout(timer);_this.visionTimeouts=0;resolve(data);};
-      slot.reject=(err:any)=>{clearTimeout(timer);reject(err);};
+      },100);
+      slot.resolve=(data:any)=>{clearInterval(timer);_this.visionTimeouts=0;resolve(data);};
+      slot.reject=(err:any)=>{clearInterval(timer);reject(err);};
       _this[name+"_Promise"]=slot;
     });
   }
@@ -757,8 +768,19 @@ export const CalibPage: React.FC<{
       feeder:FlexVibCtrl,
       delay,
       timeScale:speedTimeScale,
+      onPlcEvent:(fn)=>{
+        const h=(ev:Event)=>fn((ev as CustomEvent).detail);
+        globalThis.addEventListener('plc:event', h as EventListener);
+        return ()=>globalThis.removeEventListener('plc:event', h as EventListener);
+      },
     };
     return {send, sendNoWait, machine};
+  }
+
+  // A NAK for a command this PLC program does not know (older build).
+  function isUnknownCommand(e:any):boolean{
+    const m=String(e?.message??e);
+    return /unknown_cmd|^nak \(/.test(m);
   }
 
   // Path feed test (lib/production/pathTest.ts): stream short G1 moves
@@ -850,16 +872,22 @@ export const CalibPage: React.FC<{
         return;
       }
     }catch(e:any){
-      // An older PLC program without REEL_RESUME / reel_* in PLAN_GET.
-      console.warn("[RECOVERY] tape check failed:", e?.message??e);
+      // Only an older PLC program (no REEL_RESUME / reel_* in PLAN_GET) is
+      // a reason to go on; a timeout or a NAK is not (review 2026-09-26 #13).
+      if(!isUnknownCommand(e)) throw e;
+      console.warn("[RECOVERY] tape check not supported by this PLC program:", e?.message??e);
     }
 
     _this.plan_mismatch=0;
+    _this.plc_cells_done=undefined;
     try{
       console.log("[PLAN] sync:", await syncPlanWithPlc(send));
     }catch(e:any){
-      // An older PLC program without PLAN_* NAKs: run on the renderer's plan.
-      console.warn("[PLAN] PLC plan sync failed, renderer plan only:", e?.message??e);
+      // An older PLC program without PLAN_*: run on the renderer's plan.
+      // Anything else (a timeout, a NAK) would run the tape on a plan the
+      // PLC does not hold: stop instead (review 2026-09-26 #13).
+      if(!isUnknownCommand(e)) throw new Error("PLC 計畫同步失敗 / plan sync with the PLC failed: "+(e?.message??e));
+      console.warn("[PLAN] PLAN_* not supported by this PLC program, renderer plan only:", e?.message??e);
     }
 
     await runinng_checkpoint("start",{time:Date.now()});
@@ -966,8 +994,13 @@ export const CalibPage: React.FC<{
             }catch(e:any){
               readFailures++;
               console.error("input watchdog: read failed",readFailures,e?.message??e);
-              if(readFailures>=WATCHDOG.READ_FAILURE_LIMIT){
-                _this.current_error={errorString:"輸入讀取失敗 (input read failed): "+(e?.message??e)};
+              const why=String(e?.message??e);
+              if(/group_not_ready/.test(why)){
+                // The read is refused because the PLC left Ready: that is
+                // the fault to report, not the read.
+                _this.current_error={errorString:"PLC 故障停止（伺服 / 匯流排 / 緊停），請排除後重新初始化 / PLC left Ready (group_not_ready)"};
+              }else if(readFailures>=WATCHDOG.READ_FAILURE_LIMIT){
+                _this.current_error={errorString:"輸入讀取失敗 (input read failed): "+why};
               }
               await delay(WATCHDOG.POLL_MS);
               continue;
@@ -1033,6 +1066,13 @@ export const CalibPage: React.FC<{
       const mine=cellsDone(original,(_this.production_plan ?? []) as number[]);
       console.log("[PLAN] end: renderer cells_done",mine,"PLC cells_done",_this.plc_cells_done,
         mine===_this.plc_cells_done ? "MATCH" : "MISMATCH","kind disagreements",_this.plan_mismatch??0);
+      // Shown, not just logged: the PLC's count is what the next run
+      // resumes from (review 2026-09-26 #13).
+      if((_this.plc_cells_done!==undefined && mine!==_this.plc_cells_done) || (_this.plan_mismatch??0)>0){
+        message.warning(uiLang==='zh'
+          ? `計畫帳不一致：UI ${mine} 格 / PLC ${_this.plc_cells_done} 格，種類不符 ${_this.plan_mismatch??0} 次`
+          : `Plan books differ: renderer ${mine} cells, PLC ${_this.plc_cells_done}, ${_this.plan_mismatch??0} kind disagreements`, 10);
+      }
     }
     await runinng_checkpoint("cycle_end",{time:Date.now()});
     
@@ -2378,9 +2418,19 @@ export const CalibPage: React.FC<{
             style={{ borderRadius: 8, padding: '4px 10px', fontWeight: speedPercent === p ? 700 : 400 }}>{p}%</button>
         ))}
         <span style={{ fontSize: 11, color: '#6b7280' }}>
-          {uiLang === 'zh' ? '即時生效（含正在走的動作），軌跡不變只放慢' : 'applies at once, paths unchanged, just slower'}
+          {uiLang === 'zh' ? '即時生效（已排隊的動作維持原速），軌跡不變只放慢' : 'applies to the moves sent from now on, paths unchanged, just slower'}
         </span>
       </div>
+      {/* Manual and debug controls: not while a run is on -- they queue
+          moves next to the cycle's, move the reel outside the plan and take
+          the cycle's vision replies (review 2026-09-26 #14). */}
+      <div onClickCapture={(e:any)=>{
+        if(_this.isRunning!==true) return;
+        const el=(e.target as HTMLElement)?.closest?.('button,input,select,summary');
+        if(!el || el.tagName==='SUMMARY') return;       // folding a section is fine
+        e.stopPropagation(); e.preventDefault();
+        message.warning(uiLang==='zh' ? '生產中不能使用手動操作，請先 STOP' : 'Manual controls are off while a run is on');
+      }}>
       <div style={{ marginTop: 10 }}>
         <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, color: '#374151' }}>{t(uiLang, 'quickCheckPlate')}</div>
         <div style={rowWrapStyle}>
@@ -2905,6 +2955,7 @@ save:
           </div>
         })}
       </details>
+      </div>
 
 
 

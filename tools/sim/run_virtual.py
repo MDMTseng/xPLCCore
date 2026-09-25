@@ -386,6 +386,22 @@ def ui_guards(a):
     log("guards: %s" % ("PASS" if all(results) else "FAIL"))
 
 
+def hold_test(a):
+    """Operator holds (step mode) longer than the vision budget (10 s) and
+    the old top-shot TTL (3 s), a few times mid-run; the run must go on."""
+    import random
+    rng = random.Random(a.chaos_seed)
+    for k in range(a.hold_test):
+        time.sleep(rng.uniform(3.0, 8.0))
+        if not push("get_running_state", timeout=10).get("isRunning"):
+            break
+        push("set_step_mode", {"on": True}, timeout=10)
+        time.sleep(a.hold_s)
+        rs = push("get_running_state", timeout=10)
+        push("set_step_mode", {"on": False}, timeout=10)
+        log("hold #%d: %g s at %r, error %r" % (k + 1, a.hold_s, rs.get("runningState"), rs.get("currentError")))
+
+
 def override_check():
     """Same square (4 stop-to-stop moves of ~42 mm, and a blended 24-gon)
     at 100 % and 30 %: how do the peaks scale?"""
@@ -711,6 +727,9 @@ def main():
     ap.add_argument("--peaks", action="store_true",
                     help="report each servo's peak |velocity|, |acceleration| and |jerk| over the run "
                          "(GVL.MotionPeak*, reset at RUN)")
+    ap.add_argument("--hold-test", type=int, default=0,
+                    help="hold the run (step mode) N times for --hold-s seconds each, mid-run")
+    ap.add_argument("--hold-s", type=float, default=12.0)
     ap.add_argument("--ui-guards", action="store_true",
                     help="check the page's run guards (RUN in Error, plan lock, RUN during STOP, STOP in a hold), then finish the plan")
     ap.add_argument("--reel-jitter", type=float, default=0,
@@ -849,6 +868,8 @@ def main():
             threading.Thread(target=wobble, daemon=True).start()
         if a.glitch_at:
             glitch(a)
+        if a.hold_test:
+            hold_test(a)
         if a.chaos:
             chaos(a)                        # runs the plan to its end itself
         elif a.fault:

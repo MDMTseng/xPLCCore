@@ -639,6 +639,8 @@ VAR_GLOBAL
 	TestDiBurstPin        : INT := -1;
 	TestDiBurstToggles    : INT := 0;
 	TestDiBurstPeriodMs   : INT := 1;
+	(* Fly-event flushes (FlushFlyEvents: Error / reset / host disconnect). *)
+	FlyFlushCount         : UDINT;
 	(* DI change events pushed (UpdateDiWatch). *)
 	DiEventCount          : UDINT;
 

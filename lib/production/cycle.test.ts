@@ -121,6 +121,31 @@ describe('runCycles against a fake tape', () => {
   });
 });
 
+describe('runCycles and a failing tape step', () => {
+  it('stops before the next pick when a pack step is NAKed', async () => {
+    const f = fakeCell();
+    const send = f.m.send;
+    let steps = 0;
+    f.m.send = async (pkt: any) => {
+      if (pkt.cmd === 'TAPE_CYCLE' && ++steps === 3) throw new Error('reel_interrupted');
+      return send(pkt);
+    };
+    await expect(runCycles(context(f.m, [5]))).rejects.toThrow(/reel_interrupted/);
+    // the part picked after the failed step would be the 3rd: never picked
+    expect(f.log.filter((l) => l.startsWith('place')).length).toBe(2);
+  });
+
+  it('a plan ending in an empty segment waits for that last step', async () => {
+    const f = fakeCell();
+    const send = f.m.send;
+    f.m.send = async (pkt: any) => {
+      if (pkt.cmd === 'TAPE_CYCLE' && pkt.kind === 2) throw new Error('tape_timeout');
+      return send(pkt);
+    };
+    await expect(runCycles(context(f.m, [2, -3]))).rejects.toThrow(/tape_timeout/);
+  });
+});
+
 describe('runCycles stops instead of repeating a failure forever', () => {
   it('feeder never finds a part', async () => {
     const f = fakeCell({ feederEmpty: true });

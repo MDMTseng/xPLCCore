@@ -70,6 +70,9 @@ type CycleState = {
   pendingFeeder?: Promise<FeederPart[]>;
   /** Parts the feeder camera found that are still to be picked. */
   parts: FeederPart[];
+  /** A tape step not awaited yet has failed (NAK, shots dropped): raised
+   *  before the next pick, not after it with a part on the nozzle. */
+  tapeFault?: unknown;
   /** The arm is at travel height (after a toss or an NG pick). */
   armAtSafeZ: boolean;
   /** Failures in a row, each capped (params): refills that found no part,
@@ -113,12 +116,22 @@ export async function runCycles(ctx: CycleContext): Promise<CycleResult> {
     ctx.onTapeStep?.(r, kind, cells);
     return r.view;
   };
+  const watch = <T>(p: Promise<T>): Promise<T> => {
+    p.catch((e) => { s.tapeFault ??= e; });
+    return p;
+  };
+  const endOfPlan = async (): Promise<CycleResult> => {
+    // The last step may still be running (an empty segment last): its
+    // failure is the run's, and the PLC's cell count must be final.
+    if (s.pendingView) await s.pendingView;
+    return { packed: s.packed, ended: 'plan_done' };
+  };
 
   for (let i = 0; ; i++) {
     const startData = await checkpoint('cycle_start', i);
     console.log('[DBG]cycle_start_data', JSON.stringify(startData), s.nextAdvance);
     const plan: number[] | undefined = startData?.production_plan;
-    if (plan === undefined || plan.length === 0) return { packed: s.packed, ended: 'plan_done' };
+    if (plan === undefined || plan.length === 0) return endOfPlan();
 
     // ── Empty segment: one tape step for the whole segment (was 2 cells per
     // pass, ~0.5 s each). Not awaited: the arm picks and inspects the next
@@ -130,8 +143,7 @@ export async function runCycles(ctx: CycleContext): Promise<CycleResult> {
       const action = nextCycleAction(plan, s.placedUncounted);
       const cells = action.kind === 'skip_empty' ? action.cells : Math.min(2, -plan[0]);
       if (s.pendingView) await s.pendingView;
-      const step = tape(cells, 'empty');
-      step.catch(() => {});              // a rejection surfaces where it is awaited
+      const step = watch(tape(cells, 'empty'));
       await checkpoint('[STEP][REEL ADV]', { adv_count: cells, type: 'empty' });
       s.pendingView = step;
       continue;
@@ -146,7 +158,7 @@ export async function runCycles(ctx: CycleContext): Promise<CycleResult> {
       const cells = Math.min(s.nextAdvance, 2);
       s.packed += cells;
       s.placedUncounted = Math.max(0, s.placedUncounted - cells);
-      view = tape(cells, 'pack', { motion_id_offset: 0, motion_progress: 0 });
+      view = watch(tape(cells, 'pack', { motion_id_offset: 0, motion_progress: 0 }));
       await checkpoint('[STEP][REEL ADV]', { adv_count: cells, type: 'pack', packCounter: s.packed });
       s.nextAdvance = 0;
     }
@@ -184,7 +196,8 @@ export async function runCycles(ctx: CycleContext): Promise<CycleResult> {
     }
     s.emptyRefills = 0;
 
-    // ── Pick.
+    // ── Pick (not with a failed tape step behind: nothing on the nozzle yet).
+    if (s.tapeFault) throw s.tapeFault;
     const part = s.parts[0];
     await checkpoint('fetch one item on FF', i);
     s.parts.shift();
