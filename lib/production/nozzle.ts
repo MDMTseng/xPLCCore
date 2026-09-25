@@ -47,12 +47,9 @@ export function dropPart(m: Machine) {
   m.sendNoWait(cmd.G4(0.01));
 }
 
-/** Move over `bin` at travel height and drop the held part there.
- *  `abort`: cut short whatever move is running (G1 abort = SoftMotion
- *  Aborting) instead of queueing behind it, e.g. the head start toward
- *  the tape when the part turns out NG. */
-export async function tossTo(m: Machine, bin: { X: number; Y: number }, o: { abort?: boolean } = {}) {
-  await m.send(cmd.G1({ X: bin.X, Y: bin.Y, Z: GEOMETRY.SAFE_Z, ...(o.abort ? { abort: true } : {}) }));
+/** Move over `bin` at travel height and drop the held part there. */
+export async function tossTo(m: Machine, bin: { X: number; Y: number }) {
+  await m.send(cmd.G1({ X: bin.X, Y: bin.Y, Z: GEOMETRY.SAFE_Z }));
   dropPart(m);
 }
 

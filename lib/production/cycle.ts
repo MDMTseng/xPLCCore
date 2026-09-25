@@ -184,9 +184,7 @@ export async function runCycles(ctx: CycleContext): Promise<CycleResult> {
     await checkpoint('[STEP] object picked', i);
 
     // ── Inspect, then decide with the top view.
-    let topIn = false;
-    void (view as Promise<unknown>).then(() => { topIn = true; }, () => { topIn = true; });
-    const insp = await inspectHeldPart(ctx, i, () => topIn);
+    const insp = await inspectHeldPart(ctx, i);
     const top = await timed(view as Promise<TopView | undefined>, 'TOP CAM report');
     s.pendingView = undefined;
     const armOffset = ctx.armOffset({ X: insp.btm.obj_pose.x, Y: insp.btm.obj_pose.y }, insp.angleOffset);
@@ -230,8 +228,7 @@ export async function runCycles(ctx: CycleContext): Promise<CycleResult> {
       m.mark(EVT.TOSS);
       await checkpoint('[TOSS] object', { tossReasons: J.reasons });
       console.log('toss object', J.reasons);
-      // The arm may still be heading for the tape: turn it around mid-way.
-      await tossTo(m, BIN_LOCATION[J.partBin], { abort: insp.headedToTape && INSPECTION.ABORT_TOWARD_BIN });
+      await tossTo(m, BIN_LOCATION[J.partBin]);
       await checkpoint('NG_COUNT', { class: BIN_CLASS[J.partBin], count: 1 });
       s.armAtSafeZ = true;
     }
@@ -283,8 +280,6 @@ type Inspection = {
   angleOffset: number;
   reasons: string[];
   partBin: Bin;
-  /** The arm was sent toward the tape (the rectified shot was taken). */
-  headedToTape: boolean;
 };
 
 /**
@@ -293,7 +288,7 @@ type Inspection = {
  * the tape (parked PRE_PLACE_FRACTION of the way: right above the tape
  * made it shake on the machine).
  */
-async function inspectHeldPart(ctx: CycleContext, i: number, topIn: () => boolean): Promise<Inspection> {
+async function inspectHeldPart(ctx: CycleContext, i: number): Promise<Inspection> {
   const { m, checkpoint } = ctx;
   const base = INSPECTION.BASE_ANGLE_DEG;
 
@@ -314,7 +309,6 @@ async function inspectHeldPart(ctx: CycleContext, i: number, topIn: () => boolea
 
   const reasons: string[] = [];
   let partBin: Bin = 'part_ng';
-  let headedToTape = false;
   let side = await timed(sidePending, 'SideCam report') as SideResult | undefined;
   if (side === undefined) {
     reasons.push('vision timeout: side');
@@ -342,16 +336,13 @@ async function inspectHeldPart(ctx: CycleContext, i: number, topIn: () => boolea
     const trig = bit(IO_PINS.O.CAM_Side) | bit(IO_PINS.O.CAM_Side_Light0);
     await m.send(cmd.M4({ pin: trig, state: trig, reset_ms: INSPECTION.SIDE_STROBE_MS, motion_progress: 1 }));
     const toward = { X: GEOMETRY.SLOT_LOCATION.X + GEOMETRY.SLOT_PITCH_MM, Y: GEOMETRY.SLOT_LOCATION.Y };
-    // Closer to the tape when the top shots have already been taken (the
-    // camera no longer needs the arm out of its view); see params.ts.
-    const f = topIn() ? INSPECTION.PRE_PLACE_FRACTION_TOP_READY : INSPECTION.PRE_PLACE_FRACTION;
+    const f = INSPECTION.PRE_PLACE_FRACTION;
     await m.send(cmd.G1({ X: INSP.X + (toward.X - INSP.X) * f, Y: INSP.Y + (toward.Y - INSP.Y) * f, Z: SAFE_Z }));
-    headedToTape = true;
     const rectified = await timed(rectifiedPending, 'SideCam rectified report') as SideResult | undefined;
     if (rectified?.measure?.status !== 1) {
       reasons.push('SideCam measure failed' + rectified?.measure?.OK_vec);
     }
   }
   await checkpoint('[STEP]', i);
-  return { side, btm, angleOffset, reasons, partBin, headedToTape };
+  return { side, btm, angleOffset, reasons, partBin };
 }
