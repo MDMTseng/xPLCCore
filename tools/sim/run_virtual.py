@@ -209,6 +209,62 @@ def report_peaks():
         log(line)
 
 
+def _w(sym, val):
+    daemon({"cmd": "write", "symbol": "GVL." + sym, "value": val})
+
+
+def _r(sym):
+    return str(daemon({"cmd": "read", "symbol": "GVL." + sym})["value"]).split("#")[-1]
+
+
+def override_probe():
+    """MC_GroupSetOverride against the same moves: which factors act, on
+    running or only on new moves, and does it report an error."""
+    import threading
+
+    def setf(enable, vel=1.0, acc=1.0, jerk=1.0):
+        _w("TestOvrVel", repr(vel)); _w("TestOvrAcc", repr(acc)); _w("TestOvrJerk", repr(jerk))
+        _w("TestOvrEnable", "TRUE" if enable else "FALSE")
+        time.sleep(0.3)
+        st = "en=%s busy=%s err=%s id=%s" % (_r("TestOvrEnabled"), _r("TestOvrBusy"), _r("TestOvrError"), _r("TestOvrErrorId"))
+        daemon({"cmd": "logout"})
+        return st
+
+    def run(label, st, feed, mid=None):
+        for shape, n, cor in (("square", 4, 0.5), ("24-gon", 24, 3)):
+            _w("MotionPeakReset", "TRUE"); daemon({"cmd": "logout"})
+            t = None
+            if mid:
+                def later():
+                    time.sleep(mid[0])
+                    for k, v in mid[1].items():
+                        _w(k, v)
+                    daemon({"cmd": "logout"})
+                t = threading.Thread(target=later); t.start()
+            r = push("path_test", {"n": n, "radius": 30, "feed": feed, "mode": "queue", "cor": cor}, timeout=180)
+            if t:
+                t.join()
+            pk = read_peaks()
+            v = max(p[2][0] for p in pk[:3]); acc = max(p[2][1] for p in pk[:3])
+            log("probe: %-34s F%4d %-6s %5d ms  |v| %5.0f  |a| %6.0f   [%s]" % (label, feed, shape, r["ms"], v, acc, st))
+
+    push("set_speed", {"percent": 100}, timeout=10)
+    for feed in (200, 1000):
+        run("off", setf(False), feed)
+        run("vel 0.3", setf(True, vel=0.3), feed)
+        run("acc 0.09", setf(True, acc=0.09), feed)
+        run("jerk 0.027", setf(True, jerk=0.027), feed)
+        run("vel .3 acc .09 jerk .027", setf(True, 0.3, 0.09, 0.027), feed)
+        run("vel 0.3 again (after the above)", setf(True, vel=0.3), feed)
+        st = setf(False, vel=0.3)
+        _w("TestOvrEnable", "TRUE"); daemon({"cmd": "logout"}); time.sleep(0.3)
+        run("vel 0.3, Enable re-triggered", st + " -> re-enabled en=" + _r("TestOvrEnabled"), feed)
+        daemon({"cmd": "logout"})
+        run("vel 1 -> 0.3 mid-move (after 0.3 s)", setf(True, vel=1.0), feed,
+            mid=(0.3, {"TestOvrVel": "0.3"}))
+    setf(False)
+
+
 def override_check():
     """Same square (4 stop-to-stop moves of ~42 mm, and a blended 24-gon)
     at 100 % and 30 %: how do the peaks scale?"""
@@ -432,6 +488,8 @@ def main():
     ap.add_argument("--peaks", action="store_true",
                     help="report each servo's peak |velocity|, |acceleration| and |jerk| over the run "
                          "(GVL.MotionPeak*, reset at RUN)")
+    ap.add_argument("--override-probe", action="store_true",
+                    help="instead of production: probe how MC_GroupSetOverride behaves (GVL.TestOvr*)")
     ap.add_argument("--override-check", action="store_true",
                     help="instead of production: the same moves at 100 % and 30 % speed, servo peaks of each")
     ap.add_argument("--abort-test", action="store_true",
@@ -499,6 +557,9 @@ def main():
 
         bring_to_ready(a.home)
         push("set_tab", {"tab": "Calib"}, timeout=10)
+        if a.override_probe:
+            override_probe()
+            return
         if a.override_check:
             override_check()
             return

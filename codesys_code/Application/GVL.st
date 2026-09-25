@@ -192,6 +192,18 @@ VAR_GLOBAL
 	   already running. 0.01..1; not retained (a restart runs at 100 %). *)
 	OverrideFactor : LREAL := 1.0;
 
+	(* MC_GroupSetOverride probe (tools/sim/run_virtual.py --override-probe).
+	   Off unless TestOvrEnable: the production speed control scales each
+	   move instead (OverrideFactor). Outputs mirror the FB's. *)
+	TestOvrEnable  : BOOL := FALSE;
+	TestOvrVel     : LREAL := 1.0;
+	TestOvrAcc     : LREAL := 1.0;
+	TestOvrJerk    : LREAL := 1.0;
+	TestOvrEnabled : BOOL;
+	TestOvrBusy    : BOOL;
+	TestOvrError   : BOOL;
+	TestOvrErrorId : DINT;
+
 	MotionPeakReset : BOOL := FALSE;
 	MotionPeakVel   : ARRAY[0..5] OF LREAL;
 	MotionPeakAcc   : ARRAY[0..5] OF LREAL;

@@ -255,6 +255,8 @@ PROGRAM AxisGroupSM
         TapePlanCells   : DINT;
         // Speed override (GVL.OverrideFactor), applied per move.
         OverrideNow     : LREAL;
+        // MC_GroupSetOverride probe (GVL.TestOvr*), off in production.
+        TestOvrFb       : MC_GroupSetOverride;
         // Servo peak monitor (GVL.MotionPeak*).
         PeakAxis        : ARRAY[0..5] OF POINTER TO AXIS_REF_SM3;
         PeakPrevAcc     : ARRAY[0..5] OF LREAL;
@@ -823,11 +825,22 @@ PROGRAM AxisGroupSM
     // velocity x f, acceleration x f^2, jerk x f^3 where each move is
     // issued (G1 in ProcessMotionPacket, the reel moves below): the same
     // path, slower. MC_GroupSetOverride / MC_SetOverride were tried first
-    // and dropped: measured on the sim (2026-09-25) their Acc/JerkFactor
-    // had no effect and the VelFactor only some of the time, so short
-    // moves did not slow down at all. Moves already queued (at most
+    // and dropped: measured on the sim (2026-09-25, --override-probe),
+    // VelFactor 0.3 changed nothing (neither before nor during a move),
+    // AccFactor barely, and only JerkFactor slowed the jerk-limited short
+    // segments of a polygon -- no uniform slow-down. Moves already queued (at most
     // MOTION_BUFFER_THRESHOLD, under a second) keep their speed.
     OverrideNow := LIMIT(0.01, GVL.OverrideFactor, 1.0);
+    TestOvrFb(
+        AxisGroup := AxisGroupManagerFb._agAxisGroup,
+        Enable := GVL.TestOvrEnable,
+        VelFactor := GVL.TestOvrVel,
+        AccFactor := GVL.TestOvrAcc,
+        JerkFactor := GVL.TestOvrJerk);
+    GVL.TestOvrEnabled := TestOvrFb.Enabled;
+    GVL.TestOvrBusy := TestOvrFb.Busy;
+    GVL.TestOvrError := TestOvrFb.Error;
+    GVL.TestOvrErrorId := TO_DINT(TestOvrFb.ErrorID);
 
     // ---- Servo peak monitor: max |v|, |a|, |j| of the set values per axis ----
     PeakAxis[0] := ADR(IoConfig_Globals.EAxis0);

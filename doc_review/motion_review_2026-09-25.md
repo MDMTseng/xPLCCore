@@ -132,3 +132,27 @@ reach full acceleration, so short moves never do.
 
 Items 2, 5 (MotionPose) and 9 can be done and verified on the sim;
 1, 3, 4, 6 and 8 need the machine.
+
+## MC_GroupSetOverride probe (sim, 2026-09-25)
+
+`tools/sim/run_virtual.py --override-probe` drives a test instance
+(`GVL.TestOvr*`, off by default) against `path_test` shapes (radius 30,
+production override 100 %). The FB never reported Busy or Error.
+
+| factor set                 | F200 square | F200 24-gon | F1000 square | F1000 24-gon |
+|----------------------------|------------:|------------:|-------------:|-------------:|
+| off                        |     1308 ms |     1088 ms |       639 ms |       447 ms |
+| Vel 0.3                    |        1330 |        1083 |          648 |          439 |
+| Acc 0.09                   |        1316 |        1097 |          642 |          444 |
+| Jerk 0.027                 |        1312 |        1098 |          635 |      **880** |
+| Vel .3 / Acc .09 / Jerk .027 |      1324 |        1097 |          636 |      **879** |
+| Vel 0.3, Enable re-edged   |        1323 |        1100 |          641 |          446 |
+| Vel 1 -> 0.3 mid-move      |        1365 |        1116 |          639 |          432 |
+
+Peaks follow the times: only the jerk factor moved anything (F1000 24-gon:
+|v| 314 -> 97 mm/s), i.e. it limits the jerk-bound short segments and
+nothing else. VelFactor has no effect at all on this SoftMotion version /
+group, before or during a move. So the per-move time scaling
+(`GVL.OverrideFactor`, v*f, a*f^2, j*f^3) stays the speed control; its
+cost is that moves already queued (<= MOTION_BUFFER_THRESHOLD, < 1 s) keep
+their speed. Worth repeating once on the real machine.
