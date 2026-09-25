@@ -253,6 +253,24 @@ PROGRAM AxisGroupSM
         TapeIdx         : INT;
         TapeSlotIdx     : INT := -1;   // FlyEventBuffer slot reserved at TAPE_CYCLE accept
         TapePlanCells   : DINT;        // cells this TAPE_CYCLE advances (GVL.ReelMv*)
+        // DI change events (SYS DI_WATCH, UpdateDiWatch). Per pin: what
+        // changed since its last event, and when that event went out.
+        DiWatchMask       : WORD;
+        DiWatchRise       : WORD;
+        DiWatchFall       : WORD;
+        DiWatchThrottleMs : ARRAY[0..15] OF LINT;
+        DiWatchPrev       : ULINT;
+        DiWatchInit       : BOOL;
+        DiWFlips          : ARRAY[0..15] OF UDINT;
+        DiWHighMs         : ARRAY[0..15] OF DINT;
+        DiWMaxHighMs      : ARRAY[0..15] OF DINT;
+        DiWMaxLowMs       : ARRAY[0..15] OF DINT;
+        DiWRunMs          : ARRAY[0..15] OF DINT;
+        DiWFirstMs        : ARRAY[0..15] OF LINT;
+        DiWReelPos        : ARRAY[0..15] OF REAL;
+        DiWPending        : ARRAY[0..15] OF BOOL;
+        DiWLastSentMs     : ARRAY[0..15] OF LINT;
+        TestDiBurstLastMs : LINT;
         // Reel move tracker (GVL.ReelMv*): counts cells as the reel passes them.
         ReelTrkActive   : BOOL;
         ReelTrkStarted  : BOOL;        // the reel has moved since the dispatch
@@ -1005,6 +1023,17 @@ PROGRAM AxisGroupSM
    // GVL.SimDigitalInputEnable substitutes GVL.SimDigitalInput for the
    // all-virtual scene, where the tape sensors the renderer's input
    // watchdog checks do not exist.
+   // Test hook: input changes at scan speed on the simulated inputs (GVL).
+   IF GVL.SimDigitalInputEnable AND (GVL.TestDiBurstToggles > 0)
+      AND (GVL.TestDiBurstPin >= 0) AND (GVL.TestDiBurstPin <= 15) THEN
+       IF (RuntimeMs - TestDiBurstLastMs) >= INT_TO_LINT(MAX(GVL.TestDiBurstPeriodMs, 1)) THEN
+           TestDiBurstLastMs := RuntimeMs;
+           GVL.SimDigitalInput[GVL.TestDiBurstPin / 8] := GVL.SimDigitalInput[GVL.TestDiBurstPin / 8]
+               XOR SHL(USINT#1, GVL.TestDiBurstPin MOD 8);
+           GVL.TestDiBurstToggles := GVL.TestDiBurstToggles - 1;
+       END_IF
+   END_IF
+
    IF GVL.SimDigitalInputEnable THEN
        DigitalInputPointer := ADR(GVL.SimDigitalInput);
    ELSE
@@ -1024,6 +1053,7 @@ PROGRAM AxisGroupSM
             END_IF;
         END_IF;
         DigitalInputBits_Prev := DigitalInputBits_Curr;
+        UpdateDiWatch();
     END_IF;
 
     // ---- Pending waits (review 2026-09-24 P0-3) ----

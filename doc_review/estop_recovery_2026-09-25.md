@@ -87,7 +87,8 @@ are the sim's fault-injection hooks; 0 / FALSE in production.
 - A part placed in the pocket just before the fault is found by the next
   top-camera shot (tape NG path); a part the vacuum dropped elsewhere is
   not -- the operator has to look.
-- Real-PLC install: `create_plan_count_cells.py` (logged out), then the
+- Real-PLC install: `create_plan_count_cells.py` and
+  `create_update_di_watch.py` (logged out), then the
   on-site install (retained variables added).
 
 ## 5. TODO: E-stop and PLC-failure stop (deferred by the owner, 2026-09-25)

@@ -16,6 +16,7 @@ import { createSendWindow } from '../lib/production/window';
 import { runPathTest } from '../lib/production/pathTest';
 import { runAbortTest } from '../lib/production/abortTest';
 import { finishTapeMove, emptyNozzle } from '../lib/production/recovery';
+import { InputMonitor, TAPE_SENSOR_PINS, checkTapeSensors, type DiEvent } from '../lib/production/inputs';
 import type { PlanState } from '../lib/protocol';
 
 
@@ -909,86 +910,72 @@ export const CalibPage: React.FC<{
     // stop only on run_cycle_stop: after a plan finished or an error it
     // kept pulsing ReelWheelFeed, and every RUN started another one.
     let cycleEnded=false;
-    // Input watchdog: independent 400ms poll thread. Reads digital-input
-    // flip-counters (catches sub-poll glitches), drives the press-roller
-    // re-feed pulse, and stamps _this.current_error so the main pipeline
-    // can abort at the next checkpoint. Runs until run_cycle_stop flips.
+    // Input watchdog (lib/production/inputs.ts): the PLC pushes a DI event
+    // when a tape sensor changes (sampled every 1 ms, so a glitch shorter
+    // than a poll is still seen), a poll every WATCHDOG.RECONCILE_MS backs
+    // the events up, and the rules run every WATCHDOG.POLL_MS: they drive
+    // the reel-wheel feed pulse and stamp _this.current_error so the main
+    // pipeline holds at the next checkpoint. Runs until the cycle ends.
     async function inputWatchdog(){
-      let prevFc:number[]=new Array(16).fill(0);
-      let ReelLackingCounter=0;
-      let isFirstCycle=true;
+      const monitor=new InputMonitor(TAPE_SENSOR_PINS);
+      const onDi=(ev:Event)=>{
+        const msg=(ev as CustomEvent).detail;
+        if(msg?.name==='DI') monitor.onEvent(msg as DiEvent);
+      };
+      window.addEventListener('plc:event', onDi as EventListener);
+      // An older PLC program NAKs DI_WATCH: then poll every tick, as before.
+      let eventsOn=false;
+      try{
+        const rep:any=await send(cmd.DiWatch(monitor.mask,'both',WATCHDOG.DI_THROTTLE_MS));
+        eventsOn=rep?.ack!==false;
+      }catch(e:any){
+        console.warn("input watchdog: DI_WATCH refused, polling",e?.message??e);
+      }
+      let lackingTicks=0;
       let readFailures=0;
-      while(_this.run_cycle_stop!=true && !cycleEnded){
-
-        // A failed read used to throw out of this loop: the watchdog died
-        // silently and the cycle ran on unguarded (review 2026-09-24).
-        let raw:number, fc:number[];
-        try{
-          ({raw,fc}=await getDigitalInputFlipCount());
-          readFailures=0;
-        }catch(e:any){
-          readFailures++;
-          console.error("input watchdog: read failed",readFailures,e?.message??e);
-          if(readFailures>=WATCHDOG.READ_FAILURE_LIMIT){
-            _this.current_error={errorString:"輸入讀取失敗 (input read failed): "+(e?.message??e)};
+      let lastPoll=0;
+      try{
+        while(_this.run_cycle_stop!=true && !cycleEnded){
+          if(!eventsOn || !monitor.known || Date.now()-lastPoll>=WATCHDOG.RECONCILE_MS){
+            // A failed read used to throw out of this loop: the watchdog
+            // died silently and the cycle ran on unguarded (review 2026-09-24).
+            try{
+              const {raw,fc}=await getDigitalInputFlipCount();
+              monitor.onPoll(raw,fc);
+              _this.latestInputs={raw,fc};
+              lastPoll=Date.now();
+              readFailures=0;
+            }catch(e:any){
+              readFailures++;
+              console.error("input watchdog: read failed",readFailures,e?.message??e);
+              if(readFailures>=WATCHDOG.READ_FAILURE_LIMIT){
+                _this.current_error={errorString:"輸入讀取失敗 (input read failed): "+(e?.message??e)};
+              }
+              await delay(WATCHDOG.POLL_MS);
+              continue;
+            }
+          }
+          if(monitor.known){
+            const v=checkTapeSensors(monitor,lackingTicks);
+            lackingTicks=v.lackingTicks;
+            if(v.feedPulse){
+              sendNoWait(cmd.M4({ "pin": 1<<IO_Pins.O.ReelWheelFeed, "state": 1<<IO_Pins.O.ReelWheelFeed, reset_ms:WATCHDOG.REEL_FEED_PULSE_MS }));
+            }
+            const raw=monitor.bits;
+            latestInputObj={raw};
+            _this.latestInputs={raw,fc:_this.latestInputs?.fc??new Array(16).fill(0)};
+            if(v.errors.length>0){
+              _this.current_error={errorString:v.errors.join(',')+',',raw};
+              console.log("current_error",_this.current_error);
+            }
           }
           await delay(WATCHDOG.POLL_MS);
-          continue;
         }
-
-        // flip delta: how many transitions happened on each bit since last poll
-        // catches glitches that reset before the next poll (PLC counts every scan ~1ms)
-        if(isFirstCycle){ isFirstCycle=false; prevFc=[...fc]; continue; }
-
-        let flipDelta=fc.map((c,i)=>Math.max(0,c-prevFc[i]));
-        prevFc=[...fc];
-
-        let ReelLacking            =(raw>>IO_Pins.I.ReelLacking)            &1;
-        let ReelTapeHTension       =(raw>>IO_Pins.I.ReelTapeHTension)       &1;
-        let PackedReelNoProtrusion =flipDelta[IO_Pins.I.PackedReelNoProtrusion]==0 && ((raw>>IO_Pins.I.PackedReelNoProtrusion)&1)===1;
-        let ReelPressRollerInPlace =(raw>>IO_Pins.I.ReelPressRollerInPlace) &1;
-
-        latestInputObj={PackedReelNoProtrusion,ReelLacking,ReelTapeHTension,ReelPressRollerInPlace,raw_data:{raw,fc}};
-        _this.latestInputs={raw,fc};
-        // console.log("ReelPressRollerInPlace",ReelPressRollerInPlace);
-
-
-
-
-        if(ReelLacking)
-        {
-          if((ReelLackingCounter&0b1)==0)
-          {
-            sendNoWait(cmd.M4({ "pin": 1<<IO_Pins.O.ReelWheelFeed, "state": 1<<IO_Pins.O.ReelWheelFeed, reset_ms:WATCHDOG.REEL_FEED_PULSE_MS }))
-          }
-          ReelLackingCounter++;
-        }
-        else
-        {
-          ReelLackingCounter=0;
-        }
-
-        let errorString="";
-
-        if(PackedReelNoProtrusion==false)
-          errorString+="凸料感應,";
-        if(ReelPressRollerInPlace==0)
-          errorString+="冷封氣缸沒壓到,";
-        // use flipDelta so even a brief tension spike (cleared before next poll) is caught
-        if(ReelTapeHTension || flipDelta[IO_Pins.I.ReelTapeHTension]>0)
-          errorString+="上蓋帶張力過強,";
-        if(ReelLackingCounter>WATCHDOG.REEL_LACKING_LIMIT)
-          errorString+="載帶缺料,";
-
-        if(errorString!="")
-        {
-          _this.current_error={errorString,raw,fc};
-          console.log("current_error",_this.current_error);
-        }
-
-        await delay(WATCHDOG.POLL_MS);
+      }finally{
+        window.removeEventListener('plc:event', onDi as EventListener);
+        if(eventsOn) sendNoWait(cmd.DiWatch(monitor.mask,'off'));
+        console.log("input watchdog thread end",_this.isRunning,latestInputObj);
       }
-      console.log("input watchdog thread end",_this.isRunning,latestInputObj);
     }
     inputWatchdog();
 
@@ -1425,6 +1412,29 @@ export const CalibPage: React.FC<{
   }), []);
 
   // The plan as the PLC keeps it, and what it resolves to.
+  // DI change events (SYS DI_WATCH), for tools/sim/run_virtual.py --di-test:
+  // register pins, then collect the DI events that arrived since.
+  useEffect(() => {
+    const onDi = (ev: Event) => {
+      const msg = (ev as CustomEvent).detail;
+      if (msg?.name !== 'DI') return;
+      const log = (_this.diEventLog ??= []) as any[];
+      log.push({ ...msg, host_ms: Date.now() });
+      if (log.length > 1000) log.splice(0, log.length - 1000);
+    };
+    window.addEventListener('plc:event', onDi as EventListener);
+    return () => window.removeEventListener('plc:event', onDi as EventListener);
+  }, []);
+  useHarnessAction('di_watch', async (payload: any) => {
+    _this.diEventLog = [];
+    return await sendTcpMsgPack(cmd.DiWatch(Number(payload?.mask ?? 0), payload?.edge ?? 'both', Number(payload?.throttle_ms ?? 100)));
+  }, []);
+  useHarnessAction('di_events', async () => {
+    const events = _this.diEventLog ?? [];
+    _this.diEventLog = [];
+    return { events };
+  }, []);
+
   useHarnessAction('get_plc_plan', async () => {
     const st = await sendTcpMsgPack(cmd.PlanGet()) as PlanState;
     return { ...st, remaining: remainingPlan(st?.seg ?? [], st?.cells_done ?? 0) };

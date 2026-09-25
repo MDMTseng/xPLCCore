@@ -26,6 +26,12 @@ VAR
     PlanNew   : ARRAY[0..31] OF DINT;
     PlanCellsDoneIn : LINT;
 
+    // DI_WATCH scratch.
+    DiIdx      : INT;
+    DiMaskIn   : WORD;
+    DiEdgeIn   : LINT;
+    DiThrIn    : LINT;
+
     // REEL_RESUME / REEL_CLEAR scratch.
     ReelRestMm : LREAL;
     ReelClearN : DINT;
@@ -411,6 +417,47 @@ END_IF;
                 ResponsePacketPointer^.ele_count := 0;
                 GVL.OverrideFactor := LIMIT(0.01, TO_LREAL(MessageUnpackerFb.TryReadREAL('factor', TO_REAL(GVL.OverrideFactor))), 1.0);
                 MessagePackerFb.PackKvReal(ADR('factor'), TO_REAL(GVL.OverrideFactor));
+            ELSIF (CommandType = 'DI_WATCH') THEN
+                // Register digital inputs for change events (UpdateDiWatch):
+                // mask = pins, edge = 1 rising / 2 falling / 3 both / 0 stop
+                // watching them, throttle_ms = at most one event per pin per
+                // that long (changes in between are summarised). Cleared
+                // when the host disconnects. Replies with the pins watched.
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                DiMaskIn := LINT_TO_WORD(MessageUnpackerFb.TryReadINT64('mask', 0));
+                DiEdgeIn := MessageUnpackerFb.TryReadINT64('edge', 3);
+                DiThrIn := LIMIT(0, MessageUnpackerFb.TryReadINT64('throttle_ms', 200), 60000);
+                FOR DiIdx := 0 TO 15 DO
+                    IF (SHR(DiMaskIn, DiIdx) AND 1) <> 0 THEN
+                        IF (DiEdgeIn AND 3) = 0 THEN
+                            DiWatchMask := DiWatchMask AND NOT SHL(WORD#1, DiIdx);
+                        ELSE
+                            DiWatchMask := DiWatchMask OR SHL(WORD#1, DiIdx);
+                        END_IF;
+                        IF (DiEdgeIn AND 1) <> 0 THEN
+                            DiWatchRise := DiWatchRise OR SHL(WORD#1, DiIdx);
+                        ELSE
+                            DiWatchRise := DiWatchRise AND NOT SHL(WORD#1, DiIdx);
+                        END_IF;
+                        IF (DiEdgeIn AND 2) <> 0 THEN
+                            DiWatchFall := DiWatchFall OR SHL(WORD#1, DiIdx);
+                        ELSE
+                            DiWatchFall := DiWatchFall AND NOT SHL(WORD#1, DiIdx);
+                        END_IF;
+                        DiWatchThrottleMs[DiIdx] := DiThrIn;
+                        DiWFlips[DiIdx] := 0;
+                        DiWHighMs[DiIdx] := 0;
+                        DiWMaxHighMs[DiIdx] := 0;
+                        DiWMaxLowMs[DiIdx] := 0;
+                        DiWRunMs[DiIdx] := 0;
+                        DiWPending[DiIdx] := FALSE;
+                        DiWLastSentMs[DiIdx] := RuntimeMs - DiThrIn;   // the first change goes out at once
+                    END_IF;
+                END_FOR;
+                MessagePackerFb.PackKvDint(ADR('mask'), WORD_TO_DINT(DiWatchMask));
+                MessagePackerFb.PackKvLint(ADR('state'), ULINT_TO_LINT(DigitalInputBits_Curr));
             ELSIF (CommandType = 'REEL_RESUME') THEN
                 // Finish a tape move a fault stopped short (GVL.ReelMv*):
                 // move the rest of the way with F/ACC/DEA/JERK, counting

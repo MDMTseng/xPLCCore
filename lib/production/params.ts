@@ -153,4 +153,9 @@ export const WATCHDOG = {
   REEL_LACKING_LIMIT: 10,
   /** Failed input reads in a row before it is an error. */
   READ_FAILURE_LIMIT: 3,
+  /** DI change events (SYS DI_WATCH): at most one per input per this long;
+   *  the changes in between arrive summarised. */
+  DI_THROTTLE_MS: 100,
+  /** Poll of the input levels / flip counters backing the events up. */
+  RECONCILE_MS: 2000,
 };

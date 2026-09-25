@@ -541,6 +541,14 @@ export const cmd = {
     env<AckReply & { rest_mm: number }>({ type: 'SYS', cmd: 'REEL_RESUME', ...dyn }),
   // Close an interrupted tape move without moving (tape aligned by hand),
   // counting `count` more of its cells.
+  // Push a DI event when these inputs change (lib/production/inputs.ts):
+  // the first change at once, then at most one summarising event per pin
+  // per throttle_ms. edge 'off' stops watching the pins in `mask`.
+  DiWatch: (mask: number, edge: 'rise' | 'fall' | 'both' | 'off' = 'both', throttle_ms = 100) =>
+    env<AckReply & { mask: number; state: number }>({
+      type: 'SYS', cmd: 'DI_WATCH', mask,
+      edge: edge === 'rise' ? 1 : edge === 'fall' ? 2 : edge === 'both' ? 3 : 0, throttle_ms,
+    }),
   ReelClear: (count: number) => env<AckReply & { cells_done: number }>({ type: 'SYS', cmd: 'REEL_CLEAR', count }),
   SetOverride: (factor: number) => env<AckReply & { factor: number }>({ type: 'SYS', cmd: 'SET_OVERRIDE', factor }),
   // Host timestamp mark in the PLC event log (GVL.EvHead, GET /e on :8126).

@@ -265,6 +265,63 @@ def override_probe():
     setf(False)
 
 
+def di_test():
+    """DI change events (SYS DI_WATCH) against input changes made at scan
+    speed on the simulated inputs (GVL.TestDiBurst*): the events per burst,
+    the flips they add up to, and how late the first one left the PLC."""
+    pin = 3                                   # a free input
+    _w("SimDigitalInputEnable", "TRUE"); daemon({"cmd": "logout"})
+    cases = [
+        # label, edge, throttle, toggles, period ms, expected events (None: just
+        # report), flips reported (a filtered-out edge waits for the next event),
+        # the pulse's max_high_ms in the last event (None: not checked)
+        ("one 1 ms pulse", "both", 200, 2, 1, 2, 2, 1),
+        ("50 toggles at 1 ms", "both", 200, 50, 1, 2, 50, None),
+        ("20 toggles at 50 ms", "both", 200, 20, 50, None, 20, 50),
+        ("one 1 ms pulse, rising only", "rise", 200, 2, 1, 1, 1, None),
+        ("one 5 ms pulse, throttle 0", "both", 0, 2, 5, 2, 2, 5),
+    ]
+    ok_all = True
+    for label, edge, thr, toggles, period, want, want_flips, want_high in cases:
+        push("di_watch", {"mask": 1 << pin, "edge": edge, "throttle_ms": thr}, timeout=10)
+        _w("TestDiBurstPin", str(pin)); _w("TestDiBurstPeriodMs", str(period)); _w("TestDiBurstToggles", str(toggles))
+        daemon({"cmd": "logout"})
+        time.sleep(toggles * period / 1000.0 + thr / 1000.0 + 1.0)
+        ev = push("di_events", timeout=10)["events"]
+        flips = sum(e["flips"] for e in ev)
+        lead = (ev[0]["t"] - ev[0]["t_first"]) if ev else None
+        ok = (flips == want_flips and (want is None or len(ev) == want)
+              and (want_high is None or (ev and ev[-1]["max_high_ms"] == want_high)))
+        ok_all &= ok
+        log("di: %-30s events %2d, flips %3d (%d toggles), first sent %s ms after the edge, max_high %s -> %s" % (
+            label, len(ev), flips, toggles, lead, [e["max_high_ms"] for e in ev][:6], "OK" if ok else "FAIL"))
+    push("di_watch", {"mask": 1 << pin, "edge": "off"}, timeout=10)
+    log("di: %s" % ("PASS" if ok_all else "FAIL"))
+
+
+def glitch(a):
+    """A short glitch on a tape sensor mid-run (the input watchdog must hold
+    the cycle on it), then resume. PackedReelNoProtrusion (input 11) reads
+    high when all is well: drop it for a.glitch_ms."""
+    pin, ms = 11, a.glitch_ms
+    time.sleep(a.glitch_at)
+    _w("TestDiBurstPin", str(pin)); _w("TestDiBurstPeriodMs", str(ms)); _w("TestDiBurstToggles", "2")
+    daemon({"cmd": "logout"})
+    t0 = time.time()
+    log("glitch: input %d low for %d ms" % (pin, ms))
+    try:
+        wait_for("the watchdog to hold", lambda: push("get_running_state", timeout=10).get("currentError"),
+                 timeout=10, period=0.1)
+    except Exception:
+        log("glitch: NOT caught within 10 s")
+        return False
+    err = push("get_running_state", timeout=10).get("currentError")
+    log("glitch: held %.2f s after the write: %s" % (time.time() - t0, (err or {}).get("errorString")))
+    time.sleep(1.0)
+    log("glitch: resume -> %s" % push("resume_cycle", timeout=16))
+    return True
+
+
 def override_check():
     """Same square (4 stop-to-stop moves of ~42 mm, and a blended 24-gon)
     at 100 % and 30 %: how do the peaks scale?"""
@@ -590,6 +647,11 @@ def main():
     ap.add_argument("--peaks", action="store_true",
                     help="report each servo's peak |velocity|, |acceleration| and |jerk| over the run "
                          "(GVL.MotionPeak*, reset at RUN)")
+    ap.add_argument("--glitch-at", type=float, default=0,
+                    help="N s into the run, glitch the protrusion sensor for --glitch-ms; expect a hold, then resume")
+    ap.add_argument("--glitch-ms", type=int, default=3)
+    ap.add_argument("--di-test", action="store_true",
+                    help="instead of production: check the DI change events (SYS DI_WATCH)")
     ap.add_argument("--override-probe", action="store_true",
                     help="instead of production: probe how MC_GroupSetOverride behaves (GVL.TestOvr*)")
     ap.add_argument("--override-check", action="store_true",
@@ -662,6 +724,9 @@ def main():
         if a.override_probe:
             override_probe()
             return
+        if a.di_test:
+            di_test()
+            return
         if a.override_check:
             override_check()
             return
@@ -708,6 +773,8 @@ def main():
                         log("speed wobble stopped:", e)
                         break
             threading.Thread(target=wobble, daemon=True).start()
+        if a.glitch_at:
+            glitch(a)
         if a.chaos:
             chaos(a)                        # runs the plan to its end itself
         elif a.fault:

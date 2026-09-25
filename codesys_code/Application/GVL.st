@@ -624,6 +624,15 @@ VAR_GLOBAL
 	SimHomeSwitchEnable   : BOOL := FALSE;
 	SimHomeSwitchPos      : LREAL := 10.0;
 	SimDigitalInput       : ARRAY[0..1] OF USINT := [16#00, 16#0C];
+	(* Test hook (tools/sim/run_virtual.py --di-test): toggle simulated
+	   input TestDiBurstPin TestDiBurstToggles times, one toggle every
+	   TestDiBurstPeriodMs -- input changes at scan speed, which a daemon
+	   write cannot make. Only while SimDigitalInputEnable. *)
+	TestDiBurstPin        : INT := -1;
+	TestDiBurstToggles    : INT := 0;
+	TestDiBurstPeriodMs   : INT := 1;
+	(* DI change events pushed (UpdateDiWatch). *)
+	DiEventCount          : UDINT;
 
 END_VAR
 
