@@ -520,6 +520,9 @@ export const cmd = {
   PlanSet: (seg: number[], plan_id: number, cells_done: number = 0) =>
     env<AckReply & { plan_rev: number }>({ type: 'SYS', cmd: 'PLAN_SET', seg, plan_id, cells_done }),
   PlanGet: () => env<PlanState>({ type: 'SYS', cmd: 'PLAN_GET' }),
+  // Speed override (0.01..1): time-scales all motion on the PLC, running
+  // moves included (velocity x f, acceleration x f^2, jerk x f^3).
+  SetOverride: (factor: number) => env<AckReply & { factor: number }>({ type: 'SYS', cmd: 'SET_OVERRIDE', factor }),
   // Host timestamp mark in the PLC event log (GVL.EvHead, GET /e on :8126).
   // Send without tracking (no id): the PLC then sends no reply. Codes:
   // tools/sim/event_log.py MARKS.

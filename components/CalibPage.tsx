@@ -192,6 +192,20 @@ export const CalibPage: React.FC<{
   const [productionPlanTick, setProductionPlanTick] = useState<number>(0);
 
   const [stepMode, setStepMode] = useState<boolean>(false);
+  // Motion speed override in percent (PLC SET_OVERRIDE, applies at once).
+  const [speedPercent, setSpeedPercent] = useState<number>(100);
+  const applySpeed = useCallback(async (percent: number) => {
+    const p = Math.max(10, Math.min(100, Math.round(percent)));
+    _this.speedOverride = p / 100;
+    setSpeedPercent(p);
+    try {
+      const rep: any = await COMCtrlObj.sendTcpMsgPack(cmd.SetOverride(p / 100));
+      return { percent: p, plc: rep?.factor };
+    } catch (e: any) {
+      console.warn('speed override failed', e?.message ?? e);
+      return { percent: p, error: String(e?.message ?? e) };
+    }
+  }, [COMCtrlObj.sendTcpMsgPack]);
   const [tossPauseMode, setTossPauseMode] = useState<boolean>(false);
   // F3: per-pin flip counts for the named input pins. PLC counts every
   // edge in `getDigitalInputFlipCount.fc[pin]`; surfacing them lets the
@@ -310,6 +324,9 @@ export const CalibPage: React.FC<{
   // feeder.
   const VISION_REPLY_TIMEOUT_MS=VISION.REPLY_TIMEOUT_MS;
   const VISION_TIMEOUT_STOP=VISION.TIMEOUT_STOP_COUNT;
+  // Speed override (the slider below): motion runs at speedOverride of
+  // normal speed on the PLC; waits paced by motion stretch by 1/that.
+  const speedTimeScale=()=>1/Math.max(0.1, _this.speedOverride ?? 1);
   function waitForCheckData(name:string):Promise<any>{
     return new Promise((resolve, reject)=>{
       const slot:any={};
@@ -322,7 +339,7 @@ export const CalibPage: React.FC<{
           console.warn(`vision timeout: ${name} (${_this.visionTimeouts} in a row), part skipped`);
           resolve(undefined);
         }
-      },VISION_REPLY_TIMEOUT_MS);
+      },VISION_REPLY_TIMEOUT_MS*speedTimeScale());
       slot.resolve=(data:any)=>{clearTimeout(timer);_this.visionTimeouts=0;resolve(data);};
       slot.reject=(err:any)=>{clearTimeout(timer);reject(err);};
       _this[name+"_Promise"]=slot;
@@ -737,6 +754,7 @@ export const CalibPage: React.FC<{
       sendVision:(pkt)=>VP_sendTcpMsgPack(pkt),
       feeder:FlexVibCtrl,
       delay,
+      timeScale:speedTimeScale,
     };
     return {send, sendNoWait, machine};
   }
@@ -794,6 +812,8 @@ export const CalibPage: React.FC<{
     let topShotEventId=TAPE.TOP_SHOT_EVENT_ID_BASE;
 
     const {send, sendNoWait, machine}=makeMachine();
+    // The PLC keeps its override while it runs; make it match the slider.
+    try{ await send(cmd.SetOverride(_this.speedOverride ?? 1)); }catch(e:any){ console.warn("speed override sync failed",e?.message??e); }
 
     _this.plan_mismatch=0;
     try{
@@ -1372,6 +1392,8 @@ export const CalibPage: React.FC<{
     setProductionPlan(plan);
     return { plan: _this.production_plan };
   }, []);
+
+  useHarnessAction('set_speed', async (payload: any) => applySpeed(Number(payload?.percent ?? 100)), [applySpeed]);
 
   useHarnessAction('get_plan', async () => ({
     plan: _this.production_plan ?? [],
@@ -2270,6 +2292,22 @@ export const CalibPage: React.FC<{
         }
       }}>STOP</button>
         </div>
+      </div>
+      <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: '#374151' }}>
+          {uiLang === 'zh' ? '運動速度' : 'Motion speed'}
+        </span>
+        <input type="range" min={10} max={100} step={5} value={speedPercent}
+          onChange={(e) => { void applySpeed(Number(e.target.value)); }}
+          style={{ width: 220 }} />
+        <span style={{ fontVariantNumeric: 'tabular-nums', minWidth: 44 }}>{speedPercent}%</span>
+        {[25, 50, 100].map((p) => (
+          <button key={'speed_' + p} onClick={() => { void applySpeed(p); }}
+            style={{ borderRadius: 8, padding: '4px 10px', fontWeight: speedPercent === p ? 700 : 400 }}>{p}%</button>
+        ))}
+        <span style={{ fontSize: 11, color: '#6b7280' }}>
+          {uiLang === 'zh' ? '即時生效（含正在走的動作），軌跡不變只放慢' : 'applies at once, paths unchanged, just slower'}
+        </span>
       </div>
       <div style={{ marginTop: 10 }}>
         <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, color: '#374151' }}>{t(uiLang, 'quickCheckPlate')}</div>

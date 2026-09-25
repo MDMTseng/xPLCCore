@@ -36,4 +36,7 @@ export interface Machine {
   sendVision(pkt: unknown): Promise<any>;
   feeder: FeederIO;
   delay(ms: number): Promise<void>;
+  /** >= 1 while motion runs slowed down (the speed override): timeouts on
+   *  motion-paced waits are stretched by it. Absent = 1. */
+  timeScale?(): number;
 }

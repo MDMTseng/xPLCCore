@@ -68,10 +68,12 @@ export async function tapeStep(m: Machine, o: TapeStepOptions): Promise<TapeStep
     radius: TAPE.TOP_CAM_CLEAR_MM,
     pin_op_seq: topShotSequence(),
     event_id: ++topShotEventId,
-    timeout_ms: TAPE.REEL_STOP_TIMEOUT_MS + 3000,
+    // slowed down by the speed override, the reel and the arm take longer
+    timeout_ms: Math.round((TAPE.REEL_STOP_TIMEOUT_MS + 3000) * (m.timeScale?.() ?? 1)),
+    ttl_ms: Math.round(3000 * (m.timeScale?.() ?? 1)),
     cells: o.cells,
     kind: o.kind,
-  }), true, TAPE.REEL_STOP_TIMEOUT_MS + 5000);
+  }), true, Math.round((TAPE.REEL_STOP_TIMEOUT_MS + 5000) * (m.timeScale?.() ?? 1)));
 
   // The shots fire only after this reply (the arm must still leave the
   // sphere, and vision needs its processing time), so registering the wait

@@ -253,6 +253,10 @@ PROGRAM AxisGroupSM
         TapeIdx         : INT;
         TapeSlotIdx     : INT := -1;   // FlyEventBuffer slot reserved at TAPE_CYCLE accept
         TapePlanCells   : DINT;
+        // Speed override (GVL.OverrideFactor).
+        GroupOverrideFb : MC_GroupSetOverride;
+        ReelOverrideFb  : MC_SetOverride;
+        OverrideNow     : LREAL;
         // Servo peak monitor (GVL.MotionPeak*).
         PeakAxis        : ARRAY[0..5] OF POINTER TO AXIS_REF_SM3;
         PeakPrevAcc     : ARRAY[0..5] OF LREAL;
@@ -816,6 +820,21 @@ PROGRAM AxisGroupSM
 
 
     UpdateMotionProgress();
+
+    // ---- Speed override: time-scale every motion by GVL.OverrideFactor ----
+    OverrideNow := LIMIT(0.01, GVL.OverrideFactor, 1.0);
+    GroupOverrideFb(
+        AxisGroup := AxisGroupManagerFb._agAxisGroup,
+        Enable := TRUE,
+        VelFactor := OverrideNow,
+        AccFactor := OverrideNow * OverrideNow,
+        JerkFactor := OverrideNow * OverrideNow * OverrideNow);
+    ReelOverrideFb(
+        Axis := reelpullmotor,
+        Enable := TRUE,
+        VelFactor := OverrideNow,
+        AccFactor := OverrideNow * OverrideNow,
+        JerkFactor := OverrideNow * OverrideNow * OverrideNow);
 
     // ---- Servo peak monitor: max |v|, |a|, |j| of the set values per axis ----
     PeakAxis[0] := ADR(IoConfig_Globals.EAxis0);

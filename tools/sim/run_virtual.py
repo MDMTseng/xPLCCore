@@ -407,6 +407,9 @@ def main():
                     help="instead of production: stream short G1 moves (path_test) under each "
                          "combination of PLC packets/scan, TCP NoDelay and await/queue, and report")
     ap.add_argument("--path-n", type=int, default=200)
+    ap.add_argument("--speed", type=int, default=100, help="motion speed override in percent (set_speed)")
+    ap.add_argument("--speed-wobble", action="store_true",
+                    help="while running, switch the speed between 100/40/70 % every few seconds")
     ap.add_argument("--peaks", action="store_true",
                     help="report each servo's peak |velocity|, |acceleration| and |jerk| over the run "
                          "(GVL.MotionPeak*, reset at RUN)")
@@ -498,7 +501,25 @@ def main():
         if a.peaks:
             daemon({"cmd": "write", "symbol": "GVL.MotionPeakReset", "value": "TRUE"})
             daemon({"cmd": "logout"})
+        if a.speed != 100:
+            log("speed:", push("set_speed", {"percent": a.speed}, timeout=10))
         log("run_cycle:", push("run_cycle", timeout=10))
+        if a.speed_wobble:
+            import threading
+            def wobble():
+                k = 0
+                while True:
+                    time.sleep(4.0)
+                    try:
+                        if not push("get_running_state", timeout=5).get("isRunning"):
+                            break
+                        pct = (100, 40, 70)[k % 3]
+                        k += 1
+                        log("speed wobble:", push("set_speed", {"percent": pct}, timeout=5))
+                    except Exception as e:
+                        log("speed wobble stopped:", e)
+                        break
+            threading.Thread(target=wobble, daemon=True).start()
         if a.chaos:
             chaos(a)                        # runs the plan to its end itself
 

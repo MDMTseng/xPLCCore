@@ -399,6 +399,14 @@ END_IF;
                 CommandAck := TRUE;
                 ResponsePacketPointer^.ele_count := 0;
                 MessagePackerFb.PackKvBool(ADR('reset'), TRUE);
+            ELSIF (CommandType = 'SET_OVERRIDE') THEN
+                // Speed override for slow-motion observation (GVL.OverrideFactor).
+                // factor 0.01..1; the reply carries the value now in force.
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                GVL.OverrideFactor := LIMIT(0.01, TO_LREAL(MessageUnpackerFb.TryReadREAL('factor', TO_REAL(GVL.OverrideFactor))), 1.0);
+                MessagePackerFb.PackKvReal(ADR('factor'), TO_REAL(GVL.OverrideFactor));
             ELSIF (CommandType = 'PLAN_SET') THEN
                 // Store the production plan in retained memory (GVL.PlanSeg).
                 // seg: array of 1..32 non-zero DINTs; plan_id: host's label.

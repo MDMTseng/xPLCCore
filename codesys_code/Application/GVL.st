@@ -186,6 +186,12 @@ VAR_GLOBAL
 	   reel: its units). Index 0-2 EAxis0-2, 3 SM_Drive_GenericDSP402 (the
 	   group's A axis), 4 EAXIS_A, 5 reelpullmotor. Set MotionPeakReset to
 	   clear. Read by tools/sim/run_virtual.py (--peaks). *)
+	(* Speed override (SYS SET_OVERRIDE, the UI's speed slider): time-scales
+	   all motion -- velocity x f, acceleration x f^2, jerk x f^3 -- so
+	   paths keep their shape and just run slower, including the moves
+	   already running. 0.01..1; not retained (a restart runs at 100 %). *)
+	OverrideFactor : LREAL := 1.0;
+
 	MotionPeakReset : BOOL := FALSE;
 	MotionPeakVel   : ARRAY[0..5] OF LREAL;
 	MotionPeakAcc   : ARRAY[0..5] OF LREAL;

@@ -126,7 +126,7 @@ IF fbMyServer.PKT_IDX > TMP_PKT_IDX THEN
 			RouteCmd = 'PING' OR RouteCmd = 'GA_EV' OR RouteCmd = 'GET_MACHINE_STATE'
 			OR RouteCmd = 'GET_DIAG' OR RouteCmd = 'VERSION' OR RouteCmd = 'RESET_DBG_INFO'
 			OR RouteCmd = 'SET_AXIS_SIM' OR RouteCmd = 'GET_COORD1_DEBUG' OR RouteCmd = 'EVT_MARK'
-			OR RouteCmd = 'PLAN_GET');
+			OR RouteCmd = 'PLAN_GET' OR RouteCmd = 'SET_OVERRIDE');
 		IF RouteToSys AND (GVL.sysinfo_buf_ridx.Space() > 0) THEN
 			tmp_ptr:=ADR(GVL.sysinfo_buf[GVL.sysinfo_buf_ridx.GetHead()][0]);
 			tmp_ptr[0]:=DINT_TO_BYTE(fbMyServer.BUFFER_LEN);
