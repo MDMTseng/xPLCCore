@@ -89,3 +89,25 @@ are the sim's fault-injection hooks; 0 / FALSE in production.
   not -- the operator has to look.
 - Real-PLC install: `create_plan_count_cells.py` (logged out), then the
   on-site install (retained variables added).
+
+## 5. TODO: E-stop and PLC-failure stop (deferred by the owner, 2026-09-25)
+
+Nothing is wired yet. Agreed direction, to pick up later:
+
+- E-stop as SS1-t: dual-channel E-stop buttons -> safety relay with
+  instant and delayed outputs. Instant: DI to the PLC (stop the arm and
+  the reel with dedicated E-stop dynamics, refuse reset while pressed).
+  Delayed (~1 s, above the worst-case stop time): STO1/STO2 of the three
+  ASDA-B3-E drives, and a pair of safety contactors on the power of the
+  reel (CL3-E57H) and A-axis (QEC) drives, if those have no STO. Cut
+  torque, not control power: encoders keep the position for recovery.
+- PLC failure must remove torque, in two layers: (1) drive fault
+  reaction on EtherCAT loss = ramp down then disable (ASDA 0x605E /
+  0x6085; keep the EtherCAT watchdogs on -- the sim has them off);
+  (2) a heartbeat DO toggled by the main logic task -> retriggerable
+  watchdog relay -> the safety relay's stop input (or in series with
+  STO), which also covers "task frozen, bus still running". No
+  automatic restart: manual reset.
+- To confirm on the machine: STO on CL3-E57H / QEC, separate logic and
+  power supplies, motor brakes on the delta, free DI for the E-stop
+  state, free DO for the heartbeat, the IO module's safe state (vacuum).
