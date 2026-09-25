@@ -215,7 +215,10 @@ Needs the machine (not changed):
   `compare_runs.py` after installing this build.
 - Install checklist for the real PLC (one on-site `install`): the new
   retained plan variables, the TYPE change (Reserved), Comm 1 ms
-  (`set_comm_task_period.py` first), FlyEventBufferSize 32.
+  (`set_comm_task_period.py` first), FlyEventBufferSize 32; the retained
+  tape-move record (`GVL.ReelMv*`) and the new `PlanCountCells` method --
+  run `jobs/templates/create_plan_count_cells.py` (logged out) before the
+  import, see `estop_recovery_2026-09-25.md`.
 
 Also done: the loop body is `lib/production/cycle.ts` (fb8d3d7), with an
 offline end-to-end test that runs whole plans against a fake tape.

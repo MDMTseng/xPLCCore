@@ -13,6 +13,7 @@ Checked: the same string, same length -- a part short, a part too many,
 an empty cell too many or in the wrong place all fail.
 """
 
+import math
 import os
 import sys
 
@@ -37,9 +38,14 @@ def actual(run):
                 s = st
         return s
 
+    # A move a fault stopped short and the move that finished it later
+    # (REEL_RESUME) are two reel moves of fractions of a cell: count the
+    # cell boundaries the tape actually crossed, not moves.
     out = []
+    travel = 0.0
     for r in run["lanes"]["reel"]:
-        n = max(1, int(round(r["cells"])))
+        start, travel = travel, travel + r["cells"]
+        n = int(math.floor(travel + 0.5)) - int(math.floor(start + 0.5))
         for i in range(n):
             u = r["u0"] + i * pitch
             p = next((p for p in parts if p["t0"] <= r["s"] and (p["t1"] is None or r["s"] < p["t1"])

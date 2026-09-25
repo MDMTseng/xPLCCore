@@ -252,7 +252,19 @@ PROGRAM AxisGroupSM
         TapeErr         : STRING(31);
         TapeIdx         : INT;
         TapeSlotIdx     : INT := -1;   // FlyEventBuffer slot reserved at TAPE_CYCLE accept
-        TapePlanCells   : DINT;
+        TapePlanCells   : DINT;        // cells this TAPE_CYCLE advances (GVL.ReelMv*)
+        // Reel move tracker (GVL.ReelMv*): counts cells as the reel passes them.
+        ReelTrkActive   : BOOL;
+        ReelTrkStarted  : BOOL;        // the reel has moved since the dispatch
+        ReelTrkStill    : INT;         // consecutive scans without movement
+        ReelTrkT0       : LINT;
+        ReelTrkLastPos  : LREAL;
+        ReelTrkD        : LREAL;
+        ReelTrkNew      : DINT;
+        REEL_STILL_SCANS      : INT := 50;       // 50 ms still = the move is over
+        REEL_START_TIMEOUT_MS : LINT := 1000;    // never started (fault at dispatch)
+        REEL_CELL_EPS_MM      : LREAL := 0.05;   // a cell counts this close to its boundary
+        REEL_MAX_STEP_MM      : LREAL := 5.0;    // more per scan = the position jumped
         // Speed override (GVL.OverrideFactor), applied per move.
         OverrideNow     : LREAL;
         // MC_GroupSetOverride probe (GVL.TestOvr*), off in production.
@@ -263,12 +275,9 @@ PROGRAM AxisGroupSM
         PeakHavePrev    : BOOL;
         PeakIdx         : INT;
         PeakDt          : LREAL;
-        PeakJerkNow     : LREAL;        // cells this TAPE_CYCLE advances, counted into GVL.PlanCellsDone once the reel has moved
+        PeakJerkNow     : LREAL;
         TapePlanKind    : INT;         // what they are: 1 packed, 2 left empty, 0 not said
         TapePlanErr     : BOOL;        // kind/size disagreed with the plan at PlanCellsDone
-        TapePlanAt      : UDINT;       // scratch: cells walked while locating the segment
-        TapePlanSegIdx  : INT;         // scratch: segment index at PlanCellsDone (-1 past the end)
-        TapePlanLeft    : UDINT;       // scratch: cells left in that segment
         TapeOffset      : DINT;
         TAPE_DEFAULT_TIMEOUT_MS : LINT := 6000;
 
@@ -792,6 +801,13 @@ PROGRAM AxisGroupSM
             GVL.LastErrorID := TO_DWORD(GroupReadStatusFb.ErrorID);
             GVL.GroupErrorStopTripCount := GVL.GroupErrorStopTripCount + 1;
             AxisGroupManagerFb.Transition(E_RobotEvent.EV_ERROR);
+        ELSIF (GVL.TestFaultMidReel > 0) AND ReelTrkActive AND ReelTrkStarted THEN
+            // 2 = E-stop: the reel stops where it is, too (see TestReelFrozen)
+            GVL.TestReelFrozen := GVL.TestFaultMidReel = 2;
+            GVL.TestFaultMidReel := 0;
+            GVL.LastErrorSource := 'Test:FaultMidReel';
+            GVL.LastErrorID := 0;
+            AxisGroupManagerFb.Transition(E_RobotEvent.EV_ERROR);
         ELSIF GroupReadPositionFb.Error THEN
             GVL.LastErrorSource := 'Supervisor:GroupReadPosition';
             GVL.LastErrorID := TO_DWORD(GroupReadPositionFb.ErrorID);
@@ -1058,6 +1074,61 @@ PROGRAM AxisGroupSM
         END_IF;
     END_FOR;
 
+    // ---- Reel move tracker (GVL.ReelMv*) ----
+    // Counts the cells of a tape move into the plan as the reel passes
+    // them, every scan and whatever the FSM state: after a fault the reel
+    // may still finish its move, or stop anywhere (E-stop), and the count
+    // must follow the tape, not the command.
+    IF ReelTrkActive THEN
+        ReelTrkD := reelpullmotor.fActPosition - ReelTrkLastPos;
+        ReelTrkLastPos := reelpullmotor.fActPosition;
+        IF (reelpullmotor.fPositionPeriod > 0)
+           AND (ABS(ReelTrkD) > reelpullmotor.fPositionPeriod / 2) THEN
+            // modulo wrap
+            IF ReelTrkD > 0 THEN
+                ReelTrkD := ReelTrkD - reelpullmotor.fPositionPeriod;
+            ELSE
+                ReelTrkD := ReelTrkD + reelpullmotor.fPositionPeriod;
+            END_IF;
+        END_IF;
+        IF ABS(ReelTrkD) > REEL_MAX_STEP_MM THEN
+            // not a move: the position was reset (drive / bus restart)
+            GVL.ReelMvPosLost := TRUE;
+            ReelTrkActive := FALSE;
+        ELSE
+            GVL.ReelMvTravelMm := GVL.ReelMvTravelMm + ReelTrkD;
+            IF ABS(ReelTrkD) > 1.0E-6 THEN
+                ReelTrkStill := 0;
+                ReelTrkStarted := TRUE;
+            ELSIF ReelTrkStill < 30000 THEN
+                ReelTrkStill := ReelTrkStill + 1;
+            END_IF;
+            IF (GVL.ReelMvCells > 0) AND (GVL.ReelMvCellMm > 0) THEN
+                ReelTrkNew := MIN(TO_DINT(TRUNC((GVL.ReelMvTravelMm + REEL_CELL_EPS_MM) / GVL.ReelMvCellMm)),
+                                  GVL.ReelMvCells) - GVL.ReelMvCounted;
+                IF ReelTrkNew > 0 THEN
+                    IF PlanCountCells(n := ReelTrkNew, kind := GVL.ReelMvKind) THEN
+                        TapePlanErr := TRUE;
+                    END_IF;
+                    GVL.ReelMvCounted := GVL.ReelMvCounted + ReelTrkNew;
+                END_IF;
+            END_IF;
+            IF (ReelTrkStill >= REEL_STILL_SCANS)
+               AND ((ReelTrkStarted AND NOT (reelMoveRelative.Busy OR reelMoveRelative2.Busy))
+                    OR ((RuntimeMs - ReelTrkT0) > REEL_START_TIMEOUT_MS)) THEN
+                // The reel has stopped: at the target, or short of it.
+                ReelTrkActive := FALSE;
+                IF (GVL.ReelMvCells <= 0)
+                   OR ((GVL.ReelMvCounted >= GVL.ReelMvCells)
+                       AND (GVL.ReelMvTravelMm >= DINT_TO_LREAL(GVL.ReelMvCells) * GVL.ReelMvCellMm - REEL_CELL_EPS_MM)) THEN
+                    GVL.ReelMvOpen := FALSE;
+                ELSE
+                    GVL.ReelInterruptCount := GVL.ReelInterruptCount + 1;
+                END_IF;
+            END_IF;
+        END_IF;
+    END_IF;
+
     // ---- TAPE_CYCLE sequence (registered in ProcessMotionPacket) ----
     IF TapeActive THEN
         TapeDone := FALSE;
@@ -1078,6 +1149,26 @@ PROGRAM AxisGroupSM
                 TapeT1 := RuntimeMs;
                 TapeT2 := RuntimeMs;
                 IF TapeReelDist <> 0 THEN
+                    // a new move for the tracker (GVL.ReelMv*); only a
+                    // forward move with `cells` is counted into the plan
+                    TapePlanErr := FALSE;
+                    GVL.ReelMvOpen := TRUE;
+                    GVL.ReelMvPosLost := FALSE;
+                    GVL.ReelMvKind := TapePlanKind;
+                    GVL.ReelMvTravelMm := 0;
+                    GVL.ReelMvCounted := 0;
+                    IF (TapePlanCells > 0) AND (TapeReelDist > 0) THEN
+                        GVL.ReelMvCells := TapePlanCells;
+                        GVL.ReelMvCellMm := TO_LREAL(TapeReelDist) / DINT_TO_LREAL(TapePlanCells);
+                    ELSE
+                        GVL.ReelMvCells := 0;
+                        GVL.ReelMvCellMm := 0;
+                    END_IF;
+                    ReelTrkActive := TRUE;
+                    ReelTrkStarted := FALSE;
+                    ReelTrkStill := 0;
+                    ReelTrkT0 := RuntimeMs;
+                    ReelTrkLastPos := reelpullmotor.fActPosition;
                     // same dispatch as ReelGo
                     reelGoDistance := TapeReelDist;
                     reelGoVelocity := TapeReelF;
@@ -1103,41 +1194,15 @@ PROGRAM AxisGroupSM
             TapeDone := TRUE;
             TapeOk := TRUE;
         ELSIF TapeState = 2 THEN
-            // reelGoRequest* covers the scan before MC_MoveRelative reports Busy
-            IF NOT (reelGoRequest OR reelGoRequest2 OR reelMoveRelative.Busy OR reelMoveRelative2.Busy) THEN
+            // The tracker above counts the cells as the reel passes them
+            // and closes the move once the reel stands still.
+            IF NOT ReelTrkActive THEN
                 TapeT2 := RuntimeMs;
-                TapeState := 3;
-                // The tape has moved: count it for the plan, here and only
-                // here, so the retained count always matches the tape.
-                TapePlanErr := FALSE;
-                IF TapePlanCells > 0 THEN
-                    // Which segment does the plan put at PlanCellsDone?
-                    TapePlanSegIdx := -1;
-                    TapePlanAt := 0;
-                    TapePlanLeft := 0;
-                    FOR TapeIdx := 0 TO MIN(GVL.PlanSegCount, 32) - 1 DO
-                        IF GVL.PlanCellsDone < TapePlanAt + DINT_TO_UDINT(ABS(GVL.PlanSeg[TapeIdx])) THEN
-                            TapePlanSegIdx := TapeIdx;
-                            TapePlanLeft := TapePlanAt + DINT_TO_UDINT(ABS(GVL.PlanSeg[TapeIdx])) - GVL.PlanCellsDone;
-                            EXIT;
-                        END_IF;
-                        TapePlanAt := TapePlanAt + DINT_TO_UDINT(ABS(GVL.PlanSeg[TapeIdx]));
-                    END_FOR;
-                    IF TapePlanKind > 0 THEN
-                        IF (TapePlanSegIdx < 0)
-                           OR ((TapePlanKind = 1) <> (GVL.PlanSeg[MAX(TapePlanSegIdx, 0)] > 0))
-                           OR (DINT_TO_UDINT(TapePlanCells) > TapePlanLeft) THEN
-                            TapePlanErr := TRUE;
-                            GVL.PlanMismatchCount := GVL.PlanMismatchCount + 1;
-                        END_IF;
-                    END_IF;
-                    IF TapePlanKind = 1 THEN
-                        GVL.PlanCellsPacked := GVL.PlanCellsPacked + DINT_TO_UDINT(TapePlanCells);
-                    ELSIF TapePlanKind = 2 THEN
-                        GVL.PlanCellsEmpty := GVL.PlanCellsEmpty + DINT_TO_UDINT(TapePlanCells);
-                    END_IF;
-                    GVL.PlanCellsDone := GVL.PlanCellsDone + DINT_TO_UDINT(TapePlanCells);
-                    GVL.PlanRev := GVL.PlanRev + 1;
+                IF GVL.ReelMvOpen THEN
+                    TapeDone := TRUE;
+                    TapeErr := 'reel_interrupted';
+                ELSE
+                    TapeState := 3;
                 END_IF;
             END_IF;
         END_IF;
@@ -1195,39 +1260,19 @@ PROGRAM AxisGroupSM
         END_IF;
     END_IF;
 
-    CheckAxisGroupReady();
-
-
-    IF NOT AxisGroupReady THEN
-        RETURN;
-    END_IF;
-
-
-
-
-    // Removed 2026-06-23: `IF FALSE THEN ... ProcessTaskPacket` block.
-    // Type='TASK' was a planned third packet class (alongside 'SYS' and
-    // 'M') that never got past stub. The DrainHostPackets() loop above
-    // already NAKs any non-SYS / non-M packet as 'missing_type_field',
-    // so a future 'TASK' implementation would slot into that method's
-    // ELSIF chain rather than this dead trailing block.
-
-    
-    ProcessFlyEventsAndIo();
-    
-
-    reelpullmotor_fActPosition:=reelpullmotor.fActPosition;
-    
-    ProcessMotionPacket();
-    
-
 // --- Reel motor cyclic driver ---
 // Two FB instances so we can have one move active while another is
 // queued in the axis buffer. SoftMotion rejects >1 movement per FB
 // (SMC_MORE_THAN_ONE_MOVEMENT_PER_INSTANCE) so we dispatch to whichever
 // FB is idle. BufferMode = Buffered: queued move starts when the active
 // one finishes.
-IF TRUE THEN
+// Called every scan, ahead of the Ready gate below: SoftMotion computes a
+// move's set points inside the FB call, so a move left uncalled (the FSM
+// in Error) froze the reel mid-move -- an instant stop from speed.
+// Now a fault on the arm lets the tape move finish on its cell boundary.
+// GVL.TestReelFrozen (test hook) skips the calls: what an E-stop that
+// cuts the drive looks like to the tape.
+IF NOT GVL.TestReelFrozen THEN
     reelMoveRelative(
         Axis         := reelpullmotor,
         Execute      := reelGoRequest,
@@ -1254,3 +1299,28 @@ IF TRUE THEN
     IF reelGoRequest  THEN reelGoRequest  := FALSE; END_IF
     IF reelGoRequest2 THEN reelGoRequest2 := FALSE; END_IF
 END_IF;
+
+    CheckAxisGroupReady();
+
+
+    IF NOT AxisGroupReady THEN
+        RETURN;
+    END_IF;
+
+
+
+
+    // Removed 2026-06-23: `IF FALSE THEN ... ProcessTaskPacket` block.
+    // Type='TASK' was a planned third packet class (alongside 'SYS' and
+    // 'M') that never got past stub. The DrainHostPackets() loop above
+    // already NAKs any non-SYS / non-M packet as 'missing_type_field',
+    // so a future 'TASK' implementation would slot into that method's
+    // ELSIF chain rather than this dead trailing block.
+
+    
+    ProcessFlyEventsAndIo();
+    
+
+    reelpullmotor_fActPosition:=reelpullmotor.fActPosition;
+    
+    ProcessMotionPacket();

@@ -213,6 +213,18 @@ export interface PlanState {
   cells_empty: number;
   /** Advances whose kind or size disagreed with the plan on the PLC. */
   mismatch: number;
+  /** A tape move is open: under way, or stopped short by a fault
+   *  (lib/production/recovery.ts). Absent on an older PLC program. */
+  reel_open?: boolean;
+  reel_moving?: boolean;
+  /** The PLC restarted while the move was open: its travel is unknown. */
+  reel_pos_lost?: boolean;
+  /** Distance still to go to the move's target. */
+  reel_rest_mm?: number;
+  reel_cells?: number;
+  reel_counted?: number;
+  /** Tape moves stopped short since the PLC started. */
+  reel_interrupts?: number;
 }
 
 export interface ReelGoArgs {
@@ -520,8 +532,16 @@ export const cmd = {
   PlanSet: (seg: number[], plan_id: number, cells_done: number = 0) =>
     env<AckReply & { plan_rev: number }>({ type: 'SYS', cmd: 'PLAN_SET', seg, plan_id, cells_done }),
   PlanGet: () => env<PlanState>({ type: 'SYS', cmd: 'PLAN_GET' }),
-  // Speed override (0.01..1): time-scales all motion on the PLC, running
-  // moves included (velocity x f, acceleration x f^2, jerk x f^3).
+  // Speed override (0.01..1): time-scales the motion sent from now on
+  // (velocity x f, acceleration x f^2, jerk x f^3); moves already queued
+  // on the PLC keep their speed.
+  // Finish a tape move a fault stopped short (PLAN_GET reel_open); the
+  // cells are counted as they pass. Poll PLAN_GET until reel_open is false.
+  ReelResume: (dyn: { F?: number; ACC?: number; DEA?: number; JERK?: number } = {}) =>
+    env<AckReply & { rest_mm: number }>({ type: 'SYS', cmd: 'REEL_RESUME', ...dyn }),
+  // Close an interrupted tape move without moving (tape aligned by hand),
+  // counting `count` more of its cells.
+  ReelClear: (count: number) => env<AckReply & { cells_done: number }>({ type: 'SYS', cmd: 'REEL_CLEAR', count }),
   SetOverride: (factor: number) => env<AckReply & { factor: number }>({ type: 'SYS', cmd: 'SET_OVERRIDE', factor }),
   // Host timestamp mark in the PLC event log (GVL.EvHead, GET /e on :8126).
   // Send without tracking (no id): the PLC then sends no reply. Codes:

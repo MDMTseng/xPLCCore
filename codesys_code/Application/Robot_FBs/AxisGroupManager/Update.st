@@ -13,6 +13,7 @@ Update:=TRUE;
 CASE _eState OF
     E_RobotState.UnInited:
         IF(uidx=-1)THEN // On Entry
+            GVL.TestReelFrozen := FALSE;   // fault-injection hook (GVL)
             GroupPower_Flag := FALSE;
             bReelPowerReq   := FALSE; // Single Axis Power Flag
 

@@ -204,6 +204,18 @@ VAR_GLOBAL
 	TestOvrError   : BOOL;
 	TestOvrErrorId : DINT;
 
+	(* Fault-injection test hook (tools/sim/run_virtual.py --fault-mid-reel):
+	   drive the FSM to Error once, while a TAPE_CYCLE reel move is running.
+	   1 = a fault on the arm (the reel finishes its move), 2 = an E-stop
+	   (the reel also stops where it is: TestReelFrozen skips the reel FB
+	   calls until the FSM is reset to UnInited). Self-clearing; 0 in
+	   production. *)
+	TestFaultMidReel : INT := 0;
+	TestReelFrozen   : BOOL := FALSE;
+
+	(* Tape moves that stopped short of their target (the ReelMv block). *)
+	ReelInterruptCount : UDINT;
+
 	MotionPeakReset : BOOL := FALSE;
 	MotionPeakVel   : ARRAY[0..5] OF LREAL;
 	MotionPeakAcc   : ARRAY[0..5] OF LREAL;
@@ -654,6 +666,24 @@ VAR_GLOBAL RETAIN
 	PlanCellsPacked   : UDINT;
 	PlanCellsEmpty    : UDINT;
 	PlanMismatchCount : UDINT;
+
+	(* The tape move in progress, or the one a fault interrupted (servo /
+	   bus fault, E-stop). The cells are counted into PlanCellsDone as the
+	   reel actually passes them -- unwrapped travel / cell pitch --
+	   whatever the motion FSM does meanwhile. A move that stops short of
+	   its target leaves ReelMvOpen TRUE with the rest to go: TAPE_CYCLE
+	   NAKs reel_interrupted until SYS REEL_RESUME has moved the rest, or
+	   REEL_CLEAR closes it (operator aligned the tape by hand).
+	   ReelMvPosLost: the PLC restarted, or the reel position jumped,
+	   while the move was open -- its travel can no longer be trusted, so
+	   REEL_RESUME refuses (reel_position_lost). *)
+	ReelMvOpen     : BOOL;
+	ReelMvCells    : DINT;     // cells the move advances
+	ReelMvKind     : INT;      // 1 packed, 2 left empty, 0 not said
+	ReelMvCellMm   : LREAL;    // cell pitch in reel units (Distance / cells)
+	ReelMvTravelMm : LREAL;    // travel so far, unwrapped
+	ReelMvCounted  : DINT;     // cells of it counted into PlanCellsDone
+	ReelMvPosLost  : BOOL;
 END_VAR
 
 VAR_GLOBAL

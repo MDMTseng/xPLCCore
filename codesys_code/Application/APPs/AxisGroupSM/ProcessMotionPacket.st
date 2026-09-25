@@ -226,8 +226,14 @@
             // the shots are armed; NAK tape_busy / flyevent_buffer_full /
             // tape_timeout / reel_busy / group_not_ready. See the TAPE_CYCLE
             // block in AxisGroupSM.
-            IF TapeActive THEN
+            IF TapeActive OR ReelTrkActive THEN
                 MessagePackerFb.PackKvStr(ADR('err'), ADR('tape_busy'));
+                ShouldReturn := TRUE;
+                CommandAck := FALSE;
+            ELSIF GVL.ReelMvOpen THEN
+                // a fault stopped the last tape move short: the tape is
+                // between cells until REEL_RESUME / REEL_CLEAR
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('reel_interrupted'));
                 ShouldReturn := TRUE;
                 CommandAck := FALSE;
             ELSIF (FlyEventAvailableCount <= 3) THEN
@@ -334,7 +340,7 @@
             // TAPE_CYCLE owns the reel (it moves through the same reelGo*
             // parameters, which this would overwrite), or when both FB
             // instances are busy (active + queued). Both used to ack TRUE.
-            IF TapeActive THEN
+            IF TapeActive OR ReelTrkActive THEN
                 MessagePackerFb.PackKvStr(ADR('err'), ADR('tape_busy'));
                 CommandAck := FALSE;
             ELSIF reelMoveRelative.Busy AND reelMoveRelative2.Busy THEN

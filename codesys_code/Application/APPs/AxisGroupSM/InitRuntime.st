@@ -33,5 +33,10 @@ IF NOT GVL.AppBootHandled THEN
         GVL.ScratchpadV1.SchemaVersion := 1;
         GVL.ScratchpadV1.BootEpoch := GVL.BootEpochCount;
     END_IF;
+    // A tape move open across a restart: its travel so far is gone
+    // with the tracker, and the encoder may have been reset.
+    IF GVL.ReelMvOpen THEN
+        GVL.ReelMvPosLost := TRUE;
+    END_IF;
     GVL.AppBootHandled := TRUE;
 END_IF;

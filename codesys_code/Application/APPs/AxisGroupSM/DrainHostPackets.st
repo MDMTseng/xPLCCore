@@ -26,6 +26,10 @@ VAR
     PlanNew   : ARRAY[0..31] OF DINT;
     PlanCellsDoneIn : LINT;
 
+    // REEL_RESUME / REEL_CLEAR scratch.
+    ReelRestMm : LREAL;
+    ReelClearN : DINT;
+
     // TRUE while the packet being handled came from GVL.sysinfo_buf
     // (order-free SYS ring), FALSE for GVL.minfo_buf.
     SrcSys : BOOL;
@@ -407,6 +411,74 @@ END_IF;
                 ResponsePacketPointer^.ele_count := 0;
                 GVL.OverrideFactor := LIMIT(0.01, TO_LREAL(MessageUnpackerFb.TryReadREAL('factor', TO_REAL(GVL.OverrideFactor))), 1.0);
                 MessagePackerFb.PackKvReal(ADR('factor'), TO_REAL(GVL.OverrideFactor));
+            ELSIF (CommandType = 'REEL_RESUME') THEN
+                // Finish a tape move a fault stopped short (GVL.ReelMv*):
+                // move the rest of the way with F/ACC/DEA/JERK, counting
+                // the cells as they pass. Acks {rest_mm} at dispatch; the
+                // host polls PLAN_GET until reel_open goes FALSE.
+                ShouldReturn := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                ReelRestMm := DINT_TO_LREAL(GVL.ReelMvCells) * GVL.ReelMvCellMm - GVL.ReelMvTravelMm;
+                CommandAck := FALSE;
+                IF NOT GVL.ReelMvOpen THEN
+                    CommandAck := TRUE;
+                    ReelRestMm := 0;
+                ELSIF GVL.ReelMvPosLost THEN
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('reel_position_lost'));
+                ELSIF TapeActive OR ReelTrkActive THEN
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('tape_busy'));
+                ELSIF NOT AxisGroupReady THEN
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('group_not_ready'));
+                ELSIF reelMoveRelative.Busy AND reelMoveRelative2.Busy THEN
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('reel_busy'));
+                ELSIF ReelRestMm <= REEL_CELL_EPS_MM THEN
+                    // at the target already: count what is left and close
+                    ReelClearN := GVL.ReelMvCells - GVL.ReelMvCounted;
+                    PlanCountCells(n := ReelClearN, kind := GVL.ReelMvKind);
+                    GVL.ReelMvCounted := GVL.ReelMvCells;
+                    GVL.ReelMvOpen := FALSE;
+                    CommandAck := TRUE;
+                    ReelRestMm := 0;
+                ELSE
+                    reelGoDistance := LREAL_TO_REAL(ReelRestMm);
+                    reelGoVelocity := MessageUnpackerFb.TryReadREAL('F',    reelGoVelocity);
+                    reelGoAccel    := MessageUnpackerFb.TryReadREAL('ACC',  reelGoAccel);
+                    reelGoDecel    := MessageUnpackerFb.TryReadREAL('DEA',  reelGoDecel);
+                    reelGoJerk     := MessageUnpackerFb.TryReadREAL('JERK', reelGoJerk);
+                    IF NOT reelMoveRelative.Busy THEN
+                        reelGoRequest := TRUE;
+                    ELSE
+                        reelGoRequest2 := TRUE;
+                    END_IF;
+                    ReelTrkActive := TRUE;
+                    ReelTrkStarted := FALSE;
+                    ReelTrkStill := 0;
+                    ReelTrkT0 := RuntimeMs;
+                    ReelTrkLastPos := reelpullmotor.fActPosition;
+                    CommandAck := TRUE;
+                END_IF;
+                MessagePackerFb.PackKvReal(ADR('rest_mm'), LREAL_TO_REAL(ReelRestMm));
+            ELSIF (CommandType = 'REEL_CLEAR') THEN
+                // Close an interrupted tape move without moving (the
+                // operator aligned the tape by hand): count `count` more of
+                // its cells (0..the uncounted rest) into the plan.
+                ShouldReturn := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                IF ReelTrkActive THEN
+                    CommandAck := FALSE;
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('tape_busy'));
+                ELSE
+                    IF GVL.ReelMvOpen THEN
+                        ReelClearN := LIMIT(0, TO_DINT(MessageUnpackerFb.TryReadINT64('count', 0)),
+                                            GVL.ReelMvCells - GVL.ReelMvCounted);
+                        PlanCountCells(n := ReelClearN, kind := GVL.ReelMvKind);
+                        GVL.ReelMvCounted := GVL.ReelMvCounted + ReelClearN;
+                    END_IF;
+                    GVL.ReelMvOpen := FALSE;
+                    GVL.ReelMvPosLost := FALSE;
+                    CommandAck := TRUE;
+                    MessagePackerFb.PackKvLint(ADR('cells_done'), UDINT_TO_LINT(GVL.PlanCellsDone));
+                END_IF;
             ELSIF (CommandType = 'PLAN_SET') THEN
                 // Store the production plan in retained memory (GVL.PlanSeg).
                 // seg: array of 1..32 non-zero DINTs; plan_id: host's label.
@@ -446,6 +518,12 @@ END_IF;
                         PlanCellsDoneIn := 0;
                     END_IF;
                     GVL.PlanCellsDone := LINT_TO_UDINT(PlanCellsDoneIn);
+                    // a new plan (or a re-set count) supersedes an
+                    // interrupted move: the host has decided where the tape is
+                    IF NOT ReelTrkActive THEN
+                        GVL.ReelMvOpen := FALSE;
+                        GVL.ReelMvPosLost := FALSE;
+                    END_IF;
                     GVL.PlanCellsPacked := 0;
                     GVL.PlanCellsEmpty := 0;
                     GVL.PlanMismatchCount := 0;
@@ -468,6 +546,15 @@ END_IF;
                 MessagePackerFb.PackKvLint(ADR('cells_packed'), UDINT_TO_LINT(GVL.PlanCellsPacked));
                 MessagePackerFb.PackKvLint(ADR('cells_empty'), UDINT_TO_LINT(GVL.PlanCellsEmpty));
                 MessagePackerFb.PackKvLint(ADR('mismatch'), UDINT_TO_LINT(GVL.PlanMismatchCount));
+                // an open tape move (GVL.ReelMv*): moving, or interrupted
+                MessagePackerFb.PackKvBool(ADR('reel_open'), GVL.ReelMvOpen);
+                MessagePackerFb.PackKvBool(ADR('reel_moving'), ReelTrkActive);
+                MessagePackerFb.PackKvBool(ADR('reel_pos_lost'), GVL.ReelMvPosLost);
+                MessagePackerFb.PackKvReal(ADR('reel_rest_mm'),
+                    LREAL_TO_REAL(DINT_TO_LREAL(GVL.ReelMvCells) * GVL.ReelMvCellMm - GVL.ReelMvTravelMm));
+                MessagePackerFb.PackKvDint(ADR('reel_cells'), GVL.ReelMvCells);
+                MessagePackerFb.PackKvDint(ADR('reel_counted'), GVL.ReelMvCounted);
+                MessagePackerFb.PackKvLint(ADR('reel_interrupts'), UDINT_TO_LINT(GVL.ReelInterruptCount));
                 IF (GVL.PlanSegCount > 0) AND (GVL.PlanSegCount <= 32) THEN
                     MessagePackerFb.PackKvArray(ADR('seg'), TO_UINT(GVL.PlanSegCount));
                     FOR PlanIdx := 0 TO GVL.PlanSegCount - 1 DO

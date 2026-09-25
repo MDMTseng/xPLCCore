@@ -461,6 +461,102 @@ def chaos(a):
     log("chaos: gave up after 10 min")
 
 
+REEL_CELL_MM = 8.0          # TAPE.REEL_CELL_DISTANCE (lib/production/params.ts)
+REEL_PERIOD_MM = 200.0      # the reel is a modulo axis (fPositionPeriod)
+
+
+def reel_pos():
+    v = float(_r_sym("AxisGroupSM.reelpullmotor_fActPosition"))
+    daemon({"cmd": "logout"})
+    return round(v, 3)
+
+
+def _r_sym(sym):
+    return str(daemon({"cmd": "read", "symbol": sym})["value"]).split("#")[-1]
+
+
+def reel_books(pos0, cells0):
+    """The tape moved exactly as far as the PLC counted?"""
+    pos1 = reel_pos()
+    plc = push("get_plc_plan", timeout=10)
+    # the position wraps every REEL_PERIOD_MM: compare modulo one turn
+    counted = (plc.get("cells_done") or 0) - cells0
+    off = (pos1 - pos0 - counted * REEL_CELL_MM) % REEL_PERIOD_MM
+    off = min(off, REEL_PERIOD_MM - off)
+    ok = off < 0.05
+    log("reel books: PLC counted %d cells, reel %.3f mm off that (mod %g) -> %s" % (
+        counted, off, REEL_PERIOD_MM, "MATCH" if ok else "MISMATCH"))
+    return ok
+
+
+def fault(a):
+    """Drive the PLC into Error at random moments (a.fault times) -- what a
+    servo trip, a bus drop or an E-stop looks like to the software -- then
+    recover the way an operator would: reset + power + enable + ready
+    (bring_to_ready), then RUN. Logs what the UI did at each fault (loop
+    ended / held on an error / kept going) and the plan both sides hold."""
+    import random
+    rng = random.Random(a.chaos_seed)
+    faults = 0
+    t_run = time.time()
+    wait = rng.uniform(2.0, 6.0)
+    end = time.time() + 900
+    while time.time() < end:
+        time.sleep(0.25)
+        rs = push("get_running_state", timeout=10)
+        if not rs.get("isRunning"):
+            left = push("get_plan", timeout=10).get("plan")
+            if not left:
+                log("fault: plan done after %d faults" % faults)
+                return
+            if faults >= a.fault:
+                log("fault: loop ended with plan left %s: %s" % (left, rs.get("runningState")))
+                return
+        if faults < a.fault and rs.get("isRunning") and time.time() - t_run > wait:
+            plan_before = push("get_plan", timeout=10).get("plan")
+            if a.fault_mid_reel:
+                # the PLC trips itself once the next tape move is running
+                _w("TestFaultMidReel", "2" if a.estop else "1"); daemon({"cmd": "logout"})
+                wait_for("mid-reel fault", lambda: push("ga_ev", {"ev": EV_NONE}, timeout=10)["reply"].get("st_str") == "Error",
+                         timeout=60, period=0.2)
+            else:
+                push("enter_error", timeout=10)
+            faults += 1
+            log("fault: #%d injected, plan %s, reel at %s" % (faults, plan_before, reel_pos()))
+            # What does the UI do? Give it a few seconds.
+            t0 = time.time()
+            while time.time() - t0 < 8:
+                time.sleep(0.25)
+                rs = push("get_running_state", timeout=10)
+                if not rs.get("isRunning") or rs.get("currentError"):
+                    break
+            log("fault: after %.1f s running=%s err=%r state=%r" % (
+                time.time() - t0, rs.get("isRunning"), rs.get("currentError"), rs.get("runningState")))
+            if rs.get("isRunning"):
+                r = push("stop_cycle", {"wait_ms": 8000}, timeout=16)
+                rs = push("get_running_state", timeout=10)
+                log("fault: stop_cycle -> %s, running=%s" % (r, rs.get("isRunning")))
+                if rs.get("isRunning"):
+                    # held on the error: release the hold, the stop flag ends the loop
+                    push("resume_cycle", timeout=16)
+                    wait_for("loop end", lambda: not push("get_running_state", timeout=10).get("isRunning"),
+                             timeout=30)
+            plc = push("get_plc_plan", timeout=10)
+            log("fault: renderer plan %s | PLC %s at cell %s -> %s" % (
+                push("get_plan", timeout=10).get("plan"), plc.get("seg"), plc.get("cells_done"),
+                plc.get("remaining")))
+            time.sleep(rng.uniform(0.5, 2.0))
+            log("fault: reel settled at %s" % reel_pos())
+            bring_to_ready(a.home)
+            left = push("get_plan", timeout=10).get("plan")
+            if left:
+                push("run_cycle", timeout=10)
+                log("fault: RUN again")
+            t_run = time.time()
+            wait = rng.uniform(2.0, 6.0)
+    log("fault: gave up after 15 min")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--plc", default="192.168.1.70")
@@ -478,6 +574,12 @@ def main():
     ap.add_argument("--chaos", type=int, default=0,
                     help="press STOP at a random moment this many times, RUN again each time, then let the plan finish")
     ap.add_argument("--chaos-seed", type=int, default=1)
+    ap.add_argument("--fault-mid-reel", action="store_true",
+                    help="with --fault: trip while a tape move is running (GVL.TestFaultMidReel)")
+    ap.add_argument("--estop", action="store_true",
+                    help="with --fault-mid-reel: an E-stop, the reel stops where it is too")
+    ap.add_argument("--fault", type=int, default=0,
+                    help="drive the PLC into Error N times mid-run, recover (reset/power/ready) and RUN again")
     ap.add_argument("--path-test", action="store_true",
                     help="instead of production: stream short G1 moves (path_test) under each "
                          "combination of PLC packets/scan, TCP NoDelay and await/queue, and report")
@@ -588,6 +690,7 @@ def main():
             daemon({"cmd": "logout"})
         if a.speed != 100:
             log("speed:", push("set_speed", {"percent": a.speed}, timeout=10))
+        pos0 = reel_pos() if a.fault else None     # a new plan counts from cell 0
         log("run_cycle:", push("run_cycle", timeout=10))
         if a.speed_wobble:
             import threading
@@ -607,6 +710,10 @@ def main():
             threading.Thread(target=wobble, daemon=True).start()
         if a.chaos:
             chaos(a)                        # runs the plan to its end itself
+        elif a.fault:
+            fault(a)
+            reel_books(pos0, 0)
+            a.chaos = 1                     # skip the monitor loop below
 
         base = top_checks()                 # the mock log is per run, but be safe
         t_run = time.time()

@@ -15,6 +15,7 @@ import { runCycles } from '../lib/production/cycle';
 import { createSendWindow } from '../lib/production/window';
 import { runPathTest } from '../lib/production/pathTest';
 import { runAbortTest } from '../lib/production/abortTest';
+import { finishTapeMove, emptyNozzle } from '../lib/production/recovery';
 import type { PlanState } from '../lib/protocol';
 
 
@@ -815,6 +816,25 @@ export const CalibPage: React.FC<{
     // The PLC keeps its override while it runs; make it match the slider.
     try{ await send(cmd.SetOverride(_this.speedOverride ?? 1)); }catch(e:any){ console.warn("speed override sync failed",e?.message??e); }
 
+    // After a fault (servo / bus / E-stop) the tape may sit between two
+    // cells: finish that move first (lib/production/recovery.ts), so the
+    // plan below resumes from whole cells.
+    try{
+      const tape=await finishTapeMove(machine);
+      console.log("[RECOVERY] tape:",JSON.stringify(tape));
+      if(tape.state==='position_lost' || tape.state==='failed'){
+        const why = tape.state==='position_lost'
+          ? `料帶停在兩格之間且 PLC 重啟過，無法自動補完（這次前進已計 ${tape.counted}/${tape.cells} 格）：請手動對齊料帶後清除 (REEL_CLEAR) / tape stopped between cells and the PLC restarted`
+          : "料帶補走失敗 / tape recovery failed: "+tape.reason;
+        await runinng_checkpoint("ERROR",{errorString:why}).catch(()=>{});
+        _this.isRunning=false;
+        return;
+      }
+    }catch(e:any){
+      // An older PLC program without REEL_RESUME / reel_* in PLAN_GET.
+      console.warn("[RECOVERY] tape check failed:", e?.message??e);
+    }
+
     _this.plan_mismatch=0;
     try{
       console.log("[PLAN] sync:", await syncPlanWithPlc(send));
@@ -850,6 +870,9 @@ export const CalibPage: React.FC<{
 
             
     await send(cmd.G1({ "Z": safe_z,"A":0,Cor:cor,...getFeedSpeedConfig(1000) }))
+    // A part may still hang on the nozzle (a fault or a STOP mid-cycle):
+    // back into the feeder bowl with it, to be inspected again.
+    await emptyNozzle(machine);
     
     await send(cmd.G1({"X":44,"Y":89}))
     await send(cmd.G1({"X":-20,"Y":-22,...getFeedSpeedConfig(1000 ) }));
