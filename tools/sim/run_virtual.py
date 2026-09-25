@@ -209,6 +209,25 @@ def report_peaks():
         log(line)
 
 
+def abort_test_matrix(a):
+    """Peaks and redirect time for each way of turning toward the bin."""
+    cases = [("blend", 1.0), ("abort", 1.0), ("stepped", 4), ("stepped", 6)]
+    for delay in (30, 80):
+        for mode, scale in cases:
+            daemon({"cmd": "write", "symbol": "GVL.MotionPeakReset", "value": "TRUE"})
+            daemon({"cmd": "logout"})
+            r = push("abort_test", {"mode": mode, "delayMs": delay, "scale": scale if mode != "stepped" else 1,
+                                   "steps": int(scale) if mode == "stepped" else None, "feed": 1000}, timeout=60)
+            peaks = read_peaks()
+            acc = max(p[2][1] for p in peaks[:3])
+            jerk = max(p[2][2] for p in peaks[:3])
+            vel = max(p[2][0] for p in peaks[:3])
+            log("redirect: after %3d ms  %-7s x%.2f  redirect %4d ms  total %4d ms   delta joints max "
+                "|v| %6.0f  |a| %7.0f  |j| %9.0f  (motor %5.0f rpm %6.0f rev/s2)"
+                % (delay, mode, scale, r["redirectMs"], r["totalMs"], vel, acc, jerk,
+                   vel * 31 / 6.0, acc * 31 / 360.0))
+
+
 def path_jerk_matrix(a):
     """Blended circle (Cor 3): does the per-segment floor follow the jerk?
     feedConfig uses JERK = F*400 with ACC = F*100, i.e. 0.25 s to reach
@@ -391,6 +410,9 @@ def main():
     ap.add_argument("--peaks", action="store_true",
                     help="report each servo's peak |velocity|, |acceleration| and |jerk| over the run "
                          "(GVL.MotionPeak*, reset at RUN)")
+    ap.add_argument("--abort-test", action="store_true",
+                    help="instead of production: redirect toward the NG bin mid-move, abort (dynamics "
+                         "scaled) vs blend, with the servo peaks of each")
     ap.add_argument("--path-jerk", action="store_true",
                     help="with --path-test: vary the jerk ratio (JERK = F * ratio)")
     ap.add_argument("--path-motion", action="store_true",
@@ -453,6 +475,9 @@ def main():
 
         bring_to_ready(a.home)
         push("set_tab", {"tab": "Calib"}, timeout=10)
+        if a.abort_test:
+            abort_test_matrix(a)
+            return
         if a.path_test:
             if a.path_jerk:
                 path_jerk_matrix(a)

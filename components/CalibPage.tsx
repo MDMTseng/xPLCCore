@@ -14,6 +14,7 @@ import type { Machine } from '../lib/production/machine';
 import { runCycles } from '../lib/production/cycle';
 import { createSendWindow } from '../lib/production/window';
 import { runPathTest } from '../lib/production/pathTest';
+import { runAbortTest } from '../lib/production/abortTest';
 import type { PlanState } from '../lib/protocol';
 
 
@@ -753,6 +754,19 @@ export const CalibPage: React.FC<{
       mode:payload?.mode==='queue' ? 'queue' : 'await',
       cor:payload?.cor===undefined ? undefined : Number(payload.cor),
       jerkRatio:payload?.jerkRatio===undefined ? undefined : Number(payload.jerkRatio),
+    });
+  }, [sendTcpMsgPack]);
+
+  // Redirect test (lib/production/abortTest.ts): abort vs blend toward the
+  // NG bin, with scaled dynamics on the abort move.
+  useHarnessAction('abort_test', async (payload: any) => {
+    const {machine}=makeMachine();
+    return runAbortTest(machine,{
+      mode:payload?.mode==='blend' ? 'blend' : payload?.mode==='stepped' ? 'stepped' : 'abort',
+      steps:payload?.steps===undefined ? undefined : Number(payload.steps),
+      delayMs:Number(payload?.delayMs ?? 50),
+      scale:Number(payload?.scale ?? 1),
+      feed:Number(payload?.feed ?? 1000),
     });
   }, [sendTcpMsgPack]);
 
