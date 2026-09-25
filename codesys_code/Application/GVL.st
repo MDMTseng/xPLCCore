@@ -212,9 +212,17 @@ VAR_GLOBAL
 	   production. *)
 	TestFaultMidReel : INT := 0;
 	TestReelFrozen   : BOOL := FALSE;
+	(* Test hook: +- this much on the position the reel tracker reads,
+	   alternating every scan -- a real servo's standstill jitter, which
+	   a virtual axis does not have. 0 in production. *)
+	TestReelJitterMm : LREAL := 0;
 
 	(* Tape moves that stopped short of their target (the ReelMv block). *)
 	ReelInterruptCount : UDINT;
+	(* A tape move is under way (the reel tracker is on). The FSM keeps the
+	   reel powered in Error until it is over, so a fault on the arm lets
+	   the tape reach its cell (AxisGroupManager.Update, Error state). *)
+	ReelMoveInFlight   : BOOL;
 
 	MotionPeakReset : BOOL := FALSE;
 	MotionPeakVel   : ARRAY[0..5] OF LREAL;
@@ -693,6 +701,7 @@ VAR_GLOBAL RETAIN
 	ReelMvTravelMm : LREAL;    // travel so far, unwrapped
 	ReelMvCounted  : DINT;     // cells of it counted into PlanCellsDone
 	ReelMvPosLost  : BOOL;
+	ReelMvStopPos  : LREAL;    // reel position where the tracker closed the move
 END_VAR
 
 VAR_GLOBAL

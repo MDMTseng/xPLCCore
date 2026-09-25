@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Divider, Popconfirm, Popover, Typography } from 'antd';
+import { Button, Divider, Popconfirm, Popover, Typography, message } from 'antd';
 import { JoggingPad } from '../JoggingPad';
 import { Modal } from '../Modal';
 import type { COMCtrlObj } from '../types';
@@ -790,12 +790,30 @@ export const CalibPage: React.FC<{
     });
   }, [sendTcpMsgPack]);
 
-  const runAllObjects=(async(runinng_checkpoint:(checkpoint_name:string,data:any)=>Promise<any>)=>{
-
+  // One run, whatever ends it. isRunning is cleared here and only here: a
+  // throw in the set-up (start moves, emptyNozzle, BtmCheckCalib -- e.g.
+  // RUN before re-homing after a fault, or vision down) used to leave it
+  // set for good, and every later RUN was refused without a word
+  // (review 2026-09-26 #6). cycleEnded stops the input watchdog.
+  const runAllObjects=async(runinng_checkpoint:(checkpoint_name:string,data:any)=>Promise<any>)=>{
     if(_this.isRunning==true){
       throw new Error("runAllObjects isRunning is true");
     }
     _this.isRunning=true;
+    _this.cycleEnded=false;
+    try{
+      await runAllObjectsBody(runinng_checkpoint);
+    }catch(e:any){
+      // The loop's own failures are handled inside; this is the set-up.
+      console.error("run aborted in set-up:",e);
+      if(e instanceof Error) setRunningState(JSON.stringify({errorString:e.message}));
+    }finally{
+      _this.cycleEnded=true;
+      _this.isRunning=false;
+    }
+  };
+
+  const runAllObjectsBody=(async(runinng_checkpoint:(checkpoint_name:string,data:any)=>Promise<any>)=>{
     if(calibParams == null){
       _this.isRunning=false;
       return;
@@ -935,7 +953,7 @@ export const CalibPage: React.FC<{
       let readFailures=0;
       let lastPoll=0;
       try{
-        while(_this.run_cycle_stop!=true && !cycleEnded){
+        while(!cycleEnded && _this.cycleEnded!==true){
           if(!eventsOn || !monitor.known || Date.now()-lastPoll>=WATCHDOG.RECONCILE_MS){
             // A failed read used to throw out of this loop: the watchdog
             // died silently and the cycle ran on unguarded (review 2026-09-24).
@@ -1368,10 +1386,12 @@ export const CalibPage: React.FC<{
     return { resumed: true };
   }, []);
 
-  useHarnessAction('run_cycle', async () => {
+  // payload.force: click even while a run is on (what an operator can do;
+  // the button itself must then leave that run alone).
+  useHarnessAction('run_cycle', async (payload: any) => {
     const btn = _this.runButtonEl as HTMLButtonElement | undefined;
     if (!btn) throw new Error('run_cycle: RUN button not mounted');
-    if (_this.isRunning === true) return { started: false, reason: 'already_running' };
+    if (_this.isRunning === true && payload?.force !== true) return { started: false, reason: 'already_running' };
     btn.click();
     return { started: true };
   }, []);
@@ -1382,6 +1402,7 @@ export const CalibPage: React.FC<{
   // RUN during a long vision wait started a second loop next to the first.
   useHarnessAction('stop_cycle', async (payload: any) => {
     const t0 = Date.now();
+    console.warn('[STOP] requested (harness)');
     _this.run_cycle_stop = true;
     _this.stepMode_resolve?.();
     _this.stepMode_resolve = undefined;
@@ -1399,7 +1420,7 @@ export const CalibPage: React.FC<{
     if (!Array.isArray(plan) || plan.length === 0 || !plan.every((n: any) => Number.isInteger(n) && n !== 0)) {
       throw new Error('set_plan: plan must be a non-empty array of non-zero integers');
     }
-    setProductionPlan(plan);
+    if (!setProductionPlan(plan)) throw new Error('set_plan: a run is on');
     return { plan: _this.production_plan };
   }, []);
 
@@ -1474,7 +1495,13 @@ export const CalibPage: React.FC<{
     return { ok: true, plan };
   }
 
-  function setProductionPlan(plan: number[], planId: number = Date.now() % 2147483647) {
+  function setProductionPlan(plan: number[], planId: number = Date.now() % 2147483647): boolean {
+    // Not mid-run: the loop, the PLC's plan and its cell count all follow
+    // the plan the run started with (review 2026-09-26 #5).
+    if (_this.isRunning === true) {
+      message.warning(uiLang === 'zh' ? '生產中不能更換計畫，請先 STOP' : 'Stop the run before changing the plan');
+      return false;
+    }
     _this.production_plan = [...plan];
     _this.production_plan_original = [...plan];
     _this.production_plan_stageIndex = 0;
@@ -1482,6 +1509,7 @@ export const CalibPage: React.FC<{
     // "the PLC's progress on this plan" from "a plan the PLC never saw".
     _this.production_plan_id = planId;
     setProductionPlanTick((x) => x + 1);
+    return true;
   }
 
   // The PLC keeps the whole plan and the tape cells advanced since it was
@@ -1883,9 +1911,9 @@ export const CalibPage: React.FC<{
                             onClick={() => {
                               const nums = entry.split(',').map(Number);
                               if (nums.some(isNaN)) return;
+                              if (!setProductionPlan(nums)) return;
                               setPlanSegments(planToSegments(nums));
                               setSelectedPlanIdx(0);
-                              setProductionPlan(nums);
                             }}
                             style={{
                               cursor: 'pointer',
@@ -2024,7 +2052,7 @@ export const CalibPage: React.FC<{
                     onClick={() => {
                       const res = segmentsToPlan(planSegments);
                       if (!res.ok) return;
-                      setProductionPlan(res.plan);
+                      if (!setProductionPlan(res.plan)) return;
                       saveRecentSetup(res.plan.join(','));
                     }}
                   >
@@ -2074,6 +2102,13 @@ export const CalibPage: React.FC<{
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
           <button ref={(el) => { _this.runButtonEl = el; }} onClick={async() =>{
+        // A run is still on (e.g. a STOP not yet complete): leave its flags
+        // alone -- clearing run_cycle_stop here cancelled that STOP.
+        if(_this.isRunning===true){
+          console.warn("[RUN] ignored: a run is still on (stop requested:",_this.run_cycle_stop,")");
+          message.info(uiLang==='zh' ? '上一輪還在結束中' : 'The last run is still ending');
+          return;
+        }
         _this.run_cycle_stop=false;
         _this.visionTimeouts=0;
 
@@ -2124,7 +2159,11 @@ export const CalibPage: React.FC<{
             // segment was done again -- 2 extra empty cells in a chaos test,
             // the owner's "+2 after stop" (2026-09-24). It could also stop
             // with a part on the nozzle.
-            if(_this.run_cycle_stop==true && checkpoint_name=="cycle_start")
+            // STOP also ends a run parked on an error hold (the hold would
+            // otherwise park again, and only a reload got out of it). A
+            // part on the nozzle is emptied and the plan re-synced from
+            // the PLC at the next RUN.
+            if(_this.run_cycle_stop==true && (checkpoint_name=="cycle_start" || _this.current_error!=undefined))
             {
               reject();
               return;

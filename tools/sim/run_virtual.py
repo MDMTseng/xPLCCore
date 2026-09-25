@@ -322,6 +322,70 @@ def glitch(a):
     return True
 
 
+def ui_guards(a):
+    """The page's run guards (review 2026-09-26 #5-#7, #9), then the plan to
+    its end -- plan_check verifies the books after all the interruptions."""
+    rs = lambda: push("get_running_state", timeout=10)
+    results = []
+
+    def check(name, ok, detail=""):
+        results.append(ok)
+        log("guards: %-44s %s %s" % (name, "OK" if ok else "FAIL", detail))
+
+    # #6: RUN with the FSM in Error: the set-up fails; the run must end
+    push("enter_error", timeout=10)
+    time.sleep(0.5)
+    push("run_cycle", timeout=10)
+    try:
+        wait_for("run to end", lambda: not rs().get("isRunning"), timeout=30, period=0.5)
+        st = rs()
+        check("RUN in Error ends, isRunning cleared", True, repr(st.get("runningState"))[:90])
+    except Exception:
+        check("RUN in Error ends, isRunning cleared", False)
+    bring_to_ready(a.home)
+
+    # #5: the plan cannot be replaced mid-run
+    push("run_cycle", timeout=10)
+    time.sleep(6)
+    try:
+        push("set_plan", {"plan": [3]}, timeout=10)
+        check("set_plan refused mid-run", False)
+    except RuntimeError as e:
+        check("set_plan refused mid-run", "a run is on" in str(e))
+
+    # #7: STOP, then RUN before the STOP completes: RUN ignored, STOP
+    # completes. Step mode parks the loop so the STOP is still pending when
+    # RUN is pressed (the harness round trip is slower than a cycle).
+    push("set_step_mode", {"on": True}, timeout=10)
+    time.sleep(2)
+    push("stop_cycle", {"wait_ms": 0}, timeout=10)
+    push("run_cycle", {"force": True}, timeout=10)
+    time.sleep(1)
+    still_on = rs().get("isRunning")
+    push("set_step_mode", {"on": False}, timeout=10)
+    try:
+        wait_for("STOP to complete", lambda: not rs().get("isRunning"), timeout=30, period=0.3)
+        check("RUN during STOP ignored, STOP completes", bool(still_on), "(run still on when RUN was pressed: %s)" % still_on)
+    except Exception:
+        check("RUN during STOP ignored, STOP completes", False)
+
+    # #9: STOP ends a run held on an error (a protrusion glitch)
+    push("run_cycle", timeout=10)
+    time.sleep(6)
+    _w("TestDiBurstPin", "11"); _w("TestDiBurstPeriodMs", "3"); _w("TestDiBurstToggles", "2")
+    daemon({"cmd": "logout"})
+    try:
+        wait_for("the hold", lambda: rs().get("currentError"), timeout=10, period=0.2)
+        r = push("stop_cycle", timeout=20)
+        check("STOP ends a run held on an error", r.get("stopped") is True, repr(r))
+    except Exception as e:
+        check("STOP ends a run held on an error", False, str(e))
+
+    # and the plan to its end
+    push("run_cycle", timeout=10)
+    log("guards: %s" % ("PASS" if all(results) else "FAIL"))
+
+
 def override_check():
     """Same square (4 stop-to-stop moves of ~42 mm, and a blended 24-gon)
     at 100 % and 30 %: how do the peaks scale?"""
@@ -647,6 +711,10 @@ def main():
     ap.add_argument("--peaks", action="store_true",
                     help="report each servo's peak |velocity|, |acceleration| and |jerk| over the run "
                          "(GVL.MotionPeak*, reset at RUN)")
+    ap.add_argument("--ui-guards", action="store_true",
+                    help="check the page's run guards (RUN in Error, plan lock, RUN during STOP, STOP in a hold), then finish the plan")
+    ap.add_argument("--reel-jitter", type=float, default=0,
+                    help="+- this many mm on the reel position the PLC tracker reads (a real servo at standstill)")
     ap.add_argument("--glitch-at", type=float, default=0,
                     help="N s into the run, glitch the protrusion sensor for --glitch-ms; expect a hold, then resume")
     ap.add_argument("--glitch-ms", type=int, default=3)
@@ -721,6 +789,9 @@ def main():
 
         bring_to_ready(a.home)
         push("set_tab", {"tab": "Calib"}, timeout=10)
+        _w("TestReelJitterMm", repr(a.reel_jitter)); daemon({"cmd": "logout"})
+        if a.reel_jitter:
+            log("reel jitter: +-%g mm" % a.reel_jitter)
         if a.override_probe:
             override_probe()
             return
@@ -756,7 +827,10 @@ def main():
         if a.speed != 100:
             log("speed:", push("set_speed", {"percent": a.speed}, timeout=10))
         pos0 = reel_pos() if a.fault else None     # a new plan counts from cell 0
-        log("run_cycle:", push("run_cycle", timeout=10))
+        if a.ui_guards:
+            ui_guards(a)
+        else:
+            log("run_cycle:", push("run_cycle", timeout=10))
         if a.speed_wobble:
             import threading
             def wobble():

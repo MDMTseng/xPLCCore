@@ -192,9 +192,13 @@ CASE _eState OF
         END_IF
         
     E_RobotState.Error:
+        // The reel stays powered while a tape move is under way
+        // (GVL.ReelMoveInFlight): cutting it mid-move leaves the tape
+        // between two cells. Its own fault or an E-stop stops it anyway;
+        // the tracker then closes the move and the power drops.
         IF(uidx=-1)THEN
             GroupPower_Flag := FALSE;
-            bReelPowerReq   := FALSE;
+            bReelPowerReq   := GVL.ReelMoveInFlight;
 
             // PH#6: clear the coord-system gate on Error entry too, not
             // just on UnInited. Without this, a Ready -> Error -> Ready
@@ -212,10 +216,10 @@ CASE _eState OF
         IF(uidx=0)THEN
             // Hold power commands low every scan while in Error
             GroupPower_Flag := FALSE;
-            bReelPowerReq   := FALSE;
+            bReelPowerReq   := GVL.ReelMoveInFlight;
             SMC_GroupDisable(AxisGroup:=_agAxisGroup, Execute:=TRUE);
             SMC_GroupReset(AxisGroup:=_agAxisGroup, Execute:=TRUE);
-            fbResetReel(Axis:= _axReel, Execute:=TRUE);
+            fbResetReel(Axis:= _axReel, Execute:=NOT GVL.ReelMoveInFlight);
         END_IF
 END_CASE
 

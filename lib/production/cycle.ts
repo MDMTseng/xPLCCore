@@ -21,7 +21,7 @@
 // step mode and the harness depend on them.
 
 import { cmd } from '../protocol';
-import { GEOMETRY, INSPECTION } from './params';
+import { FEEDER, GEOMETRY, INSPECTION, NOZZLE } from './params';
 import { EVT, IO_PINS, camTrig, bit } from './io';
 import type { Machine } from './machine';
 import { nextCycleAction, leadingOkRun } from './plan';
@@ -72,6 +72,11 @@ type CycleState = {
   parts: FeederPart[];
   /** The arm is at travel height (after a toss or an NG pick). */
   armAtSafeZ: boolean;
+  /** Failures in a row, each capped (params): refills that found no part,
+   *  parts tossed instead of placed, NG pick-outs from the tape. */
+  emptyRefills: number;
+  tossesInARow: number;
+  ngPicksInARow: number;
 };
 
 const BIN_LOCATION: Record<Bin, { X: number; Y: number; Z: number }> = {
@@ -94,7 +99,13 @@ async function timed<T>(p: Promise<T>, name: string): Promise<T> {
 
 export async function runCycles(ctx: CycleContext): Promise<CycleResult> {
   const { m, checkpoint } = ctx;
-  const s: CycleState = { nextAdvance: 0, placedUncounted: 0, packed: 0, parts: [], armAtSafeZ: false };
+  const s: CycleState = { nextAdvance: 0, placedUncounted: 0, packed: 0, parts: [], armAtSafeZ: false,
+    emptyRefills: 0, tossesInARow: 0, ngPicksInARow: 0 };
+  // Stop the run on something that would otherwise repeat forever.
+  const stop = async (errorString: string): Promise<CycleResult> => {
+    try { await checkpoint('ERROR', { errorString }); } catch { /* the page ends the run */ }
+    return { packed: s.packed, ended: 'error_stop' };
+  };
 
   const tape = async (cells: number, kind: 'pack' | 'empty',
       trigger?: { motion_id_offset: number; motion_progress: number }) => {
@@ -165,9 +176,13 @@ export async function runCycles(ctx: CycleContext): Promise<CycleResult> {
       s.pendingFeeder = undefined;
     }
     if (s.parts.length === 0) {
+      if (++s.emptyRefills > FEEDER.MAX_EMPTY_REFILLS) {
+        return stop(`供料盤連續 ${FEEDER.MAX_EMPTY_REFILLS} 次找不到可取的料 / no pickable part after ${FEEDER.MAX_EMPTY_REFILLS} refills`);
+      }
       s.parts = await refillFeeder(m);
       continue;
     }
+    s.emptyRefills = 0;
 
     // ── Pick.
     const part = s.parts[0];
@@ -219,6 +234,7 @@ export async function runCycles(ctx: CycleContext): Promise<CycleResult> {
     // ── Place or toss the held part.
     const angle = INSPECTION.BASE_ANGLE_DEG + insp.angleOffset;
     if (J.place) {
+      s.tossesInARow = 0;
       m.mark(EVT.PLACE);
       s.placedUncounted++;
       await checkpoint('place object', i);
@@ -231,6 +247,9 @@ export async function runCycles(ctx: CycleContext): Promise<CycleResult> {
       await tossTo(m, BIN_LOCATION[J.partBin]);
       await checkpoint('NG_COUNT', { class: BIN_CLASS[J.partBin], count: 1 });
       s.armAtSafeZ = true;
+      if (++s.tossesInARow > INSPECTION.MAX_TOSSES_IN_A_ROW) {
+        return stop(`連續 ${INSPECTION.MAX_TOSSES_IN_A_ROW} 顆沒放進料帶（最後原因：${J.reasons.join(', ')}）/ ${INSPECTION.MAX_TOSSES_IN_A_ROW} parts in a row tossed`);
+      }
     }
 
     // ── An NG part in the tape: pick it out (only when the corrections
@@ -241,6 +260,11 @@ export async function runCycles(ctx: CycleContext): Promise<CycleResult> {
       await pickFromTape(m, GEOMETRY.SLOT_LOCATION.X + ngOffset + J.holeOffset.X, GEOMETRY.SLOT_LOCATION.Y + J.holeOffset.Y);
       await tossTo(m, BIN_LOCATION[J.tapeNgBin]);
       await checkpoint('NG_COUNT', { class: BIN_CLASS[J.tapeNgBin], count: 1 });
+      if (++s.ngPicksInARow > NOZZLE.MAX_NG_PICKS_IN_A_ROW) {
+        return stop(`料帶 NG 連續夾了 ${NOZZLE.MAX_NG_PICKS_IN_A_ROW} 次仍在 / NG part in the tape not removed after ${NOZZLE.MAX_NG_PICKS_IN_A_ROW} picks`);
+      }
+    } else {
+      s.ngPicksInARow = 0;
     }
     s.armAtSafeZ = true;
   }

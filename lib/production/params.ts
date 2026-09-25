@@ -89,6 +89,10 @@ export const TAPE = {
 };
 
 export const INSPECTION = {
+  /** Parts in a row tossed instead of placed before the run stops: a
+   *  correction that keeps failing (hole not found, bottom camera out of
+   *  calibration) otherwise picks and tosses forever. */
+  MAX_TOSSES_IN_A_ROW: 15,
   /** A-axis angle (deg) at which the part is shown to the cameras. */
   BASE_ANGLE_DEG: 90,
   /** Fixed A trim (deg) added to the bottom-camera angle correction. */
@@ -107,6 +111,9 @@ export const INSPECTION = {
 };
 
 export const NOZZLE = {
+  /** Cycles in a row that pick an NG part out of the tape before the run
+   *  stops (a part the nozzle cannot get out would be tried forever). */
+  MAX_NG_PICKS_IN_A_ROW: 4,
   /** Dwell (s) after suction on before lifting a part from the feeder. */
   PICK_DWELL_S: 0.02,
   /** Dwell (s) before releasing a part in the tape. */
@@ -123,6 +130,9 @@ export const NOZZLE = {
 };
 
 export const FEEDER = {
+  /** Refills in a row that find no part to pick before the run stops
+   *  (plate empty, parts clumped, feeder not responding). */
+  MAX_EMPTY_REFILLS: 5,
   /** Vibration pulse (ms) that spreads the parts. */
   SPREAD_VIB_MS: 160,
   /** Pause (ms) after the vibration before braking. */

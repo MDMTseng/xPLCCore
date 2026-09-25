@@ -274,12 +274,18 @@ PROGRAM AxisGroupSM
         // Reel move tracker (GVL.ReelMv*): counts cells as the reel passes them.
         ReelTrkActive   : BOOL;
         ReelTrkStarted  : BOOL;        // the reel has moved since the dispatch
-        ReelTrkStill    : INT;         // consecutive scans without movement
+        ReelTrkStill    : INT;         // consecutive scans inside REEL_STILL_BAND_MM
+        ReelTrkAnchor   : LREAL;       // travel where the reel last settled
+        ReelTrkPos      : LREAL;       // reel position this scan (+ test jitter)
+        ReelTrkJitterSign : BOOL;
         ReelTrkT0       : LINT;
         ReelTrkLastPos  : LREAL;
         ReelTrkD        : LREAL;
         ReelTrkNew      : DINT;
         REEL_STILL_SCANS      : INT := 50;       // 50 ms still = the move is over
+        REEL_STILL_BAND_MM    : LREAL := 0.02;   // "still": a real servo holding position jitters by a count or so
+        REEL_TRACK_MAX_MS     : LINT := 20000;   // a move not over by then is closed as it stands
+        REEL_POS_TOL_MM       : LREAL := 0.2;    // REEL_RESUME: the reel must still be where it stopped
         REEL_START_TIMEOUT_MS : LINT := 1000;    // never started (fault at dispatch)
         REEL_CELL_EPS_MM      : LREAL := 0.05;   // a cell counts this close to its boundary
         REEL_MAX_STEP_MM      : LREAL := 5.0;    // more per scan = the position jumped
@@ -1110,8 +1116,19 @@ PROGRAM AxisGroupSM
     // may still finish its move, or stop anywhere (E-stop), and the count
     // must follow the tape, not the command.
     IF ReelTrkActive THEN
-        ReelTrkD := reelpullmotor.fActPosition - ReelTrkLastPos;
-        ReelTrkLastPos := reelpullmotor.fActPosition;
+        // GVL.TestReelJitterMm (test hook): what a real servo's position
+        // looks like at standstill, +-one count every scan.
+        ReelTrkPos := reelpullmotor.fActPosition;
+        IF GVL.TestReelJitterMm > 0 THEN
+            ReelTrkJitterSign := NOT ReelTrkJitterSign;
+            IF ReelTrkJitterSign THEN
+                ReelTrkPos := ReelTrkPos + GVL.TestReelJitterMm;
+            ELSE
+                ReelTrkPos := ReelTrkPos - GVL.TestReelJitterMm;
+            END_IF;
+        END_IF;
+        ReelTrkD := ReelTrkPos - ReelTrkLastPos;
+        ReelTrkLastPos := ReelTrkPos;
         IF (reelpullmotor.fPositionPeriod > 0)
            AND (ABS(ReelTrkD) > reelpullmotor.fPositionPeriod / 2) THEN
             // modulo wrap
@@ -1124,10 +1141,15 @@ PROGRAM AxisGroupSM
         IF ABS(ReelTrkD) > REEL_MAX_STEP_MM THEN
             // not a move: the position was reset (drive / bus restart)
             GVL.ReelMvPosLost := TRUE;
+            GVL.ReelMvStopPos := reelpullmotor.fActPosition;
             ReelTrkActive := FALSE;
         ELSE
             GVL.ReelMvTravelMm := GVL.ReelMvTravelMm + ReelTrkD;
-            IF ABS(ReelTrkD) > 1.0E-6 THEN
+            // Still = within REEL_STILL_BAND_MM of where it last settled
+            // (not "no change at all": a real servo holding position
+            // jitters by an encoder count, a virtual axis does not).
+            IF ABS(GVL.ReelMvTravelMm - ReelTrkAnchor) > REEL_STILL_BAND_MM THEN
+                ReelTrkAnchor := GVL.ReelMvTravelMm;
                 ReelTrkStill := 0;
                 ReelTrkStarted := TRUE;
             ELSIF ReelTrkStill < 30000 THEN
@@ -1143,11 +1165,15 @@ PROGRAM AxisGroupSM
                     GVL.ReelMvCounted := GVL.ReelMvCounted + ReelTrkNew;
                 END_IF;
             END_IF;
-            IF (ReelTrkStill >= REEL_STILL_SCANS)
-               AND ((ReelTrkStarted AND NOT (reelMoveRelative.Busy OR reelMoveRelative2.Busy))
-                    OR ((RuntimeMs - ReelTrkT0) > REEL_START_TIMEOUT_MS)) THEN
-                // The reel has stopped: at the target, or short of it.
+            IF ((ReelTrkStill >= REEL_STILL_SCANS)
+                AND ((ReelTrkStarted AND NOT (reelMoveRelative.Busy OR reelMoveRelative2.Busy))
+                     OR ((RuntimeMs - ReelTrkT0) > REEL_START_TIMEOUT_MS)))
+               OR ((RuntimeMs - ReelTrkT0) > REEL_TRACK_MAX_MS) THEN
+                // The reel has stopped: at the target, or short of it
+                // (or the move ran past REEL_TRACK_MAX_MS: closed as it
+                // stands rather than holding every tape command forever).
                 ReelTrkActive := FALSE;
+                GVL.ReelMvStopPos := reelpullmotor.fActPosition;
                 IF (GVL.ReelMvCells <= 0)
                    OR ((GVL.ReelMvCounted >= GVL.ReelMvCells)
                        AND (GVL.ReelMvTravelMm >= DINT_TO_LREAL(GVL.ReelMvCells) * GVL.ReelMvCellMm - REEL_CELL_EPS_MM)) THEN
@@ -1158,6 +1184,8 @@ PROGRAM AxisGroupSM
             END_IF;
         END_IF;
     END_IF;
+
+    GVL.ReelMoveInFlight := ReelTrkActive;
 
     // ---- TAPE_CYCLE sequence (registered in ProcessMotionPacket) ----
     IF TapeActive THEN
@@ -1197,6 +1225,7 @@ PROGRAM AxisGroupSM
                     ReelTrkActive := TRUE;
                     ReelTrkStarted := FALSE;
                     ReelTrkStill := 0;
+                    ReelTrkAnchor := 0;
                     ReelTrkT0 := RuntimeMs;
                     ReelTrkLastPos := reelpullmotor.fActPosition;
                     // same dispatch as ReelGo

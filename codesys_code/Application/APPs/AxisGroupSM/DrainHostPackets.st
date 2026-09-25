@@ -34,6 +34,7 @@ VAR
 
     // REEL_RESUME / REEL_CLEAR scratch.
     ReelRestMm : LREAL;
+    ReelPosDelta : LREAL;
     ReelClearN : DINT;
 
     // TRUE while the packet being handled came from GVL.sysinfo_buf
@@ -467,6 +468,21 @@ END_IF;
                 ResponsePacketPointer^.ele_count := 0;
                 ReelRestMm := DINT_TO_LREAL(GVL.ReelMvCells) * GVL.ReelMvCellMm - GVL.ReelMvTravelMm;
                 CommandAck := FALSE;
+                // Has the reel moved since the tracker closed (bus restart,
+                // the drive's own fault reaction, a manual ReelGo)? Then the
+                // recorded travel no longer says where the tape is.
+                ReelPosDelta := reelpullmotor.fActPosition - GVL.ReelMvStopPos;
+                IF reelpullmotor.fPositionPeriod > 0 THEN
+                    WHILE ReelPosDelta > reelpullmotor.fPositionPeriod / 2 DO
+                        ReelPosDelta := ReelPosDelta - reelpullmotor.fPositionPeriod;
+                    END_WHILE;
+                    WHILE ReelPosDelta < -reelpullmotor.fPositionPeriod / 2 DO
+                        ReelPosDelta := ReelPosDelta + reelpullmotor.fPositionPeriod;
+                    END_WHILE;
+                END_IF;
+                IF GVL.ReelMvOpen AND NOT ReelTrkActive AND (ABS(ReelPosDelta) > REEL_POS_TOL_MM) THEN
+                    GVL.ReelMvPosLost := TRUE;
+                END_IF;
                 IF NOT GVL.ReelMvOpen THEN
                     CommandAck := TRUE;
                     ReelRestMm := 0;
@@ -500,11 +516,13 @@ END_IF;
                     ReelTrkActive := TRUE;
                     ReelTrkStarted := FALSE;
                     ReelTrkStill := 0;
+                    ReelTrkAnchor := GVL.ReelMvTravelMm;
                     ReelTrkT0 := RuntimeMs;
                     ReelTrkLastPos := reelpullmotor.fActPosition;
                     CommandAck := TRUE;
                 END_IF;
                 MessagePackerFb.PackKvReal(ADR('rest_mm'), LREAL_TO_REAL(ReelRestMm));
+                MessagePackerFb.PackKvReal(ADR('moved_mm'), LREAL_TO_REAL(ReelPosDelta));
             ELSIF (CommandType = 'REEL_CLEAR') THEN
                 // Close an interrupted tape move without moving (the
                 // operator aligned the tape by hand): count `count` more of
