@@ -152,6 +152,28 @@ export const FEEDER = {
   REFILL_VIB_MS: 700,
 };
 
+/** Jogging from the drag pad (lib/jog.ts). */
+export const JOG = {
+  /** A step toward the pad's target every TICK_MS (one G1 in flight). */
+  TICK_MS: 50,
+  /** Jog speed (mm/s); a step is at most F * TICK_MS long, so the arm
+   *  follows about a tick behind the pad. */
+  F: 300,
+  /** Short ramps: the steps start and stop with the pad. 3000 / 60000
+   *  was too soft: each short step took longer than a tick, the steps
+   *  queued and the arm ran 1.7 s behind the pad (sim, 2026-09-26). The
+   *  jerk is production's at feed 1000 (DYNAMICS). */
+  ACC: 20000,
+  JERK: 400000,
+  /** Blend between the steps (mm), so they run as one motion. */
+  COR: 0.5,
+  /** Below this the arm is at the target (mm). */
+  MIN_STEP_MM: 0.005,
+  /** Pad pixels -> mm: XY scales with the pointer speed (slow = fine),
+   *  up to this factor at POINTER_FULL_SPEED px/s; Z is linear. */
+  POINTER_FULL_SPEED: 300,
+};
+
 export const VISION = {
   /** A vision reply that does not come within this time is a timeout. */
   REPLY_TIMEOUT_MS: 10000,

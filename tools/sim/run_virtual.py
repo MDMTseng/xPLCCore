@@ -423,6 +423,18 @@ def vision_drop(a):
     log("vision drop: link back, RUN -> %s" % push("run_cycle", timeout=10))
 
 
+def jog_test():
+    """The jog pad: the same synthetic drag through the streamer and the
+    old one-G1-per-event pad, with the servo peaks of each."""
+    for mode in ("legacy", "stream", "legacy", "stream"):
+        _w("MotionPeakReset", "TRUE"); daemon({"cmd": "logout"})
+        r = push("jog_test", {"mode": mode, "hz": 120, "seconds": 3, "radius": 20}, timeout=120)
+        pk = read_peaks()
+        v = max(p[2][0] for p in pk[:3]); acc = max(p[2][1] for p in pk[:3]); jerk = max(p[2][2] for p in pk[:3])
+        log("jog: %-6s events %d  G1 %4d  dropped %4d  settle %5d ms  end error %6.2f mm  |v| %5.0f |a| %7.0f |j| %9.0f" % (
+            mode, r["events"], r["g1"], r["dropped"], r["settleMs"], r["endErrorMm"], v, acc, jerk))
+
+
 def override_check():
     """Same square (4 stop-to-stop moves of ~42 mm, and a blended 24-gon)
     at 100 % and 30 %: how do the peaks scale?"""
@@ -760,6 +772,8 @@ def main():
     ap.add_argument("--glitch-at", type=float, default=0,
                     help="N s into the run, glitch the protrusion sensor for --glitch-ms; expect a hold, then resume")
     ap.add_argument("--glitch-ms", type=int, default=3)
+    ap.add_argument("--jog-test", action="store_true",
+                    help="instead of production: compare the jog streamer with the old jog pad")
     ap.add_argument("--di-test", action="store_true",
                     help="instead of production: check the DI change events (SYS DI_WATCH)")
     ap.add_argument("--override-probe", action="store_true",
@@ -839,6 +853,9 @@ def main():
             return
         if a.di_test:
             di_test()
+            return
+        if a.jog_test:
+            jog_test()
             return
         if a.override_check:
             override_check()

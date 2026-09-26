@@ -15,6 +15,7 @@ import { runCycles } from '../lib/production/cycle';
 import { createSendWindow } from '../lib/production/window';
 import { runPathTest } from '../lib/production/pathTest';
 import { runAbortTest } from '../lib/production/abortTest';
+import { runJogTest } from '../lib/jogTest';
 import { finishTapeMove, emptyNozzle } from '../lib/production/recovery';
 import { InputMonitor, TAPE_SENSOR_PINS, checkTapeSensors, type DiEvent } from '../lib/production/inputs';
 import type { PlanState } from '../lib/protocol';
@@ -810,6 +811,18 @@ export const CalibPage: React.FC<{
       mode:payload?.mode==='queue' ? 'queue' : 'await',
       cor:payload?.cor===undefined ? undefined : Number(payload.cor),
       jerkRatio:payload?.jerkRatio===undefined ? undefined : Number(payload.jerkRatio),
+    });
+  }, [sendTcpMsgPack]);
+
+  // Jog test (lib/jogTest.ts): a synthetic drag through the jog streamer
+  // or the old one-G1-per-event pad.
+  useHarnessAction('jog_test', async (payload: any) => {
+    const {send}=makeMachine();
+    return runJogTest(send,{
+      mode:payload?.mode==='legacy' ? 'legacy' : 'stream',
+      hz:Number(payload?.hz ?? 120),
+      seconds:Number(payload?.seconds ?? 3),
+      radius:Number(payload?.radius ?? 20),
     });
   }, [sendTcpMsgPack]);
 

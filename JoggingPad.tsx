@@ -1,5 +1,6 @@
-import React, { useCallback, useRef, useState } from 'react';
-import { cmd } from './lib/protocol';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { JogStreamer, type XYZ } from './lib/jog';
+import { JOG } from './lib/production/params';
 
 // Define the props for the RelativeMovePad component
 interface RelativeMovePadProps {
@@ -11,6 +12,7 @@ interface RelativeMovePadProps {
   onRelativeMove: (offset_x: number, offset_y: number, dx: number, dy: number) => void;
 
   onPressDown: () => void;
+  onRelease?: () => void;
   style?: React.CSSProperties;
   className?: string;
   children?: React.ReactNode;
@@ -25,6 +27,7 @@ export const RelativeMovePad: React.FC<RelativeMovePadProps> = ({
   id,
   onRelativeMove,
   onPressDown,
+  onRelease,
   style,
   className,
   children,
@@ -55,6 +58,7 @@ export const RelativeMovePad: React.FC<RelativeMovePadProps> = ({
     if (!isDraggingRef.current) return;
 
     isDraggingRef.current = false;
+    onRelease?.();
 
     // Release pointer capture to allow other elements to receive pointer events
     padRef.current?.releasePointerCapture(event.pointerId);
@@ -67,7 +71,7 @@ export const RelativeMovePad: React.FC<RelativeMovePadProps> = ({
     if (padRef.current) {
       padRef.current.style.cursor = 'grab';
     }
-  }, [handlePointerMove]); // Dependency: handlePointerMove
+  }, [handlePointerMove, onRelease]);
 
   // Handler for the initial press
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -119,117 +123,68 @@ interface JoggingPadProps {
     sendTcpMsgPack: (data: any, await_tracking?: boolean) => Promise<any> | boolean | undefined;
 }
 
+// Drag pads for XY (black) and Z (red). The pads only turn pointer deltas
+// into millimetres; lib/jog.ts streams them to the PLC as blended steps.
 export const JoggingPad: React.FC<JoggingPadProps> = ({ speedFactor_XY,speedFactor_Z,sendTcpMsgPack }) => {
+  const [current_location, setCurrentLocation] = useState<XYZ|undefined>(undefined);
+  const [error, setError] = useState<string|undefined>(undefined);
+  const lpRef = useRef({ speed: 0, t: 0 });
 
-      
-    const _this = useRef<any>({
-    }).current;
+  const streamer = useMemo(() => new JogStreamer(
+    (pkt) => {
+      const r = sendTcpMsgPack(pkt);
+      if (r === false || r === undefined) return Promise.reject(new Error('PLC not connected'));
+      return Promise.resolve(r);
+    },
+    (p) => setCurrentLocation(p),
+    (e: any) => setError(String(e?.message ?? e)),
+  ), [sendTcpMsgPack]);
+  useEffect(() => () => streamer.stop(), [streamer]);
 
-    const [current_location, setCurrentLocation] = useState<{X:number,Y:number,Z:number}|undefined>(undefined);
+  const press = () => {
+    setError(undefined);
+    lpRef.current = { speed: 0, t: Date.now() };
+    void streamer.press();
+  };
 
-    //console.log("current_location",current_location);
-    return (
-        <div style={{width:"100%",height:"100%", display:"flex", gap:"10px"}}>
-
-          <div style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            background: 'rgba(0,0,0,0.5)',
-            color: 'white',
-            padding: '5px',
-            zIndex: 1000
-          }}>
-            {current_location
-              ? `X: ${current_location.X.toFixed(3)}, Y: ${current_location.Y.toFixed(3)}, Z: ${current_location.Z.toFixed(3)}`
-              : 'undefined'}
-          </div>
-         <RelativeMovePad id="jog_xy" style={{background:"black", flex:"1"}}
-         onPressDown={async()=>{
-          _this.jog_base_location=undefined;                
-          await sendTcpMsgPack(cmd.WaitForMotionStop())
-          _this.jog_base_location = await sendTcpMsgPack(cmd.ReadLatestCmdLocation())
-          _this.jog_wait_prev_cmd=false;
-
-          _this.LP_Speed=0;
-          _this.LP_pre_time=Date.now();
-         }}
-         onRelativeMove={async(offset_x: number, offset_y: number,dx:number,dy:number)=>{
-          if(_this.jog_base_location===undefined || _this.jog_wait_prev_cmd==true){
-            return;
-          }
-          //console.log(offset_x,offset_y);
-          
-          let dxy_dist=Math.sqrt(dx*dx+dy*dy);
-          let current_time=Date.now();
-          let time_diff=current_time-_this.LP_pre_time;
-          _this.LP_pre_time=current_time;
-
-          let speed=dxy_dist/time_diff*1000;//DISTANCE PER SECOND
-          _this.LP_Speed=_this.LP_Speed*0.9+speed*0.1;
-
-          let adj_alpha=0;//0~1
-          let pointer_speed_cap=300;
-          if(_this.LP_Speed>pointer_speed_cap){
-            adj_alpha=1;
-          }
-          else
-          {
-            adj_alpha=_this.LP_Speed/pointer_speed_cap;
-          }
-
-          let multiplier=adj_alpha*speedFactor_XY;
-
-
-
-          console.log("speed",speed,time_diff,dxy_dist,"multiplier",multiplier);
-
-          _this.jog_base_location.X += dx*multiplier;
-          _this.jog_base_location.Y += -dy*multiplier;
-
-
-
-
-          _this.jog_wait_prev_cmd=true;
-          await sendTcpMsgPack(cmd.G1({
-            X: _this.jog_base_location.X,
-            Y: _this.jog_base_location.Y,
-            Z: _this.jog_base_location.Z,
-          }))
-
-          setCurrentLocation({..._this.jog_base_location});
-          _this.jog_wait_prev_cmd=false;
-         }}
-         />
-
-        <RelativeMovePad id="jog_z" style={{background:"red", width:"30px"}}
-         onPressDown={async()=>{
-          _this.jog_base_location=undefined;                
-          await sendTcpMsgPack(cmd.WaitForMotionStop())
-          _this.jog_base_location = await sendTcpMsgPack(cmd.ReadLatestCmdLocation())
-          _this.jog_wait_prev_cmd=false;
-         }}
-         onRelativeMove={async(offset_x: number, offset_y: number,dx:number,dy:number)=>{
-          if(_this.jog_base_location===undefined || _this.jog_wait_prev_cmd==true){
-            return;
-          }
-          _this.jog_base_location.Z -= dy*speedFactor_Z;
-          _this.jog_wait_prev_cmd=true;
-          await sendTcpMsgPack(cmd.G1({
-            X: _this.jog_base_location.X,
-            Y: _this.jog_base_location.Y,
-            Z: _this.jog_base_location.Z,
-          }))
-          setCurrentLocation({..._this.jog_base_location});
-
-          _this.jog_wait_prev_cmd=false;
-         }}
-         />
-
-
-
-        </div>
-    );
+  return (
+    <div style={{width:"100%",height:"100%", display:"flex", gap:"10px"}}>
+      <div style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        background: 'rgba(0,0,0,0.5)',
+        color: 'white',
+        padding: '5px',
+        zIndex: 1000
+      }}>
+        {error ? `jog stopped: ${error}`
+          : current_location
+            ? `X: ${current_location.X.toFixed(3)}, Y: ${current_location.Y.toFixed(3)}, Z: ${current_location.Z.toFixed(3)}`
+            : 'undefined'}
+      </div>
+      <RelativeMovePad id="jog_xy" style={{background:"black", flex:"1"}}
+        onPressDown={press} onRelease={() => streamer.release()}
+        onRelativeMove={(_ox: number, _oy: number, dx: number, dy: number)=>{
+          // Pointer acceleration: slow drags move finely, fast ones up to
+          // speedFactor_XY mm per pixel (low-passed pointer speed).
+          const now = Date.now();
+          const lp = lpRef.current;
+          const dt = Math.max(1, now - lp.t);
+          lp.t = now;
+          lp.speed = lp.speed * 0.9 + (Math.hypot(dx, dy) / dt * 1000) * 0.1;
+          const k = Math.min(1, lp.speed / JOG.POINTER_FULL_SPEED) * speedFactor_XY;
+          streamer.move({ X: dx * k, Y: -dy * k });
+        }}
+      />
+      <RelativeMovePad id="jog_z" style={{background:"red", width:"30px"}}
+        onPressDown={press} onRelease={() => streamer.release()}
+        onRelativeMove={(_ox: number, _oy: number, _dx: number, dy: number)=>{
+          streamer.move({ Z: -dy * speedFactor_Z });
+        }}
+      />
+    </div>
+  );
 }
 
 export default JoggingPad;
