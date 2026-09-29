@@ -568,6 +568,10 @@ export const cmd = {
       type: 'SYS', cmd: 'DI_WATCH', mask,
       edge: edge === 'rise' ? 1 : edge === 'fall' ? 2 : edge === 'both' ? 3 : 0, throttle_ms,
     }),
+  // The runtime's task statistics (IDE: Task Configuration > Monitor), flat
+  // keys t<k>_name / _avg / _max / _min / _jit / _jmin / _jmax / _cycles
+  // (us); reset zeroes them after reading.
+  TaskStats: (reset = false) => env<AckReply & { n: number; [k: string]: unknown }>({ type: 'SYS', cmd: 'TASK_STATS', reset: reset ? 1 : 0 }),
   ReelClear: (count: number) => env<AckReply & { cells_done: number }>({ type: 'SYS', cmd: 'REEL_CLEAR', count }),
   SetOverride: (factor: number) => env<AckReply & { factor: number }>({ type: 'SYS', cmd: 'SET_OVERRIDE', factor }),
   // Host timestamp mark in the PLC event log (GVL.EvHead, GET /e on :8126).

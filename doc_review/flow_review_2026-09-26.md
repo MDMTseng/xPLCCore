@@ -171,3 +171,21 @@ off).
 Found on the way: the PLC blends only from Cor >= 1 (BlendingNext);
 below 1 a G1 is Buffered. JOG.COR 0.5 meant a stop between jog steps;
 it is now 1.
+
+Real production flow on the machine (`run_virtual.py --plc 192.168.1.70
+--task-stats`: the UI's cycle and the vision mock against the real PLC,
+virtual delta, real reel, simulated tape sensors switched on for the run
+and off after). Plan 1,-10,60,-11,1: 83 = 83 cells, about 62 s.
+Longest cycle per sampling window:
+
+| task | median | p90 | worst | avg |
+|---|---|---|---|---|
+| EtherCAT_Task | 292 us | 307 us | 334 us | 174 us |
+| SoftMotion_PlanningTask | 2.8 ms | 3.0 ms | 3.3 ms | 65 us |
+| Comm | 1.9 ms | 3.0 ms | 4.7 ms | 59 us |
+
+`plan_check.py` shows FAIL on this run. It reads the reel's position
+from the event log at the "move end" event. The real reel is still
+~1.6 mm behind the setpoint then (0.8 cell per move); the virtual reel
+is not. The PLC count waits for the reel to stand still and is right.
+To fix in the tool: take the settled position.

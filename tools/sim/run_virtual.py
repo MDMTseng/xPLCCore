@@ -435,6 +435,41 @@ def jog_test():
             mode, r["events"], r["g1"], r["dropped"], r["settleMs"], r["endErrorMm"], v, acc, jerk))
 
 
+class TaskSampler:
+    """Task statistics (SYS TASK_STATS via the UI) every second of a run,
+    reset after each read: per 1 s window, each task's longest cycle."""
+    def __init__(self):
+        import threading
+        self.rows = []
+        self.stop = threading.Event()
+        self.t = threading.Thread(target=self.run, daemon=True)
+
+    def run(self):
+        try:
+            push("task_stats", {"reset": True}, timeout=10)
+        except Exception:
+            return
+        while not self.stop.wait(1.0):
+            try:
+                self.rows.append(push("task_stats", {"reset": True}, timeout=10))
+            except Exception:
+                pass
+
+    def report(self):
+        self.stop.set()
+        self.t.join(timeout=5)
+        if not self.rows:
+            log("task stats: none")
+            return
+        log("task stats: %d windows of 1 s" % len(self.rows))
+        for task in ("EtherCAT_Task", "SoftMotion_PlanningTask", "Comm"):
+            mx = sorted((r.get(task) or {}).get("max") or 0 for r in self.rows)
+            av = [(r.get(task) or {}).get("avg") or 0 for r in self.rows]
+            over = lambda us: sum(1 for x in mx if x > us)
+            log("  %-24s longest cycle per second: median %6d  p90 %6d  worst %6d us | windows >1 ms %d, >5 ms %d, >10 ms %d | avg %.0f us" % (
+                task, mx[len(mx) // 2], mx[int(len(mx) * 0.9)], mx[-1], over(1000), over(5000), over(10000), sum(av) / len(av)))
+
+
 def override_check():
     """Same square (4 stop-to-stop moves of ~42 mm, and a blended 24-gon)
     at 100 % and 30 %: how do the peaks scale?"""
@@ -771,6 +806,8 @@ def main():
     ap.add_argument("--peaks", action="store_true",
                     help="report each servo's peak |velocity|, |acceleration| and |jerk| over the run "
                          "(GVL.MotionPeak*, reset at RUN)")
+    ap.add_argument("--task-stats", action="store_true",
+                    help="sample the PLC's task statistics (SYS TASK_STATS) every second of the run")
     ap.add_argument("--vision-drop-at", type=float, default=0,
                     help="N s into the run, cut the vision link; expect a clear stop, then reconnect and RUN again")
     ap.add_argument("--hold-test", type=int, default=0,
@@ -898,10 +935,13 @@ def main():
             log("speed:", push("set_speed", {"percent": a.speed}, timeout=10))
         pos0 = reel_pos() if a.fault else None     # a new plan counts from cell 0
         odo0 = reel_odo() if a.fault else None
+        sampler = TaskSampler() if a.task_stats else None
         if a.ui_guards:
             ui_guards(a)
         else:
             log("run_cycle:", push("run_cycle", timeout=10))
+        if sampler:
+            sampler.t.start()
         if a.speed_wobble:
             import threading
             def wobble():
@@ -961,6 +1001,8 @@ def main():
                 raise Stall("no tape check within %d s of RUN" % LIMIT_FIRST_CHECK)
             if t_last is not None and now - t_last > LIMIT_BETWEEN_CHECKS:
                 raise Stall("no new tape check for %d s (after %d)" % (LIMIT_BETWEEN_CHECKS, checks))
+        if sampler:
+            sampler.report()
         push("stop_cycle", timeout=15)
         log("stop_cycle sent")
         if a.peaks:
@@ -979,6 +1021,18 @@ def main():
         except Exception:
             pass
     finally:
+        if PLC_HOST[0] not in ("127.0.0.1", "localhost"):
+            # the real PLC: back to its real inputs, drives off
+            try:
+                push("send_tcp_msgpack", {"data": {"type": "SYS", "cmd": "GA_EV", "ev": EV_RESET}}, timeout=10)
+            except Exception:
+                pass
+            try:
+                daemon({"cmd": "write", "symbol": "GVL.SimDigitalInputEnable", "value": "FALSE"})
+                daemon({"cmd": "logout"})
+                log("PLC: simulated inputs off, FSM reset")
+            except Exception as e:
+                log("PLC: could not switch the simulated inputs off:", e)
         if collector is not None:
             time.sleep(0.5)                               # last event poll
             try:

@@ -1532,6 +1532,17 @@ export const CalibPage: React.FC<{
   }, []);
 
   // Reel odometer now (PLAN_GET) and the tape log of the runs since load.
+  // Task statistics (SYS TASK_STATS) per task name, for the harness.
+  useHarnessAction('task_stats', async (payload: any) => {
+    const r: any = await sendTcpMsgPack(cmd.TaskStats(payload?.reset === true));
+    const out: Record<string, any> = {};
+    for (let k = 0; k < (r?.n ?? 0); k++) {
+      const g = (f: string) => r['t' + k + '_' + f];
+      out[g('name')] = { avg: g('avg'), max: g('max'), min: g('min'), jit: g('jit'), jmin: g('jmin'), jmax: g('jmax'), cycles: g('cycles') };
+    }
+    return out;
+  }, []);
+
   useHarnessAction('get_reel_log', async () => {
     const st = await sendTcpMsgPack(cmd.PlanGet()) as PlanState;
     return {
