@@ -125,3 +125,34 @@ buffer full: the delta kinematics and planning run on the virtual arms)
   clean.
 - Not measured from inside: the SoftMotion bus processing itself and
   the planning task's own time (only their effect on the period).
+
+### Task statistics under load (machine, 2026-09-29)
+
+SYS TASK_STATS returns the runtime's task statistics (what the IDE's Task
+Configuration > Monitor shows), for all tasks. It needs the CmpIecTask
+library: `jobs/templates/add_lib_cmpiectask.py`, run logged out before
+the import.
+
+30 rounds x 20 s of full load (`tools/ec_stress.py --rounds 30`), in
+total 43k blended G1s, 2.7k reel moves and 93k queries:
+
+- EtherCAT_Task: avg 208 us, worst 372 us, jitter +-34 us. Never late,
+  DC always in sync.
+- SoftMotion_PlanningTask: avg 241 us, but ~17 ms at least once in
+  every round (its interval is 1 ms).
+- Comm: delayed up to 19 ms behind the planning task (priority 20 vs 5).
+
+The planning spikes follow the rate of blended short segments, not the
+daemon or the reel:
+
+| arm motion | G1/s | worst planning cycle | >5 ms windows |
+|---|---|---|---|
+| dense blended stream (stress) | 61 | 9 ms typical, 17 ms | ~10/s |
+| dense, Cor 0 | 12 | 0.8 ms | 0 |
+| blended, one G1 per 50 ms | 16.5 | 3.3 ms | 0 |
+| long slow moves | 3.6 | 0.3 ms | 0 |
+
+The EtherCAT task (priority 0) is not affected. The cost lands on the
+planning task and, behind it, on the TCP latency. Open: how far the
+planner can fall behind before the motion suffers, the planning task's
+watchdog setting, and the production G1 rate.

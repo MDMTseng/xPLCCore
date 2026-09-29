@@ -26,6 +26,15 @@ VAR
     PlanNew   : ARRAY[0..31] OF DINT;
     PlanCellsDoneIn : LINT;
 
+    // TASK_STATS scratch.
+    TsH     : __XWORD;        // RTS_IEC_HANDLE
+    TsR     : UDINT;          // RTS_IEC_RESULT, 0 = ERR_OK
+    TsP     : POINTER TO CmpIecTask.Task_Info2;
+    TsN     : INT;
+    TsReset : BOOL;
+    TsKey   : STRING(31);
+    TsName  : STRING(63);
+
     // DI_WATCH scratch.
     DiIdx      : INT;
     DiMaskIn   : WORD;
@@ -424,6 +433,61 @@ END_IF;
                 ResponsePacketPointer^.ele_count := 0;
                 GVL.OverrideFactor := LIMIT(0.01, TO_LREAL(MessageUnpackerFb.TryReadREAL('factor', TO_REAL(GVL.OverrideFactor))), 1.0);
                 MessagePackerFb.PackKvReal(ADR('factor'), TO_REAL(GVL.OverrideFactor));
+            ELSIF (CommandType = 'TASK_STATS') THEN
+                // The runtime's task statistics -- what the IDE's Task
+                // Configuration > Monitor shows -- for every task of the
+                // application, SoftMotion's planning task included. Flat
+                // keys per task k: tk_name, tk_prio, tk_interval_us,
+                // tk_last / tk_avg / tk_max / tk_min (cycle time, us),
+                // tk_jit / tk_jmin / tk_jmax (jitter, us), tk_cycles,
+                // tk_iec_cycles; n = tasks. reset:true zeroes them after
+                // reading (as the IDE's reset does).
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                TsReset := MessageUnpackerFb.TryReadINT64('reset', 0) <> 0;
+                TsN := 0;
+                TsH := CmpIecTask.IecTaskGetFirst(ADR('Application'), ADR(TsR));
+                WHILE (TsR = 0) AND (TsN < 8) DO
+                    TsP := CmpIecTask.IecTaskGetInfo3(TsH, ADR(TsR));
+                    IF TsP <> 0 THEN
+                        IF TsP^.pszName <> 0 THEN
+                            TsName := TsP^.pszName^;
+                        ELSE
+                            TsName := '?';
+                        END_IF;
+                        TsKey := CONCAT(CONCAT('t', INT_TO_STRING(TsN)), '_name');
+                        MessagePackerFb.PackKvStr(ADR(TsKey), ADR(TsName));
+                        TsKey := CONCAT(CONCAT('t', INT_TO_STRING(TsN)), '_prio');
+                        MessagePackerFb.PackKvDint(ADR(TsKey), TsP^.nPriority);
+                        TsKey := CONCAT(CONCAT('t', INT_TO_STRING(TsN)), '_interval_us');
+                        MessagePackerFb.PackKvLint(ADR(TsKey), DWORD_TO_LINT(TsP^.dwInterval));
+                        TsKey := CONCAT(CONCAT('t', INT_TO_STRING(TsN)), '_last');
+                        MessagePackerFb.PackKvLint(ADR(TsKey), DWORD_TO_LINT(TsP^.dwCycleTime));
+                        TsKey := CONCAT(CONCAT('t', INT_TO_STRING(TsN)), '_avg');
+                        MessagePackerFb.PackKvLint(ADR(TsKey), DWORD_TO_LINT(TsP^.dwAverageCycleTime));
+                        TsKey := CONCAT(CONCAT('t', INT_TO_STRING(TsN)), '_max');
+                        MessagePackerFb.PackKvLint(ADR(TsKey), DWORD_TO_LINT(TsP^.dwMaxCycleTime));
+                        TsKey := CONCAT(CONCAT('t', INT_TO_STRING(TsN)), '_min');
+                        MessagePackerFb.PackKvLint(ADR(TsKey), DWORD_TO_LINT(TsP^.dwMinCycleTime));
+                        TsKey := CONCAT(CONCAT('t', INT_TO_STRING(TsN)), '_jit');
+                        MessagePackerFb.PackKvDint(ADR(TsKey), TsP^.iJitter);
+                        TsKey := CONCAT(CONCAT('t', INT_TO_STRING(TsN)), '_jmin');
+                        MessagePackerFb.PackKvDint(ADR(TsKey), TsP^.iJitterMin);
+                        TsKey := CONCAT(CONCAT('t', INT_TO_STRING(TsN)), '_jmax');
+                        MessagePackerFb.PackKvDint(ADR(TsKey), TsP^.iJitterMax);
+                        TsKey := CONCAT(CONCAT('t', INT_TO_STRING(TsN)), '_cycles');
+                        MessagePackerFb.PackKvLint(ADR(TsKey), DWORD_TO_LINT(TsP^.dwCycleCount));
+                        TsKey := CONCAT(CONCAT('t', INT_TO_STRING(TsN)), '_iec_cycles');
+                        MessagePackerFb.PackKvLint(ADR(TsKey), DWORD_TO_LINT(TsP^.dwIECCycleCount));
+                        TsN := TsN + 1;
+                    END_IF;
+                    IF TsReset THEN
+                        CmpIecTask.IecTaskResetStatistics(TsH);
+                    END_IF;
+                    TsH := CmpIecTask.IecTaskGetNext(ADR('Application'), TsH, ADR(TsR));
+                END_WHILE;
+                MessagePackerFb.PackKvDint(ADR('n'), TsN);
             ELSIF (CommandType = 'DI_WATCH') THEN
                 // Register digital inputs for change events (UpdateDiWatch):
                 // mask = pins, edge = 1 rising / 2 falling / 3 both / 0 stop

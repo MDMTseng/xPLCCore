@@ -62,6 +62,52 @@ def prof_read():
     return out
 
 
+def task_stats(p, reset=False):
+    """The runtime's task statistics (SYS TASK_STATS: the IDE's Task
+    Configuration monitor), per task name."""
+    r = p.sys("TASK_STATS", reset=1 if reset else 0)
+    out = {}
+    for k in range(r.get("n", 0)):
+        g = lambda f: r.get("t%d_%s" % (k, f))
+        out[g("name")] = {f: g(f) for f in ("avg", "max", "min", "jit", "jmin", "jmax", "cycles")}
+    return out
+
+
+def rounds(p, n, seconds):
+    """n rounds of full load (arm stream + reel + TCP queries, running
+    throughout); each round resets both monitors, waits, reads them."""
+    ld = Load(p)
+    ld.start("arm", "reel", "comm")
+    rows = []
+    try:
+        for k in range(n):
+            task_stats(p, reset=True)
+            prof_reset()
+            time.sleep(seconds)
+            ts = task_stats(p)
+            ec = prof_read()
+            rows.append((ts, ec))
+            e, sm, c = ts.get("EtherCAT_Task", {}), ts.get("SoftMotion_PlanningTask", {}), ts.get("Comm", {})
+            log("round %2d | EtherCAT avg %3s max %4s jit %4s..%-4s | Planning avg %3s max %4s jit %4s..%-4s | Comm avg %3s max %5s jit %5s..%-5s | period %6.1f..%6.1f late>100 %d | DC out %d" % (
+                k + 1, e.get("avg"), e.get("max"), e.get("jmin"), e.get("jmax"),
+                sm.get("avg"), sm.get("max"), sm.get("jmin"), sm.get("jmax"),
+                c.get("avg"), c.get("max"), c.get("jmin"), c.get("jmax"),
+                ec["EcPeriodUsMin"], ec["EcPeriodUsMax"], ec["EcLate100"], ec["EcDcOutCycles"]))
+    finally:
+        ld.end()
+    log("load over all rounds:", ld.counts)
+    for task in ("EtherCAT_Task", "SoftMotion_PlanningTask", "Comm"):
+        mx = sorted(r[0].get(task, {}).get("max") or 0 for r in rows)
+        jmx = sorted(r[0].get(task, {}).get("jmax") or 0 for r in rows)
+        jmn = sorted(r[0].get(task, {}).get("jmin") or 0 for r in rows)
+        avg = [r[0].get(task, {}).get("avg") or 0 for r in rows]
+        log("%-24s max cycle us: median %s worst %s | jitter worst %s..%s | avg %.0f" % (
+            task, mx[len(mx) // 2], mx[-1], jmn[0], jmx[-1], sum(avg) / len(avg)))
+    log("DC out cycles per round:", [int(r[1]["EcDcOutCycles"]) for r in rows])
+    log("EtherCAT period worst: %.1f us, late>100 total %d" % (
+        max(r[1]["EcPeriodUsMax"] for r in rows), sum(int(r[1]["EcLate100"]) for r in rows)))
+
+
 def to_ready(p):
     for _ in range(80):
         st = p.sys("GA_EV", ev=0)["st_str"]
@@ -145,6 +191,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--plc", default="192.168.1.70")
     ap.add_argument("--seconds", type=float, default=20)
+    ap.add_argument("--rounds", type=int, default=0, help="instead of the phases: N rounds of full load")
     a = ap.parse_args()
     with Plc(a.plc) as p:
         ms = p.sys("GET_MACHINE_STATE")
@@ -157,6 +204,13 @@ def main():
         p.m("SetCoord1")
         p.m("G1", X=30.0, Y=0.0, Z=12.0, F=200, ACC=20000, DEA=20000, JERK=80000)
         p.m("WAIT_FOR_MOTION_STOP", timeout=15, timeout_ms=10000)
+        if a.rounds:
+            rounds(p, a.rounds, a.seconds)
+            p.m("WAIT_FOR_MOTION_STOP", timeout=30, timeout_ms=20000)
+            p.sys("GA_EV", ev=8)
+            time.sleep(1)
+            log("left in", p.sys("GA_EV", ev=0)["st_str"])
+            return
         phase("ready", a.seconds, p)
         phase("arm", a.seconds, p, ("arm",))
         phase("arm+reel", a.seconds, p, ("arm", "reel"))
