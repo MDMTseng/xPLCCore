@@ -5,6 +5,9 @@ VAR
     bitPrev : BOOL;
     sent    : INT;
 END_VAR
+VAR CONSTANT
+    DI_MS_MAX : DINT := 2000000000;   // ~23 days: the ms counts stop here
+END_VAR
 (* =========== IMPLEMENTATION =========== *)
 // Digital-input change events (SYS DI_WATCH): the host registers pins, an
 // edge filter and a throttle; every scan (1 ms) this tracks each watched
@@ -58,8 +61,12 @@ FOR i := 0 TO 15 DO
                 DiWPending[i] := TRUE;
             END_IF;
         END_IF;
-        DiWRunMs[i] := DiWRunMs[i] + TO_DINT(BusPeriod);
-        IF bitNow THEN
+        // Saturating: a pin that does not change for 24.8 days would
+        // otherwise wrap these DINT ms counts negative.
+        IF DiWRunMs[i] < DI_MS_MAX THEN
+            DiWRunMs[i] := DiWRunMs[i] + TO_DINT(BusPeriod);
+        END_IF;
+        IF bitNow AND (DiWHighMs[i] < DI_MS_MAX) THEN
             DiWHighMs[i] := DiWHighMs[i] + TO_DINT(BusPeriod);
         END_IF;
         IF DiWPending[i] AND (sent < 2)
