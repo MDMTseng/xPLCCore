@@ -14,6 +14,9 @@ VAR
     _agAxisGroup : REFERENCE TO AXIS_GROUP_REF_SM3; // Internal reference to the axis group
     _axReel      : REFERENCE TO AXIS_REF_SM3;       // Internal reference to the single (reel) axis
 
+    // UnInited entry: the bus was at fault, so restart it (Update.st).
+    xBusRestartNeeded : BOOL;
+
     // Error latch lives in GVL (GVL.LastErrorSource / GVL.LastErrorID) so
     // that both this FB (internal writes from Update) and external
     // supervisors (AxisGroupSM) can populate it without needing method/

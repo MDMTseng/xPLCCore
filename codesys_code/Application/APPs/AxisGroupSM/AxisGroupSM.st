@@ -532,6 +532,8 @@ PROGRAM AxisGroupSM
 
     END_VAR
 (* =========== IMPLEMENTATION =========== *)
+// EtherCAT task timing monitor (GVL.EcProf*, summed in PRG_EventLog).
+GVL.EcProfT0 := LTIME();
 
 //IMPORTANT:following if TRUE... and if FALSE.... are mandatory, DO not try to remove/optimize it
 

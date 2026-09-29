@@ -22,6 +22,7 @@ VAR
     byEncAgc        : USINT;
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
+GVL.EcProfT1 := LTIME();     // AxisGroupSM done (task timing monitor, PRG_EventLog)
 ecat_esp_out0 := byOut0;
 ecat_esp_out1 := byOut1;
 byIn0 := ecat_esp_in0;

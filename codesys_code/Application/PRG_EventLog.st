@@ -25,6 +25,15 @@ VAR
     lrLastX     : LREAL := 1.0E9;
     lrLastY     : LREAL;
     lrLastZ     : LREAL;
+    // EtherCAT task timing monitor (GVL.EcProf*).
+    tProfEnd    : LTIME;
+    tProfPrevT0 : LTIME;
+    xProfPrev   : BOOL;
+    lrPeriodUs  : LREAL;
+    lrDevUs     : LREAL;
+    lrAgsmUs    : LREAL;
+    lrRestUs    : LREAL;
+    iProf       : INT;
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
 // Event timestamp log -- see GVL.EvHead. Runs in EtherCAT_Task after
@@ -111,3 +120,62 @@ FOR i := 0 TO n - 1 DO
     GVL.EvVal[udiSlot]  := audiV[i];
     GVL.EvHead := GVL.EvHead + 1;
 END_FOR
+
+// ---- EtherCAT task timing monitor (GVL.EcProf*) ----
+// Last program of EtherCAT_Task: stamps the end of the task's IEC code.
+tProfEnd := LTIME();
+IF GVL.EcProfReset THEN
+    GVL.EcProfReset := FALSE;
+    GVL.EcProfCycles := 0;
+    GVL.EcPeriodUsMin := 1.0E9;
+    GVL.EcPeriodUsMax := 0;
+    GVL.EcLate100 := 0;
+    GVL.EcLate500 := 0;
+    FOR iProf := 0 TO 5 DO
+        GVL.EcPeriodHist[iProf] := 0;
+    END_FOR;
+    GVL.EcAgsmUsMax := 0;
+    GVL.EcAgsmUsAvg := 0;
+    GVL.EcRestUsMax := 0;
+    GVL.EcRestUsAvg := 0;
+    GVL.EcDcOutCycles := 0;
+    xProfPrev := FALSE;
+END_IF;
+lrAgsmUs := ULINT_TO_LREAL(LTIME_TO_ULINT(GVL.EcProfT1 - GVL.EcProfT0)) / 1000.0;
+lrRestUs := ULINT_TO_LREAL(LTIME_TO_ULINT(tProfEnd - GVL.EcProfT1)) / 1000.0;
+IF xProfPrev THEN
+    lrPeriodUs := ULINT_TO_LREAL(LTIME_TO_ULINT(GVL.EcProfT0 - tProfPrevT0)) / 1000.0;
+    lrDevUs := ABS(lrPeriodUs - GVL.EcNominalUs);
+    GVL.EcProfCycles := GVL.EcProfCycles + 1;
+    GVL.EcPeriodUsMin := MIN(GVL.EcPeriodUsMin, lrPeriodUs);
+    GVL.EcPeriodUsMax := MAX(GVL.EcPeriodUsMax, lrPeriodUs);
+    IF lrPeriodUs > GVL.EcNominalUs + 100.0 THEN
+        GVL.EcLate100 := GVL.EcLate100 + 1;
+    END_IF;
+    IF lrPeriodUs > GVL.EcNominalUs + 500.0 THEN
+        GVL.EcLate500 := GVL.EcLate500 + 1;
+    END_IF;
+    IF lrDevUs < 20.0 THEN
+        iProf := 0;
+    ELSIF lrDevUs < 50.0 THEN
+        iProf := 1;
+    ELSIF lrDevUs < 100.0 THEN
+        iProf := 2;
+    ELSIF lrDevUs < 200.0 THEN
+        iProf := 3;
+    ELSIF lrDevUs < 500.0 THEN
+        iProf := 4;
+    ELSE
+        iProf := 5;
+    END_IF;
+    GVL.EcPeriodHist[iProf] := GVL.EcPeriodHist[iProf] + 1;
+    GVL.EcAgsmUsMax := MAX(GVL.EcAgsmUsMax, lrAgsmUs);
+    GVL.EcRestUsMax := MAX(GVL.EcRestUsMax, lrRestUs);
+    GVL.EcAgsmUsAvg := GVL.EcAgsmUsAvg * 0.999 + lrAgsmUs * 0.001;
+    GVL.EcRestUsAvg := GVL.EcRestUsAvg * 0.999 + lrRestUs * 0.001;
+    IF NOT IoConfig_Globals.EtherCAT_Master_SoftMotion.xDistributedClockInSync THEN
+        GVL.EcDcOutCycles := GVL.EcDcOutCycles + 1;
+    END_IF;
+END_IF;
+tProfPrevT0 := GVL.EcProfT0;
+xProfPrev := TRUE;

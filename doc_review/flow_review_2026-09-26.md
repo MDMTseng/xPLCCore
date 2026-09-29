@@ -100,3 +100,28 @@ client `tools/plc_direct.py`, no UI; nothing on the reel):
 - Item 2 confirmed: an arm fault (GVL.TestFaultMidReel = 1) during a
   2-cell move put the FSM in Error, the reel stayed powered and finished,
   cells_done +2, no open move.
+
+## EtherCAT timing (machine, 2026-09-29)
+
+The owner saw the odd DC-statistics timeout and suspected the arm's
+computation. New EtherCAT_Task timing monitor (GVL.EcProf*, LTIME()
+stamps in AxisGroupSM / PRG_EcatEsp / PRG_EventLog, DC-out cycles from
+the master's xDistributedClockInSync) and `tools/ec_stress.py`: 20 s
+phases idle / ready / arm (a blended G1 stream keeping the motion
+buffer full: the delta kinematics and planning run on the virtual arms)
+/ + reel moves every 250 ms / + back-to-back TCP queries.
+
+- Under load: task period 955-1045 us, no cycle more than 100 us late,
+  AxisGroupSM at most ~155 us per 1 ms (avg 47-51 us), DC never out of
+  sync. The arm's load does not reach the EtherCAT task (priority 0;
+  the planning task is priority 5).
+- The DC loss came from every reset. UnInited entry restarted the whole
+  EtherCAT bus (xRestart), even with the bus healthy. Each reset put the
+  DC out of sync for ~3.4 s (3417 cycles, one 1190 us cycle) and
+  re-initialised every slave. Fixed: the bus restarts only when the
+  master reports an error or the last fault was the master
+  (GVL.BusRestartOnReset restores the old behaviour). After the fix:
+  3 resets, 0 DC-out cycles, cycles <= 1031 us. Full stress run again
+  clean.
+- Not measured from inside: the SoftMotion bus processing itself and
+  the planning task's own time (only their effect on the period).

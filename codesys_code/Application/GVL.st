@@ -153,6 +153,10 @@ VAR_GLOBAL
 	   UnInited entry can gate the restart to once per BUS_RESTART_COOLDOWN_MS.
 	   0 = never restarted yet. *)
 	LastBusRestartMs       : LINT := 0;
+	(* TRUE: restart the bus on every UnInited entry, as before 2026-09-29.
+	   FALSE (default): only when the master reports an error or the last
+	   fault was the EtherCAT master (AxisGroupManager.Update). *)
+	BusRestartOnReset      : BOOL := FALSE;
 	BUS_RESTART_COOLDOWN_MS : LINT := 30000;
 
 	(* --- Ring-buffer safety (ringbuf-bugs.md, Bundle 1).
@@ -231,6 +235,31 @@ VAR_GLOBAL
 	   PLAN_GET, the TAPE_CYCLE reply and DI events. *)
 	ReelOdoCounts : LINT;
 	ReelOdoJumps  : UDINT;
+
+	(* EtherCAT task timing monitor (owner, 2026-09-29: DC statistics show
+	   the odd late cycle under load). Stamps with LTIME() (ns) at the
+	   start of AxisGroupSM (the task's first program), at the start of
+	   PRG_EcatEsp (AxisGroupSM done) and at the end of PRG_EventLog (the
+	   last); PRG_EventLog does the sums. Period = start to start of the
+	   task (nominal EcNominalUs); AGSM / Rest = time in AxisGroupSM / in
+	   the other programs of the task. Set EcProfReset to start over. The
+	   SoftMotion bus processing and the planning task are not in here --
+	   only their effect on the period. *)
+	EcProfReset   : BOOL;
+	EcProfT0      : LTIME;
+	EcProfT1      : LTIME;
+	EcNominalUs   : LREAL := 1000.0;
+	EcProfCycles  : UDINT;
+	EcPeriodUsMin : LREAL;
+	EcPeriodUsMax : LREAL;
+	EcLate100     : UDINT;      (* periods over nominal + 100 us *)
+	EcLate500     : UDINT;      (* periods over nominal + 500 us *)
+	EcPeriodHist  : ARRAY[0..5] OF UDINT;   (* |period - nominal|: <20, <50, <100, <200, <500, >=500 us *)
+	EcAgsmUsMax   : LREAL;
+	EcAgsmUsAvg   : LREAL;
+	EcRestUsMax   : LREAL;
+	EcRestUsAvg   : LREAL;
+	EcDcOutCycles : UDINT;      (* cycles with the master's DC not in sync *)
 
 	(* Tape moves that stopped short of their target (the ReelMv block). *)
 	ReelInterruptCount : UDINT;

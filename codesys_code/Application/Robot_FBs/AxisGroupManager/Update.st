@@ -17,6 +17,12 @@ CASE _eState OF
             GroupPower_Flag := FALSE;
             bReelPowerReq   := FALSE; // Single Axis Power Flag
 
+            // Was the bus at fault? Decided before the error latch is
+            // cleared: only then does this entry restart the EtherCAT bus.
+            xBusRestartNeeded := IoConfig_Globals.EtherCAT_Master_SoftMotion.xError
+                OR (GVL.LastErrorSource = 'Supervisor:EtherCAT_Master')
+                OR GVL.BusRestartOnReset;
+
             // Clear the error latch so a recovered run starts clean.
             GVL.LastErrorSource := '';
             GVL.LastErrorID     := 0;
@@ -45,12 +51,16 @@ CASE _eState OF
             // Reset Single Axis FBs
             fbResetReel(Axis:= _axReel, Execute:=FALSE);
 
-            // Throttle bus restart: pulse xRestart only when the cooldown
-            // has elapsed since the last pulse. Prevents Error -> UnInited
-            // loops from hammering the EtherCAT master. AxisGroupSM.RuntimeMs
-            // is the PLC-scan monotonic millisecond counter.
-            IF (GVL.LastBusRestartMs = 0) OR
-               (AxisGroupSM.RuntimeMs - GVL.LastBusRestartMs >= GVL.BUS_RESTART_COOLDOWN_MS) THEN
+            // Restart the EtherCAT bus only when it was at fault. It used to
+            // restart on every reset: each one put the DC out of sync for
+            // ~3.4 s (3417 cycles, a 1190 us cycle; the "DC statistics
+            // timeouts" the owner saw, machine 2026-09-29) and re-initialised
+            // every slave, IO outputs included. GVL.BusRestartOnReset brings
+            // the old behaviour back. Throttled: at most once per
+            // BUS_RESTART_COOLDOWN_MS, so Error -> UnInited loops do not
+            // hammer the master.
+            IF xBusRestartNeeded AND ((GVL.LastBusRestartMs = 0) OR
+               (AxisGroupSM.RuntimeMs - GVL.LastBusRestartMs >= GVL.BUS_RESTART_COOLDOWN_MS)) THEN
                 IoConfig_Globals.EtherCAT_Master_SoftMotion.xRestart := TRUE;
                 GVL.LastBusRestartMs := AxisGroupSM.RuntimeMs;
             END_IF
