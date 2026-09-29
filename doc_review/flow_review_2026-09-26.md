@@ -258,3 +258,26 @@ imported back and re-measured:
 No difference in this setup. The "A on long moves" outlier (one part
 2.8 s) repeats exactly after the restore: a specific angle case, not
 noise.
+
+### Axis limits from the production peaks (machine, 2026-09-29)
+
+Peaks of the real production flow (`run_virtual.py --plc 192.168.1.70
+--peaks`; virtual delta, real A), and of the queued replay:
+
+| axis | real flow | replay | limit set |
+|---|---|---|---|
+| EAxis0 | 946 deg/s (4890 rpm), 48 900 deg/s^2 | 542, 53 800 | |
+| EAxis1 | 902 deg/s, 61 100 deg/s^2 | 1084, 78 500 | |
+| EAxis2 | 633 deg/s, 62 300 deg/s^2 | 663, 63 300 | |
+| delta joints | jerk ~9e6 deg/s^3 | ~1e7 | 1160 deg/s, 100 000 deg/s^2, 1e7 deg/s^3 (was 100 000 / 800 000 / 1e7) |
+| A (1 u = 10 deg) | 264 u/s, 4206 u/s^2 | 288, 4306 | 288 u/s, 4320 u/s^2, 86 400 u/s^3 (kept) |
+| reel | | | 5000 mm/s, 100 000 mm/s^2, 1e5 (= TAPE.REEL_MOVE) |
+
+`jobs/templates/set_axis_limits.py` sets them. With 1100 deg/s and
+80 000 deg/s^2 the motion per part was 3-5 % slower, although no joint
+reached those limits: the planner treats joint limits conservatively.
+At 1160 / 100 000: 0.902 / 0.595 s (A turning / held), the same as
+without limits (0.916 / 0.594). The real production flow ran without
+errors under the joint limits: the planner slows the path, it does not
+fault. Scalings unchanged; the A /10 wrap trick stays until A is an
+additional axis.
