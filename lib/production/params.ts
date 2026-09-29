@@ -165,8 +165,10 @@ export const JOG = {
    *  jerk is production's at feed 1000 (DYNAMICS). */
   ACC: 20000,
   JERK: 400000,
-  /** Blend between the steps (mm), so they run as one motion. */
-  COR: 0.5,
+  /** Blend between the steps (mm), so they run as one motion. The PLC
+   *  blends only from Cor >= 1 (BlendingNext); below 1 each G1 is
+   *  Buffered, a stop between steps -- 0.5 did that (ProcessMotionPacket). */
+  COR: 1,
   /** Below this the arm is at the target (mm). */
   MIN_STEP_MM: 0.005,
   /** Pad pixels -> mm: XY scales with the pointer speed (slow = fine),

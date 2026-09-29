@@ -156,3 +156,18 @@ The EtherCAT task (priority 0) is not affected. The cost lands on the
 planning task and, behind it, on the TCP latency. Open: how far the
 planner can fall behind before the motion suffers, the planning task's
 watchdog setting, and the production G1 rate.
+
+Production-like replay on the machine: 42 parts of the production G1
+sequence (pick 3, inspect 6, place 3 + lift; feed 2000 dynamics; Cor 45
+sticky, so every G1 blends) at 0.54 s/part, about 24 G1/s. Planning task:
+avg ~0.1 ms, worst cycle per 1 s window median 4.9 ms, worst 6.2 ms.
+EtherCAT max 312 us, Comm max 2.0 ms. Each burst queues tens to hundreds
+of ms of motion, far more than the planning delay, so the planner does
+not slow the arm. The 17 ms spikes need the synthetic 60/s stream of
+short blended segments. The PLC is sized with room to spare for this
+work at 1 ms. Still to check: the planning task's watchdog (> ~10 ms or
+off).
+
+Found on the way: the PLC blends only from Cor >= 1 (BlendingNext);
+below 1 a G1 is Buffered. JOG.COR 0.5 meant a stop between jog steps;
+it is now 1.
