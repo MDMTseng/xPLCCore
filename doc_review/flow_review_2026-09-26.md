@@ -67,3 +67,14 @@ RUN finishes the plan (PASS, 83 = 83). Regression: normal run, faults,
 E-stops with reel jitter, chaos + forget, UI guards, 12 s holds, sensor
 glitch: all PASS, 83 = 83. 97 unit tests (feeder bridge failure and the
 part-NG verdict covered offline).
+
+## Installed on the machine (2026-09-29)
+
+After the owner's power cycle, the flow-analysis build (through the jog
+streamer, 27013e6) was installed on the real PLC: Comm task 1 ms, the
+three new methods created, build 0 errors, `install --on-site` (download
+19.4 s, app back in RUN). Checked: scans ticking, FSM UnInited, no error,
+EtherCAT master OK, test hooks off, EAxis0/1/2 still virtual. The
+download re-initialised the retained plan (BootEpochCount 1); the
+renderer re-sends it at the next RUN. Not yet exercised on the machine:
+everything marked "needs the machine" above.
