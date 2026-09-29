@@ -217,16 +217,20 @@ VAR_GLOBAL
 	   a virtual axis does not have. 0 in production. *)
 	TestReelJitterMm : LREAL := 0;
 
-	(* Reel odometer (owner, 2026-09-29): tape travel since the PLC booted,
-	   unwrapped (the reel is a modulo-200 axis) and never reset, in axis
-	   units = mm of tape (51200 increments = 200 units; a cell is 8).
-	   Sent as integer micrometres (reel_odo_um) in GET_MACHINE_STATE,
-	   PLAN_GET, the TAPE_CYCLE reply and DI events, for the host to log
-	   and convert. A step over REEL_MAX_STEP_MM in one scan is not travel
-	   (the position was reset: drive / bus restart): it is left out and
-	   counted in ReelOdoJumps, so the host can see the discontinuity. *)
-	ReelOdoMm    : LREAL;
-	ReelOdoJumps : UDINT;
+	(* Reel odometer (owner, 2026-09-29): the reel encoder in counts since
+	   the PLC booted -- the drive's raw position (diActPosition) summed
+	   as per-scan differences, so it is unwrapped (modulo axis, one turn
+	   = dwOneTurn counts) and a 32-bit wrap of the drive's counter drops
+	   out of the subtraction. Never reset. The host converts with
+	   reel_counts_per_mm (the axis fScalefactor, -256 here: the counts
+	   run down while the tape goes forward) and reel_counts_per_turn.
+	   A virtual axis has no encoder: its counts are its position times
+	   fScalefactor. A step over REEL_MAX_STEP_MM in one scan is not travel
+	   (the position was reset: drive / bus restart): left out, counted in
+	   ReelOdoJumps. Sent as reel_odo_counts in GET_MACHINE_STATE,
+	   PLAN_GET, the TAPE_CYCLE reply and DI events. *)
+	ReelOdoCounts : LINT;
+	ReelOdoJumps  : UDINT;
 
 	(* Tape moves that stopped short of their target (the ReelMv block). *)
 	ReelInterruptCount : UDINT;

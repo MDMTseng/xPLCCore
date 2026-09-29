@@ -269,14 +269,15 @@ PROGRAM AxisGroupSM
         DiWMaxLowMs       : ARRAY[0..15] OF DINT;
         DiWRunMs          : ARRAY[0..15] OF DINT;
         DiWFirstMs        : ARRAY[0..15] OF LINT;
-        DiWReelOdo        : ARRAY[0..15] OF LREAL;
+        DiWReelOdo        : ARRAY[0..15] OF LINT;
         DiWPending        : ARRAY[0..15] OF BOOL;
         DiWLastSentMs     : ARRAY[0..15] OF LINT;
         TestDiBurstLastMs : LINT;
-        // Reel odometer (GVL.ReelOdoMm).
+        // Reel odometer (GVL.ReelOdoCounts).
         ReelOdoInit       : BOOL;
-        ReelOdoLast       : LREAL;
-        ReelOdoD          : LREAL;
+        ReelOdoRaw        : DINT;      // encoder counts this scan
+        ReelOdoLast       : DINT;
+        ReelOdoD          : DINT;
         // Reel move tracker (GVL.ReelMv*): counts cells as the reel passes them.
         ReelTrkActive   : BOOL;
         ReelTrkStarted  : BOOL;        // the reel has moved since the dispatch
@@ -1116,26 +1117,31 @@ PROGRAM AxisGroupSM
         END_IF;
     END_FOR;
 
-    // ---- Reel odometer (GVL.ReelOdoMm): travel since boot, never reset ----
+    // ---- Reel odometer (GVL.ReelOdoCounts): encoder counts since boot ----
+    IF reelpullmotor.bVirtual THEN
+        ReelOdoRaw := LREAL_TO_DINT(reelpullmotor.fActPosition * reelpullmotor.fScalefactor);
+    ELSE
+        ReelOdoRaw := reelpullmotor.diActPosition;
+    END_IF;
     IF NOT ReelOdoInit THEN
-        ReelOdoLast := reelpullmotor.fActPosition;
+        ReelOdoLast := ReelOdoRaw;
         ReelOdoInit := TRUE;
     END_IF;
-    ReelOdoD := reelpullmotor.fActPosition - ReelOdoLast;
-    ReelOdoLast := reelpullmotor.fActPosition;
-    IF (reelpullmotor.fPositionPeriod > 0)
-       AND (ABS(ReelOdoD) > reelpullmotor.fPositionPeriod / 2) THEN
-        // modulo wrap
+    ReelOdoD := ReelOdoRaw - ReelOdoLast;     // DINT: a 32-bit wrap drops out
+    ReelOdoLast := ReelOdoRaw;
+    IF (reelpullmotor.dwOneTurn > 0)
+       AND (ABS(ReelOdoD) > DWORD_TO_DINT(reelpullmotor.dwOneTurn) / 2) THEN
+        // one turn of a modulo axis
         IF ReelOdoD > 0 THEN
-            ReelOdoD := ReelOdoD - reelpullmotor.fPositionPeriod;
+            ReelOdoD := ReelOdoD - DWORD_TO_DINT(reelpullmotor.dwOneTurn);
         ELSE
-            ReelOdoD := ReelOdoD + reelpullmotor.fPositionPeriod;
+            ReelOdoD := ReelOdoD + DWORD_TO_DINT(reelpullmotor.dwOneTurn);
         END_IF;
     END_IF;
-    IF ABS(ReelOdoD) > REEL_MAX_STEP_MM THEN
+    IF ABS(DINT_TO_LREAL(ReelOdoD)) > REEL_MAX_STEP_MM * ABS(reelpullmotor.fScalefactor) THEN
         GVL.ReelOdoJumps := GVL.ReelOdoJumps + 1;
     ELSE
-        GVL.ReelOdoMm := GVL.ReelOdoMm + ReelOdoD;
+        GVL.ReelOdoCounts := GVL.ReelOdoCounts + DINT_TO_LINT(ReelOdoD);
     END_IF;
 
     // ---- Reel move tracker (GVL.ReelMv*) ----
@@ -1326,7 +1332,7 @@ PROGRAM AxisGroupSM
                     MessagePackerFb.PackKvLint(ADR('reel_ms'), TapeT2 - TapeT1);
                     IF TapePlanCells > 0 THEN
                         MessagePackerFb.PackKvLint(ADR('cells_done'), UDINT_TO_LINT(GVL.PlanCellsDone));
-                        MessagePackerFb.PackKvLint(ADR('reel_odo_um'), LREAL_TO_LINT(GVL.ReelOdoMm * 1000.0));
+                        MessagePackerFb.PackKvLint(ADR('reel_odo_counts'), GVL.ReelOdoCounts);
                         MessagePackerFb.PackKvBool(ADR('plan_err'), TapePlanErr);
                     END_IF;
                 ELSE

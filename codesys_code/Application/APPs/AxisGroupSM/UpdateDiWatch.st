@@ -21,7 +21,7 @@ END_VAR
 //   max_high_ms / max_low_ms   longest run at each level that ended since the
 //                last event, or is still going (a run is not cut by an event)
 //   t_first      RuntimeMs of the first change since the last event
-//   reel_odo_um  reel odometer (GVL.ReelOdoMm, um) at that first change
+//   reel_odo_counts  reel odometer (GVL.ReelOdoCounts) at that first change
 //   t            RuntimeMs now
 // A full reply ring defers the push to a later scan (at most 2 per scan,
 // and never into the last 2 slots, which stay for command replies).
@@ -53,7 +53,7 @@ FOR i := 0 TO 15 DO
             DiWRunMs[i] := 0;
             IF DiWFlips[i] = 0 THEN
                 DiWFirstMs[i] := RuntimeMs;
-                DiWReelOdo[i] := GVL.ReelOdoMm;
+                DiWReelOdo[i] := GVL.ReelOdoCounts;
             END_IF;
             DiWFlips[i] := DiWFlips[i] + 1;
             IF (bitNow AND ((SHR(DiWatchRise, i) AND 1) <> 0))
@@ -87,7 +87,7 @@ FOR i := 0 TO 15 DO
                     MessagePackerFb.PackKvDint(ADR('max_low_ms'), MAX(DiWMaxLowMs[i], DiWRunMs[i]));
                 END_IF;
                 MessagePackerFb.PackKvLint(ADR('t_first'), DiWFirstMs[i]);
-                MessagePackerFb.PackKvLint(ADR('reel_odo_um'), LREAL_TO_LINT(DiWReelOdo[i] * 1000.0));
+                MessagePackerFb.PackKvLint(ADR('reel_odo_counts'), DiWReelOdo[i]);
                 MessagePackerFb.PackKvLint(ADR('t'), RuntimeMs);
                 CommitReplySlotEvent();
                 DiWFlips[i] := 0;

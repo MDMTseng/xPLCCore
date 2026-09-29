@@ -6,6 +6,7 @@ import type { VisionCheck } from './io';
 import { IO_PINS, bit } from './io';
 import { GEOMETRY, NOZZLE, TAPE } from './params';
 import { tapeStep } from './tape';
+import { reelOdoMm } from '../protocol';
 import { pickFromFeeder, placePart, tossTo, pickFromTape } from './nozzle';
 import { clearFeederFault, refillFeeder } from './feeder';
 
@@ -59,10 +60,11 @@ describe('tapeStep', () => {
     await expect(step).rejects.toThrow(/dropped by the PLC \(code 101\)/);
   });
 
-  it('reports the PLC reel odometer in mm', async () => {
-    const { m } = fakeMachine({ replies: { TAPE_CYCLE: { ack: true, cells_done: 3, reel_odo_um: 1234567 } }, vision: { top: view } });
+  it('reports the PLC reel odometer in encoder counts', async () => {
+    const { m } = fakeMachine({ replies: { TAPE_CYCLE: { ack: true, cells_done: 3, reel_odo_counts: -2048 * 3 } }, vision: { top: view } });
     const r = await tapeStep(m, { cells: 1, kind: 'pack' });
-    expect(r.reelOdoMm).toBeCloseTo(1234.567, 6);
+    expect(r.reelOdoCounts).toBe(-6144);
+    expect(reelOdoMm(r.reelOdoCounts, -256)).toBe(24);
   });
 
   it('arms the top shots with the long TTL, stretched by the speed override', async () => {

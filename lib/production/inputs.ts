@@ -23,8 +23,8 @@ export type DiEvent = {
   max_high_ms: number;
   max_low_ms: number;
   t_first: number;
-  /** Reel odometer (um, never reset) at the first of those changes. */
-  reel_odo_um: number;
+  /** Reel odometer (encoder counts, never reset) at the first of those changes. */
+  reel_odo_counts: number;
   t: number;
   seq?: number;
 };

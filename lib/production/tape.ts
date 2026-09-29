@@ -11,7 +11,7 @@
 //     once the arm is TAPE.TOP_CAM_CLEAR_MM away from above the middle
 //     slot, i.e. out of the camera's view.
 
-import { cmd, reelOdoMm } from '../protocol';
+import { cmd } from '../protocol';
 import { GEOMETRY, TAPE } from './params';
 import { IO_PINS, bit } from './io';
 import type { Machine } from './machine';
@@ -31,9 +31,9 @@ export type TapeStepResult = {
   cellsDone?: number;
   /** The PLC's plan disagreed with the kind/size of this advance. */
   planErr: boolean;
-  /** Reel odometer after the step: mm of tape since the PLC booted
-   *  (undefined on an older PLC program). */
-  reelOdoMm?: number;
+  /** Reel odometer after the step: encoder counts since the PLC booted
+   *  (undefined on an older PLC program); reelOdoMm() converts. */
+  reelOdoCounts?: number;
 };
 
 export type TapeStepOptions = {
@@ -110,6 +110,6 @@ async function runTapeStep(m: Machine, o: TapeStepOptions,
     view: top === undefined ? undefined : { ...top, post_check_advCount: 0 },
     cellsDone: typeof rep?.cells_done === 'number' ? rep.cells_done : undefined,
     planErr: rep?.plan_err === true,
-    reelOdoMm: reelOdoMm(rep?.reel_odo_um),
+    reelOdoCounts: typeof rep?.reel_odo_counts === 'number' ? rep.reel_odo_counts : undefined,
   };
 }

@@ -299,9 +299,12 @@ END_IF;
                 // Retention across PLC restart scenarios verified by
                 // probe_reel_retain (STOP+START path conclusive).
                 MessagePackerFb.PackKvReal(ADR('reel_pos'), reelpullmotor.fActPosition);
-                // reel_odo_um: tape travel since boot, never reset (GVL.ReelOdoMm)
-                MessagePackerFb.PackKvLint(ADR('reel_odo_um'), LREAL_TO_LINT(GVL.ReelOdoMm * 1000.0));
+                // reel odometer: encoder counts since boot, never reset
+                // (GVL.ReelOdoCounts), and the numbers to convert them
+                MessagePackerFb.PackKvLint(ADR('reel_odo_counts'), GVL.ReelOdoCounts);
                 MessagePackerFb.PackKvLint(ADR('reel_odo_jumps'), UDINT_TO_LINT(GVL.ReelOdoJumps));
+                MessagePackerFb.PackKvReal(ADR('reel_counts_per_mm'), LREAL_TO_REAL(reelpullmotor.fScalefactor));
+                MessagePackerFb.PackKvLint(ADR('reel_counts_per_turn'), DWORD_TO_LINT(reelpullmotor.dwOneTurn));
                 // scratchpad : nested map carrying the host-owned resume
                 // cursor. PLC pipes the retained Scratchpad_v1 struct out
                 // verbatim; renderer compares boot_epoch vs GVL.BootEpochCount
@@ -623,8 +626,10 @@ END_IF;
                 MessagePackerFb.PackKvDint(ADR('reel_cells'), GVL.ReelMvCells);
                 MessagePackerFb.PackKvDint(ADR('reel_counted'), GVL.ReelMvCounted);
                 MessagePackerFb.PackKvLint(ADR('reel_interrupts'), UDINT_TO_LINT(GVL.ReelInterruptCount));
-                MessagePackerFb.PackKvLint(ADR('reel_odo_um'), LREAL_TO_LINT(GVL.ReelOdoMm * 1000.0));
+                MessagePackerFb.PackKvLint(ADR('reel_odo_counts'), GVL.ReelOdoCounts);
                 MessagePackerFb.PackKvLint(ADR('reel_odo_jumps'), UDINT_TO_LINT(GVL.ReelOdoJumps));
+                MessagePackerFb.PackKvReal(ADR('reel_counts_per_mm'), LREAL_TO_REAL(reelpullmotor.fScalefactor));
+                MessagePackerFb.PackKvLint(ADR('reel_counts_per_turn'), DWORD_TO_LINT(reelpullmotor.dwOneTurn));
                 IF (GVL.PlanSegCount > 0) AND (GVL.PlanSegCount <= 32) THEN
                     MessagePackerFb.PackKvArray(ADR('seg'), TO_UINT(GVL.PlanSegCount));
                     FOR PlanIdx := 0 TO GVL.PlanSegCount - 1 DO

@@ -921,13 +921,15 @@ export const CalibPage: React.FC<{
 
     // Every tape step (lib/production/tape.ts): keep the PLC's cell count
     // for the end-of-run comparison and flag plan disagreements.
-    const onTapeStep=(r:{cellsDone?:number,planErr:boolean,reelOdoMm?:number},kind:'pack'|'empty',cells:number)=>{
+    const onTapeStep=(r:{cellsDone?:number,planErr:boolean,reelOdoCounts?:number},kind:'pack'|'empty',cells:number)=>{
       if(r.cellsDone!==undefined) _this.plc_cells_done=r.cellsDone;
-      // Tape log: every advance with the PLC's reel odometer (mm since its
-      // boot, never reset) -- for records and for converting cells to tape
-      // length. Bounded; read with the harness action get_reel_log.
+      // Tape log: every advance with the PLC's reel odometer (encoder
+      // counts since its boot, never reset; mm with the scale PLAN_GET gave
+      // at RUN) -- for records and for converting cells to tape length.
+      // Bounded; read with the harness action get_reel_log.
       const log=(_this.reelLog ??= []) as any[];
-      log.push({t:Date.now(),kind,cells,cells_done:r.cellsDone,odo_mm:r.reelOdoMm});
+      log.push({t:Date.now(),kind,cells,cells_done:r.cellsDone,odo_counts:r.reelOdoCounts,
+        odo_mm:reelOdoMm(r.reelOdoCounts,_this.reelCountsPerMm)});
       if(log.length>5000) log.splice(0,log.length-5000);
       if(r.planErr){
         // The PLC's plan puts a different segment kind (or fewer cells) at
@@ -1532,7 +1534,11 @@ export const CalibPage: React.FC<{
   // Reel odometer now (PLAN_GET) and the tape log of the runs since load.
   useHarnessAction('get_reel_log', async () => {
     const st = await sendTcpMsgPack(cmd.PlanGet()) as PlanState;
-    return { odo_mm: reelOdoMm(st?.reel_odo_um), jumps: st?.reel_odo_jumps, log: _this.reelLog ?? [] };
+    return {
+      odo_counts: st?.reel_odo_counts, counts_per_mm: st?.reel_counts_per_mm, counts_per_turn: st?.reel_counts_per_turn,
+      odo_mm: reelOdoMm(st?.reel_odo_counts, st?.reel_counts_per_mm), jumps: st?.reel_odo_jumps,
+      log: _this.reelLog ?? [],
+    };
   }, []);
 
   useHarnessAction('get_plc_plan', async () => {
@@ -1600,6 +1606,7 @@ export const CalibPage: React.FC<{
   //  - otherwise (a new plan): send it, with the progress already made.
   async function syncPlanWithPlc(send: (pkt: any) => Promise<any>): Promise<string> {
     const st = await send(cmd.PlanGet()) as PlanState;
+    if (typeof st?.reel_counts_per_mm === 'number') _this.reelCountsPerMm = st.reel_counts_per_mm;
     const seg = (st?.seg ?? []) as number[];
     const plcRemaining = remainingPlan(seg, st?.cells_done ?? 0);
     const original = _this.production_plan_original as number[] | undefined;
