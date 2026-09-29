@@ -269,10 +269,14 @@ PROGRAM AxisGroupSM
         DiWMaxLowMs       : ARRAY[0..15] OF DINT;
         DiWRunMs          : ARRAY[0..15] OF DINT;
         DiWFirstMs        : ARRAY[0..15] OF LINT;
-        DiWReelPos        : ARRAY[0..15] OF REAL;
+        DiWReelOdo        : ARRAY[0..15] OF LREAL;
         DiWPending        : ARRAY[0..15] OF BOOL;
         DiWLastSentMs     : ARRAY[0..15] OF LINT;
         TestDiBurstLastMs : LINT;
+        // Reel odometer (GVL.ReelOdoMm).
+        ReelOdoInit       : BOOL;
+        ReelOdoLast       : LREAL;
+        ReelOdoD          : LREAL;
         // Reel move tracker (GVL.ReelMv*): counts cells as the reel passes them.
         ReelTrkActive   : BOOL;
         ReelTrkStarted  : BOOL;        // the reel has moved since the dispatch
@@ -1112,6 +1116,28 @@ PROGRAM AxisGroupSM
         END_IF;
     END_FOR;
 
+    // ---- Reel odometer (GVL.ReelOdoMm): travel since boot, never reset ----
+    IF NOT ReelOdoInit THEN
+        ReelOdoLast := reelpullmotor.fActPosition;
+        ReelOdoInit := TRUE;
+    END_IF;
+    ReelOdoD := reelpullmotor.fActPosition - ReelOdoLast;
+    ReelOdoLast := reelpullmotor.fActPosition;
+    IF (reelpullmotor.fPositionPeriod > 0)
+       AND (ABS(ReelOdoD) > reelpullmotor.fPositionPeriod / 2) THEN
+        // modulo wrap
+        IF ReelOdoD > 0 THEN
+            ReelOdoD := ReelOdoD - reelpullmotor.fPositionPeriod;
+        ELSE
+            ReelOdoD := ReelOdoD + reelpullmotor.fPositionPeriod;
+        END_IF;
+    END_IF;
+    IF ABS(ReelOdoD) > REEL_MAX_STEP_MM THEN
+        GVL.ReelOdoJumps := GVL.ReelOdoJumps + 1;
+    ELSE
+        GVL.ReelOdoMm := GVL.ReelOdoMm + ReelOdoD;
+    END_IF;
+
     // ---- Reel move tracker (GVL.ReelMv*) ----
     // Counts the cells of a tape move into the plan as the reel passes
     // them, every scan and whatever the FSM state: after a fault the reel
@@ -1300,6 +1326,7 @@ PROGRAM AxisGroupSM
                     MessagePackerFb.PackKvLint(ADR('reel_ms'), TapeT2 - TapeT1);
                     IF TapePlanCells > 0 THEN
                         MessagePackerFb.PackKvLint(ADR('cells_done'), UDINT_TO_LINT(GVL.PlanCellsDone));
+                        MessagePackerFb.PackKvLint(ADR('reel_odo_um'), LREAL_TO_LINT(GVL.ReelOdoMm * 1000.0));
                         MessagePackerFb.PackKvBool(ADR('plan_err'), TapePlanErr);
                     END_IF;
                 ELSE

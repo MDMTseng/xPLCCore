@@ -10,7 +10,7 @@ const NORMAL = (1 << I.PackedReelNoProtrusion) | (1 << I.ReelPressRollerInPlace)
 const fc0 = new Array(16).fill(0);
 
 function ev(pin: number, state: boolean, flips = 1): DiEvent {
-  return { kind: 'event', name: 'DI', pin, state, flips, high_ms: 0, max_high_ms: 0, max_low_ms: 0, t_first: 0, reel_pos: 0, t: 0 };
+  return { kind: 'event', name: 'DI', pin, state, flips, high_ms: 0, max_high_ms: 0, max_low_ms: 0, t_first: 0, reel_odo_um: 0, t: 0 };
 }
 
 function normalMonitor() {

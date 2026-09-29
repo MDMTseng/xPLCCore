@@ -6,7 +6,7 @@ import type { COMCtrlObj } from '../types';
 import { delay } from '../utils/async';
 import { t, type UILang } from '../i18n';
 import { useHarnessAction } from '../harness/registry';
-import { cmd } from '../lib/protocol';
+import { cmd, reelOdoMm } from '../lib/protocol';
 import { GEOMETRY, TAPE, INSPECTION, NOZZLE, FEEDER, VISION, WATCHDOG, MOTION, feedConfig } from '../lib/production/params';
 import { applyAdvance, cellsDone, nextCycleAction, remainingPlan } from '../lib/production/plan';
 import { VISION_CHECK } from '../lib/production/io';
@@ -921,8 +921,14 @@ export const CalibPage: React.FC<{
 
     // Every tape step (lib/production/tape.ts): keep the PLC's cell count
     // for the end-of-run comparison and flag plan disagreements.
-    const onTapeStep=(r:{cellsDone?:number,planErr:boolean},kind:'pack'|'empty',cells:number)=>{
+    const onTapeStep=(r:{cellsDone?:number,planErr:boolean,reelOdoMm?:number},kind:'pack'|'empty',cells:number)=>{
       if(r.cellsDone!==undefined) _this.plc_cells_done=r.cellsDone;
+      // Tape log: every advance with the PLC's reel odometer (mm since its
+      // boot, never reset) -- for records and for converting cells to tape
+      // length. Bounded; read with the harness action get_reel_log.
+      const log=(_this.reelLog ??= []) as any[];
+      log.push({t:Date.now(),kind,cells,cells_done:r.cellsDone,odo_mm:r.reelOdoMm});
+      if(log.length>5000) log.splice(0,log.length-5000);
       if(r.planErr){
         // The PLC's plan puts a different segment kind (or fewer cells) at
         // this point of the tape than the renderer just advanced.
@@ -1521,6 +1527,12 @@ export const CalibPage: React.FC<{
     const events = _this.diEventLog ?? [];
     _this.diEventLog = [];
     return { events };
+  }, []);
+
+  // Reel odometer now (PLAN_GET) and the tape log of the runs since load.
+  useHarnessAction('get_reel_log', async () => {
+    const st = await sendTcpMsgPack(cmd.PlanGet()) as PlanState;
+    return { odo_mm: reelOdoMm(st?.reel_odo_um), jumps: st?.reel_odo_jumps, log: _this.reelLog ?? [] };
   }, []);
 
   useHarnessAction('get_plc_plan', async () => {

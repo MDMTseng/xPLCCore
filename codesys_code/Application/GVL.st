@@ -217,6 +217,17 @@ VAR_GLOBAL
 	   a virtual axis does not have. 0 in production. *)
 	TestReelJitterMm : LREAL := 0;
 
+	(* Reel odometer (owner, 2026-09-29): tape travel since the PLC booted,
+	   unwrapped (the reel is a modulo-200 axis) and never reset, in axis
+	   units = mm of tape (51200 increments = 200 units; a cell is 8).
+	   Sent as integer micrometres (reel_odo_um) in GET_MACHINE_STATE,
+	   PLAN_GET, the TAPE_CYCLE reply and DI events, for the host to log
+	   and convert. A step over REEL_MAX_STEP_MM in one scan is not travel
+	   (the position was reset: drive / bus restart): it is left out and
+	   counted in ReelOdoJumps, so the host can see the discontinuity. *)
+	ReelOdoMm    : LREAL;
+	ReelOdoJumps : UDINT;
+
 	(* Tape moves that stopped short of their target (the ReelMv block). *)
 	ReelInterruptCount : UDINT;
 	(* A tape move is under way (the reel tracker is on). The FSM keeps the

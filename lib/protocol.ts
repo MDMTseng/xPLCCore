@@ -202,6 +202,10 @@ export interface TapeCycleArgs {
 
 /** The production plan as the PLC keeps it (SYS PLAN_GET). The remaining
  *  plan is derived: lib/production/plan.ts remainingPlan(seg, cells_done). */
+/** Reel odometer micrometres (reel_odo_um) -> mm of tape. */
+export const reelOdoMm = (um: number | undefined): number | undefined =>
+  typeof um === 'number' ? um / 1000 : undefined;
+
 export interface PlanState {
   plan_id: number;
   plan_rev: number;
@@ -225,6 +229,11 @@ export interface PlanState {
   reel_counted?: number;
   /** Tape moves stopped short since the PLC started. */
   reel_interrupts?: number;
+  /** Reel odometer: tape travel since the PLC booted, never reset, in
+   *  micrometres (reelOdoMm() converts). reel_odo_jumps counts position
+   *  resets left out of it (drive / bus restart). */
+  reel_odo_um?: number;
+  reel_odo_jumps?: number;
 }
 
 export interface ReelGoArgs {
@@ -284,6 +293,9 @@ export interface MachineState {
   // PLC is origin/pitch-agnostic -- it just reports the raw axis
   // position. See doc_review/decisions_2026-06-22.md §4 (1).
   reel_pos: number;
+  /** Reel odometer (see PlanState.reel_odo_um). */
+  reel_odo_um?: number;
+  reel_odo_jumps?: number;
   // Host-owned resume cursor (PLC opaque except for schema_version /
   // boot_epoch). See decisions_2026-06-22.md §4 (2) + Scratchpad_v1.st.
   scratchpad: Scratchpad;

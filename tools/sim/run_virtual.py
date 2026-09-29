@@ -645,10 +645,21 @@ def _r_sym(sym):
     return str(daemon({"cmd": "read", "symbol": sym})["value"]).split("#")[-1]
 
 
-def reel_books(pos0, cells0):
+def reel_odo():
+    """The PLC's reel odometer (mm since boot, never reset), or None."""
+    return push("get_reel_log", timeout=10).get("odo_mm")
+
+
+def reel_books(pos0, cells0, odo0=None):
     """The tape moved exactly as far as the PLC counted?"""
     pos1 = reel_pos()
     plc = push("get_plc_plan", timeout=10)
+    if odo0 is not None:
+        odo1 = reel_odo()
+        counted = (plc.get("cells_done") or 0) - cells0
+        off = (odo1 - odo0) - counted * REEL_CELL_MM
+        log("reel odometer: %.3f mm travelled, PLC counted %d cells (%.3f mm) -> %s" % (
+            odo1 - odo0, counted, counted * REEL_CELL_MM, "MATCH" if abs(off) < 0.05 else "MISMATCH"))
     # the position wraps every REEL_PERIOD_MM: compare modulo one turn
     counted = (plc.get("cells_done") or 0) - cells0
     off = (pos1 - pos0 - counted * REEL_CELL_MM) % REEL_PERIOD_MM
@@ -886,6 +897,7 @@ def main():
         if a.speed != 100:
             log("speed:", push("set_speed", {"percent": a.speed}, timeout=10))
         pos0 = reel_pos() if a.fault else None     # a new plan counts from cell 0
+        odo0 = reel_odo() if a.fault else None
         if a.ui_guards:
             ui_guards(a)
         else:
@@ -916,7 +928,7 @@ def main():
             chaos(a)                        # runs the plan to its end itself
         elif a.fault:
             fault(a)
-            reel_books(pos0, 0)
+            reel_books(pos0, 0, odo0)
             a.chaos = 1                     # skip the monitor loop below
 
         base = top_checks()                 # the mock log is per run, but be safe

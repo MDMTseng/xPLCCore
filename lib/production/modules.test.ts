@@ -59,6 +59,12 @@ describe('tapeStep', () => {
     await expect(step).rejects.toThrow(/dropped by the PLC \(code 101\)/);
   });
 
+  it('reports the PLC reel odometer in mm', async () => {
+    const { m } = fakeMachine({ replies: { TAPE_CYCLE: { ack: true, cells_done: 3, reel_odo_um: 1234567 } }, vision: { top: view } });
+    const r = await tapeStep(m, { cells: 1, kind: 'pack' });
+    expect(r.reelOdoMm).toBeCloseTo(1234.567, 6);
+  });
+
   it('arms the top shots with the long TTL, stretched by the speed override', async () => {
     const { m, sent } = fakeMachine({ replies: { TAPE_CYCLE: { ack: true } }, vision: { top: view } });
     m.timeScale = () => 2;
