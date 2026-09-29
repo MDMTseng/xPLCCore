@@ -217,3 +217,28 @@ u/s = 18000 deg/s = 50 turns/s, far too fast for a stepper.
     or the Y HOME input);
   - raise the limits step by step;
   - move the rotations onto the long arm moves.
+
+### A axis limits vs motion time per part (machine, 2026-09-29)
+
+`tools/a_speed_compare.py`: the production G1 sequence of one part
+(feed 2000, Cor 45), queued whole, timed to motion stop, 20 parts, the
+same seeded angles. The delta arms are virtual; the A stepper turns.
+
+| A limits (turns/s, turns/s^2) | A as in production | A on long moves only | A held at 0 |
+|---|---|---|---|
+| 1, 10 | 2.31 s | | 0.59 s |
+| 3, 30 | 1.34 s | | 0.59 s |
+| 5, 60 | 1.11 s | | 0.59 s |
+| 8, 120 | 0.91 s | 0.84 s (one part 2.8 s: to check) | 0.59 s |
+| no limit (virtual, the old setup) | 0.68 s | | 0.59 s |
+
+- With A held, the time is 0.59 s under every setting. A in the group
+  costs nothing while it does not turn. The owner's "twice as slow with
+  A even when it does not turn" is not reproduced in this setup.
+- The cost is the rotation under the A limits. Moving the rotations onto
+  the long moves (no A-only G1) takes 0.08 s off at 8 turns/s.
+- Next: the highest A limits the stepper holds (the bottom camera shows
+  lost steps; the owner says a lost step only costs the part in hand,
+  since every pick starts A from 0), then move the rotations in cycle.ts.
+- Left on the machine: A real at 8 turns/s, 120 turns/s^2 (288 u/s,
+  4320 u/s^2, jerk 86400 u/s^3).
