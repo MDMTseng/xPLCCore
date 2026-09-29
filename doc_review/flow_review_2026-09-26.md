@@ -281,3 +281,17 @@ without limits (0.916 / 0.594). The real production flow ran without
 errors under the joint limits: the planner slows the path, it does not
 fault. Scalings unchanged; the A /10 wrap trick stays until A is an
 additional axis.
+
+Limit check (`tools/limit_test.py`): back-and-forth single-direction
+strokes, stop to stop, with G1 dynamics far above anything the axes can
+do (F 100 000, ACC 1e7, JERK 1e9). No axis exceeded its velocity or
+acceleration limit, and the FSM stayed Ready:
+
+- X / Y / XY +-50 mm: the busiest joint reached 88-92 % of 1160 deg/s,
+  71-74 % of 100 000 deg/s^2, 88-92 % of the 1e7 jerk.
+- Z +12 / -15: jerk 95 %.
+- A 0 / 360: 100 % / 99.7 % / 100 %.
+- X +-50 + A 0 / 180: A binds, 0.191 s per stroke against 0.075 s
+  without A.
+
+Short delta strokes are jerk-bound.
