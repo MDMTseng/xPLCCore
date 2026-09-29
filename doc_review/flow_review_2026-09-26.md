@@ -242,3 +242,19 @@ same seeded angles. The delta arms are virtual; the A stepper turns.
   since every pick starts A from 0), then move the rotations in cycle.ts.
 - Left on the machine: A real at 8 turns/s, 120 turns/s^2 (288 u/s,
   4320 u/s^2, jerk 86400 u/s^3).
+
+Group without A (the owner remembers "twice as fast without A even when A
+stays 0"): SpiderR exported (native XML, `doc_review/SpiderR_axisgroup_2026-09-29.export`),
+the tool kinematics removed (`<Null Name="ToolKinematics" />`), imported
+over the group (`app.import_native(Array[str]([file]), None, handler)`,
+`NativeImportResolve.replace`), installed, measured, then the original
+imported back and re-measured:
+
+| group | motion per part, A never turning |
+|---|---|
+| without A (Kin_Tripod_Rotary only) | 0.591 s |
+| with A (Kin_CAxis), A held at 0 | 0.590 s / 0.594 s after restoring |
+
+No difference in this setup. The "A on long moves" outlier (one part
+2.8 s) repeats exactly after the restore: a specific angle case, not
+noise.

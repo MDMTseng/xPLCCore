@@ -121,17 +121,23 @@ def main():
     ap.add_argument("--plc", default="192.168.1.70")
     ap.add_argument("--parts", type=int, default=20)
     ap.add_argument("--label", default="")
+    ap.add_argument("--held-only", action="store_true",
+                    help="only the A-held run, never sending A (for a group without the A axis)")
     a = ap.parse_args()
     with Plc(a.plc) as p:
         if (p.sys("GET_MACHINE_STATE").get("axes_sim_mask", 0) & 7) != 7:
             raise SystemExit("REFUSED: the delta arms are not all simulated")
         to_ready(p)
         p.m("SetCoord1")
-        g1(p, X=0.0, Y=0.0, Z=SAFE_Z, A=0.0, Cor=45.0, **DYN)     # production start: Cor 45 sticky
+        start = dict(X=0.0, Y=0.0, Z=SAFE_Z, Cor=45.0, **DYN)     # production start: Cor 45 sticky
+        if not a.held_only:
+            start["A"] = 0.0
+        g1(p, **start)
         p.m("WAIT_FOR_MOTION_STOP", timeout=30, timeout_ms=25000)
-        for with_a in (True, "merged", False):
+        for with_a in ((False,) if a.held_only else (True, "merged", False)):
             t = run(p, a.parts, with_a)
-            g1(p, A=0.0)
+            if not a.held_only:
+                g1(p, A=0.0)
             p.m("WAIT_FOR_MOTION_STOP", timeout=30, timeout_ms=25000)
             log("%-28s %-15s motion per part: median %.3f s  mean %.3f s  min %.3f  max %.3f  (%d parts)" % (
                 a.label, {True: "A rotating", "merged": "A on long moves", False: "A held at 0"}[with_a],
