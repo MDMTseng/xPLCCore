@@ -137,3 +137,29 @@ The sim is about 10 % slower than the machine in absolute terms. Its 1 ms
 tasks ran 9539 cycles in 10 s. SoftMotion advances one fixed cycle per
 call, so the motion stretches in wall time. The planned motion is the
 same. Compare old and new on the same PLC only.
+
+## On the machine (2026-09-29 22:55)
+
+`set_sm3_420.py` + `set_a_additional_axis.py` on the real project, build
+0 errors, `install --on-site`: download 19.7 s, app in RUN, EtherCAT OK,
+DC in sync (no new out-of-sync cycles after start-up), EtherCAT_Task avg
+93 / max 288 us, planning max 26 us. `a_axis_test.py` with the real A:
+every single move exact (90 / 270 / -90 / 540 / -720 deg, X + A, sticky
+A), peaks 2880 deg/s, 43 081 deg/s^2.
+
+Then the 5 queued Cor 45 G1s with A: the PLC stopped answering. Ping
+still answers, every TCP port (23 telnet, 1217, 11740, 8125/8126) times
+out. The Intewell shell is gone too, so no remote recovery; it needs a
+power cycle. The same symptom happened once before on the SM3 4.18 build,
+so the cause is open.
+
+The sim does not reproduce it: `tools/a_blend_stress.py --rounds 200`
+(the hang sequence, then 200 rounds of 3-12 queued G1s with A, Cor 0 / 5
+/ 45): 0 failures, planning max 3.3 ms. The differences to the machine:
+the RTOS (Intewell, fixed task stacks), the real A drive path
+(GenericDSP402 in the EtherCAT task; the sim's A is virtual).
+
+After the power cycle the PLC boots this build. Options: rerun the hang
+sequence while watching the Intewell shell (`task`, `cpuuse`), or roll
+back with snapshot `jobs/snapshots/20260929-225357_sm3_420.project` (SM3
+4.18, Kin_CAxis, /10) and the previous PLC sources (git d62b891^).
