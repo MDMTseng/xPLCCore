@@ -1,4 +1,8 @@
 # -*- coding: ascii -*-
+# SUPERSEDED by set_a_additional_axis.py (A as additional axis, 1 u = 1
+# deg). Kept for the record; running it now would set degree limits ten
+# times too low.
+#
 # The axis group's A axis (SpiderR tool kinematics Kin_CAxis):
 # SM_Drive_GenericDSP402, drive ID 7, logical device 1 = the second axis
 # of the QEC stepper driver (M2 / "Y", where the rotation motor is wired).

@@ -8,19 +8,18 @@ Entries are ordered roughly by blast radius (most dangerous first).
 
 ---
 
-## A-axis `/10` scaling
+## A axis = additional axis 0 of SpiderR, in degrees
+(Replaced the `/10` wrap trick through `Kin_CAxis` on 2026-09-29.)
+
 **Sites:**
-- [`ProcessMotionPacket.st`](../../codesys_code/Application/APPs/AxisGroupSM/ProcessMotionPacket.st) — `MotionPose.c.A := MotionPoseTempReal / A_AXIS_KIN_WRAP_SCALE`
-- [`AxisGroupSM.st`](../../codesys_code/Application/APPs/AxisGroupSM/AxisGroupSM.st) VAR_INPUT — `A_AXIS_KIN_WRAP_SCALE : LREAL := 10` (the constant)
-- `SM_Drive_GenericDSP402` axis scaling (CODESYS GUI) — has matching `A_AXIS_KIN_WRAP_SCALE`x to undo it
+- Axis group `SpiderR` (CODESYS config): no tool kinematics; `SM_Drive_GenericDSP402` as the one additional axis. Set by [`set_a_additional_axis.py`](../../codesys_scripts/jobs/templates/set_a_additional_axis.py), with the axis scaling 6400 steps = 360 u and the limits in degrees.
+- SoftMotion libraries >= 4.20 (`MC_MoveLinearAbsolute.AdditionalAxes`), set by [`set_sm3_420.py`](../../codesys_scripts/jobs/templates/set_sm3_420.py).
+- [`ProcessMotionPacket.st`](../../codesys_code/Application/APPs/AxisGroupSM/ProcessMotionPacket.st) — G1 `A` goes to `AddAxTargetA`, then to `AddAxMoves[AddAxRingIdx].Positions[0]`, assigned to `AdditionalAxes`. `MotionPose.c.A` stays 0.
+- [`set_axis_limits.py`](../../codesys_scripts/jobs/templates/set_axis_limits.py) — A limits in deg/s.
 
-**Constraint:** Either both ends use `/10` and `*10`, or neither.
+**Constraint:** All four agree: the group has A as an additional axis, the libraries have the input, the PLC code feeds it, and the limits are in degrees. `AddAxMoves` must hold more instances than the movement queue can (`MOTION_BUFFER_THRESHOLD`), so that no queued move shares an instance.
 
-**Why it exists:** SpiderR's chained `Kin_CAxis` structurally wraps `c.A` to ±180°.
-UI commands ±360°. The 10x scale dodges the wrap by sending ±36° through the kinematic
-and reversing it at the axis. See [`memory/a_axis_div10_workaround.md`](../../.claude/projects/c--Users-X1-Desktop-X2-5-TCP-UI-TCP-UI/memory/a_axis_div10_workaround.md).
-
-**Failure mode if broken:** A axis silently moves at 10x or 0.1x the commanded angle.
+**Failure modes if broken:** SM3 below 4.20: the build fails. The old code (`/10`) on the new scaling: A turns 1/10 of the command. The old limit values on the new scaling: A runs 10x slower.
 
 ---
 

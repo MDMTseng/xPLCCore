@@ -21,14 +21,14 @@ PROGRAM AxisGroupSM
         // Sentinel used by 'G1' to detect "A not supplied" in the TryReadREAL
         // default. Any real A value is << |919191|.
         G1_A_UNSET_SENTINEL     : LREAL := -919191;
-        // A-axis Kin_CAxis wrap workaround: SpiderR's chained kinematic
-        // wraps c.A to +/-180 deg structurally, but the UI commands
-        // +/-360 deg. We divide by this constant here and multiply by
-        // the same constant on the SM_Drive_GenericDSP402 axis-side
-        // scaling (CODESYS GUI), so the wrap is dodged round-trip.
-        // Both ends MUST match. See doc/1-concepts/coupling_invariants.md
-        // "A-axis /10 scaling" before changing.
-        A_AXIS_KIN_WRAP_SCALE   : LREAL := 10;
+        // A is additional axis 0 of SpiderR (SM_Drive_GenericDSP402, 1 u =
+        // 1 deg, no wrap). Every accepted G1 takes one instance of this
+        // ring for its A target: the movement FB takes the instance as an
+        // interface (a reference), and when the planner reads it is not
+        // documented, so an instance is not reused while a queued
+        // movement may still hold it. The ring is
+        // far larger than the queue (MOTION_BUFFER_THRESHOLD moves).
+        ADD_AX_RING_SIZE        : INT := 128;
         // Bound on per-scan SYS-drain iterations. Prevents a flood of SYS
         // packets from monopolising the EC task. 16 covers normal bursts
         // (PING + GA_EV + GET_MACHINE_STATE x a few); leftover slots wait
@@ -424,7 +424,14 @@ PROGRAM AxisGroupSM
 
 
     //LocVar FOR ProcessMotionPacket
-    TransitionParameter : ARRAY [0..1] OF LREAL := [0, 0];
+    // [2]: the additional axes' share of the blending (SM3 >= 4.20; used by
+    // TMStartVelocity / TMAxisDistance, the library's default 1).
+    TransitionParameter : ARRAY [0..(SMC_RCNST.MAX_TRANS_PARAMS - 1)] OF LREAL := [0, 0, 1];
+    // A target in degrees (sticky: a G1 without A keeps it) and the ring of
+    // additional-axes movements, see ADD_AX_RING_SIZE.
+    AddAxTargetA : LREAL;
+    AddAxMoves   : ARRAY [0..ADD_AX_RING_SIZE - 1] OF SMC_MoveAdditionalAxesAbsolute;
+    AddAxRingIdx : INT;
     FlyEventTempData : FlyEventData;
     // All zero, never written: FlyEventTempData is reset from it before each
     // registration, so fields a branch does not set (stages, sphere, pulse)

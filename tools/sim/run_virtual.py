@@ -802,7 +802,7 @@ def main():
     ap.add_argument("--path-n", type=int, default=200)
     ap.add_argument("--speed", type=int, default=100, help="motion speed override in percent (set_speed)")
     ap.add_argument("--speed-wobble", action="store_true",
-                    help="while running, switch the speed between 100/40/70 % every few seconds")
+                    help="while running, switch the speed between 100/40/70 %% every few seconds")
     ap.add_argument("--peaks", action="store_true",
                     help="report each servo's peak |velocity|, |acceleration| and |jerk| over the run "
                          "(GVL.MotionPeak*, reset at RUN)")
@@ -827,7 +827,7 @@ def main():
     ap.add_argument("--override-probe", action="store_true",
                     help="instead of production: probe how MC_GroupSetOverride behaves (GVL.TestOvr*)")
     ap.add_argument("--override-check", action="store_true",
-                    help="instead of production: the same moves at 100 % and 30 % speed, servo peaks of each")
+                    help="instead of production: the same moves at 100 %% and 30 %% speed, servo peaks of each")
     ap.add_argument("--abort-test", action="store_true",
                     help="instead of production: redirect toward the NG bin mid-move, abort (dynamics "
                          "scaled) vs blend, with the servo peaks of each")

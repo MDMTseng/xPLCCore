@@ -10,7 +10,7 @@ the machine" on).
 | SoftMotion axis | drive | wired to | mode now | in group SpiderR |
 |---|---|---|---|---|
 | EAxis0 / 1 / 2 | ASDA-B3-E x3 (EtherCAT) | the delta arms, 31:1 | **virtual** (keep until the owner says otherwise) | main kinematics `Kin_Tripod_Rotary` |
-| SM_Drive_GenericDSP402 | QEC 3-axis stepper driver, logical device 1 = **axis 2 (M2 / "Y")** | the A rotation (open-loop stepper, no encoder) | **real** | tool kinematics `Kin_CAxis` |
+| SM_Drive_GenericDSP402 | QEC 3-axis stepper driver, logical device 1 = **axis 2 (M2 / "Y")** | the A rotation (open-loop stepper, no encoder) | **real** | **additional axis 0** (was tool kinematics `Kin_CAxis`, see below) |
 | EAXIS_A | same QEC, logical device 0 = axis 1 (M1 / "X") | nothing | real, never commanded | no |
 | reelpullmotor | CL3-E57H closed-loop stepper | the tape reel (sprocket) | **real** | no (single axis, `MC_MoveRelative`) |
 
@@ -21,27 +21,25 @@ the machine" on).
 | axis | unit | scaling |
 |---|---|---|
 | delta joints | degree at the joint | motor turns x31 |
-| A | **u = 10 degrees** | 6400 steps (one motor turn, 360 deg) = 36 u |
+| A | **degree** | 6400 steps (one motor turn) = 360 u |
 | reel | mm of tape | 51200 counts = 200 mm, a cell 8 mm, modulo 200 |
 
-A: `G1 A` is in degrees. The PLC divides by 10 (`A_AXIS_KIN_WRAP_SCALE`)
-for the kinematics, and the axis scaling multiplies by 10 again. Reason:
-`Kin_CAxis` treats A as a tool orientation, normalised to +-180; /10
-lets +-180 cover +-1800 real degrees. Limits are in u: real deg/s / 10.
-Next: make A an additional axis (no normalisation), then 1 u = 1 deg
-and no /10 (see below).
+A: `G1 A` is in degrees and goes to the axis 1:1, no wrap. Before, A was
+the tool kinematics `Kin_CAxis`, which normalises to +-180; the PLC
+divided by 10 and the scaling (36 u per turn) multiplied back. See "A as
+additional axis" below.
 
 ## Dynamic limits (`jobs/templates/set_axis_limits.py`)
 
 | axis | velocity | acceleration / deceleration | jerk | basis |
 |---|---|---|---|---|
 | delta joints | 1160 deg/s (~6000 motor rpm) | 100 000 deg/s^2 | 1e7 deg/s^3 | production peaks 946-1084 deg/s, <= 78 500 deg/s^2, ~1e7 jerk; the ASDA-B3's ~6000 rpm |
-| A | 288 u/s = 2880 deg/s = 8 turns/s | 4320 u/s^2 = 120 turns/s^2 | 86 400 u/s^3 | production reached 92-97 %; step loss watched with the bottom camera |
+| A | 2880 deg/s = 8 turns/s | 43 200 deg/s^2 = 120 turns/s^2 | 864 000 deg/s^3 | production reached 92-97 %; step loss watched with the bottom camera |
 | reel | 5000 mm/s | 100 000 mm/s^2 | 1e5 mm/s^3 | = `TAPE.REEL_MOVE` |
 
 Before: delta 100 000 / 800 000 / 1e7 and A 180 000 u/s (no limits), and
-A virtual. `jobs/templates/set_group_a_axis.py` sets A's mode and
-limits.
+A virtual. `jobs/templates/set_a_additional_axis.py` sets A's group
+role, scaling and limits (`set_group_a_axis.py` was the Kin_CAxis setup).
 
 How the planner uses them (measured):
 - The planner holds every axis of the group within its limits. When a
@@ -83,9 +81,7 @@ A-only G1) saves about 0.08 s at 8 turns/s.
 
 ## Open
 
-1. A as an additional axis of SpiderR instead of the tool kinematics:
-   no +-180, units in degrees, no /10. It stays synchronised with the
-   path and the group's progress triggers.
+1. The real project: A as additional axis (done on the sim, see below).
 2. The UI speed override should also scale the axis limits
    (`VelFactor` x f, `AccFactor` x f^2, `JerkFactor` x f^3). Today a
    segment held back by A ignores the override.
@@ -94,3 +90,50 @@ A-only G1) saves about 0.08 s at 8 turns/s.
    input.
 5. The sim project has not got today's axis settings (they are device
    configuration, not sources): run the same jobs there when it matters.
+
+## A as additional axis (2026-09-29, sim)
+
+SpiderR has no tool kinematics now; `SM_Drive_GenericDSP402` is its
+additional axis 0. Each G1 passes an `SMC_MoveAdditionalAxesAbsolute`
+(`AdditionalAxes` input) with the A target. The planner moves A with the
+path in the same movement, so the group's progress triggers and blending
+cover A as before.
+
+What it takes:
+- SoftMotion 4.20. SM3_Robotics 4.18 has no `AdditionalAxes` input.
+  `set_sm3_420.py` redirects every SM3 placeholder of the Application to
+  the newest installed version (4.20.x; drive libraries 4.19). This
+  includes the nested ones (SM3_RBase, SM3_Math, ...). Redirecting only
+  the top level gave 501 build errors.
+- 4.20's `TransitionParameter` has 3 elements (`[2]`: the additional axes'
+  share of the blending). It is declared as
+  `ARRAY [0..SMC_RCNST.MAX_TRANS_PARAMS-1]`, `[0, 0, 1]`.
+- `set_a_additional_axis.py`: the group, the scaling (360 u per turn) and
+  the limits in degrees.
+- PLC: no `A_AXIS_KIN_WRAP_SCALE`. `AddAxTargetA` is sticky (a G1 without
+  A keeps it) and is reset to 0 like the pose when the group is not
+  Ready. There is a ring of 128 `SMC_MoveAdditionalAxesAbsolute`, one per
+  accepted G1, so a queued move never shares an instance. At most 12 are
+  queued. `READ_LATEST_CMD_LOCATION` reports A in degrees.
+
+Checked on the sim (`tools/a_axis_test.py`, `limit_test.py`,
+`a_speed_compare.py`, `run_virtual.py --peaks`):
+- A to 90 / 0 / 270 / -90 / 540 / -720 / 0 deg: exact, beyond +-180.
+- X + A in one G1: done together. A G1 without A leaves A where it was.
+- 5 queued G1s at Cor 45 with different A: ends at the last A.
+- The limits hold: A peaks 2880 deg/s, 43 061 deg/s^2.
+- Motion per part, same sim, same limits, old vs new:
+
+  | | Kin_CAxis (/10) | additional axis |
+  |---|---|---|
+  | A rotating | 1.058 s mean (max 1.486) | 1.040 s mean (max 1.278) |
+  | A on long moves | 1.035 s | 1.011 s |
+  | A held | 0.661 s | 0.660 s |
+
+- Production flow, 31 tape checks, 22 cells: no error. The top-shot
+  triggers are on time.
+
+The sim is about 10 % slower than the machine in absolute terms. Its 1 ms
+tasks ran 9539 cycles in 10 s. SoftMotion advances one fixed cycle per
+call, so the motion stretches in wall time. The planned motion is the
+same. Compare old and new on the same PLC only.

@@ -9,8 +9,9 @@
 #     no joint reached them. So: 1160 deg/s (the ASDA-B3's ~6000 rpm), 100
 #     000 deg/s^2, 1e7 deg/s^3 -- the same motion time as before (was 100
 #     000 / 800 000 / 1e7: no limit).
-#   group A (1 u = 10 deg, the /10 wrap trick in the scaling): production
-#     reached 92-97 % of 288 u/s, 4320 u/s^2 -- kept.
+#   A (the group's additional axis, 1 u = 1 deg since 2026-09-29): 2880
+#     deg/s = 8 turns/s, 43 200 deg/s^2. Production reached 92-97 % of
+#     them (then 288 u/s, 4320 u/s^2 at 10 deg/u) -- kept.
 #   reel (mm): the production move TAPE.REEL_MOVE, 5000 mm/s, 100 000
 #     mm/s^2, 1e5 mm/s^3.
 #
@@ -20,7 +21,7 @@ LIMITS = {
     "EAxis0": {"fSWMaxVelocity": "1160", "fSWMaxAcceleration": "100000", "fSWMaxDeceleration": "100000", "fSWMaxJerk": "10000000"},
     "EAxis1": {"fSWMaxVelocity": "1160", "fSWMaxAcceleration": "100000", "fSWMaxDeceleration": "100000", "fSWMaxJerk": "10000000"},
     "EAxis2": {"fSWMaxVelocity": "1160", "fSWMaxAcceleration": "100000", "fSWMaxDeceleration": "100000", "fSWMaxJerk": "10000000"},
-    "SM_Drive_GenericDSP402": {"fSWMaxVelocity": "288", "fSWMaxAcceleration": "4320", "fSWMaxDeceleration": "4320", "fSWMaxJerk": "86400"},
+    "SM_Drive_GenericDSP402": {"fSWMaxVelocity": "2880", "fSWMaxAcceleration": "43200", "fSWMaxDeceleration": "43200", "fSWMaxJerk": "864000"},
     "reelpullmotor": {"fSWMaxVelocity": "5000", "fSWMaxAcceleration": "100000", "fSWMaxDeceleration": "100000", "fSWMaxJerk": "100000"},
 }
 

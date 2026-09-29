@@ -104,7 +104,7 @@
             MessagePackerFb.PackKvReal(ADR('X'), TO_REAL(MotionPose.c.X));
             MessagePackerFb.PackKvReal(ADR('Y'), TO_REAL(MotionPose.c.Y));
             MessagePackerFb.PackKvReal(ADR('Z'), TO_REAL(MotionPose.c.Z));
-            MessagePackerFb.PackKvReal(ADR('A'), TO_REAL(MotionPose.c.A));
+            MessagePackerFb.PackKvReal(ADR('A'), TO_REAL(AddAxTargetA));
             MessagePackerFb.PackKvReal(ADR('B'), TO_REAL(MotionPose.c.B));
             MessagePackerFb.PackKvReal(ADR('C'), TO_REAL(MotionPose.c.C));
 
@@ -725,13 +725,13 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
             MotionPose.c.X := MessageUnpackerFb.TryReadREAL('X', MotionPose.c.X);
             MotionPose.c.Y := MessageUnpackerFb.TryReadREAL('Y', MotionPose.c.Y);
             MotionPose.c.Z := MessageUnpackerFb.TryReadREAL('Z', MotionPose.c.Z);
-            // A-axis Kin_CAxis wrap workaround. Constant lives in AxisGroupSM
-            // VAR_INPUT (A_AXIS_KIN_WRAP_SCALE) so the comment-with-coupling
-            // is at the declaration site, not buried here.
+            // A (degrees) is the group's additional axis 0, not part of the
+            // pose: MotionPose.c.A stays 0.
             MotionPoseTempReal := MessageUnpackerFb.TryReadREAL('A', G1_A_UNSET_SENTINEL);
             IF (MotionPoseTempReal <> G1_A_UNSET_SENTINEL) THEN
-                MotionPose.c.A := MotionPoseTempReal / A_AXIS_KIN_WRAP_SCALE;
+                AddAxTargetA := MotionPoseTempReal;
             END_IF;
+            AddAxMoves[AddAxRingIdx].Positions[0] := AddAxTargetA;
 
             LatestFeedRate := MessageUnpackerFb.TryReadREAL('F', LatestFeedRate);
             LatestAcceleration := MessageUnpackerFb.TryReadREAL('ACC', LatestAcceleration);
@@ -775,6 +775,7 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
                     SM3_Common.MC_BUFFER_MODE.Aborting),
                 TransitionMode := SM3_Robotics.MC_TRANSITION_MODE.TMCornerDistance,
                 TransitionParameter := TransitionParameter,
+                AdditionalAxes := AddAxMoves[AddAxRingIdx],
                 VelFactor := LatestFactor,
                 AccFactor := LatestFactor,
                 JerkFactor := LatestFactor,
@@ -787,6 +788,7 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
 
             IF (MoveLinearAbsoluteFb.CommandAccepted) THEN
                 GVL.minfo_buf_ridx.ConsumeTail();
+                AddAxRingIdx := (AddAxRingIdx + 1) MOD ADD_AX_RING_SIZE;
 
                 MessagePackerFb.PackKvLint(ADR('movement_id'), TO_LINT(MoveLinearAbsoluteFb.MovementId));
 

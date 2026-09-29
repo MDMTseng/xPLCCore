@@ -5,10 +5,12 @@ against the axis limits.
 
     python tools/a_axis_test.py [--plc 192.168.1.70]
 
-G1 A is in degrees; the PLC divides by 10 for the kinematics and the axis
-scaling (6400 steps = 36 u) turns 1 u into 10 degrees, so the axis
-position in u is A / 10. Open loop: the PLC cannot see lost steps; watch
-the motor, or run a home-switch check. Only the A axis and the (virtual)
+A is additional axis 0 of the group SpiderR, in degrees (6400 steps = 360
+u, 1 u = 1 deg; no wrap, no /10). Checked: moves beyond +-180, A together
+with a path move in one G1, a G1 without A keeps A, and a queued blended
+sequence (every G1 its own additional-axes instance in the PLC) ends at
+the last A. Open loop: the PLC cannot see lost steps; watch the motor, or
+run a home-switch check. Only the A axis and the (virtual)
 delta arms are commanded. Close the UI's PLC link first.
 """
 
@@ -75,10 +77,18 @@ def move(p, label, **kw):
     p.m("WAIT_FOR_MOTION_STOP", timeout=30, timeout_ms=25000)
     dt = time.time() - t0
     a = axis()
-    log("%-34s %.3f s | A set %7.3f u (%6.1f deg) act %7.3f u | error %s | peaks since reset: v %.1f u/s  a %.1f u/s^2" % (
-        label, dt, a["fSetPosition"], a["fSetPosition"] * 10, a["fActPosition"], a["bError"],
-        a["peak_vel"], a["peak_acc"]))
+    log("%-38s %.3f s | A set %8.3f deg act %8.3f | error %s | peaks since reset: v %.0f deg/s  a %.0f deg/s^2" % (
+        label, dt, a["fSetPosition"], a["fActPosition"], a["bError"], a["peak_vel"], a["peak_acc"]))
     return dt, a
+
+
+FAILS = []
+
+
+def expect(label, a, want):
+    if not isinstance(a["fSetPosition"], float) or abs(a["fSetPosition"] - want) > 0.01:
+        FAILS.append("%s: A %s, expected %.3f" % (label, a["fSetPosition"], want))
+        log("  FAIL: A", a["fSetPosition"], "expected", want)
 
 
 def main():
@@ -90,20 +100,34 @@ def main():
         if (ms.get("axes_sim_mask", 0) & 7) != 7:
             raise SystemExit("REFUSED: the delta arms are not all simulated")
         to_ready(p)
-        log("limits: v %s  a %s  j %s u (x10 deg)" % tuple(
+        log("limits: v %s  a %s  j %s deg" % tuple(
             num(rpc("read", "%s.%s" % (AX, k))) for k in ("fSWMaxVelocity", "fSWMaxAcceleration", "fSWMaxJerk")))
         p.m("SetCoord1")
         move(p, "start pose X0 Y0 Z12 A0", X=0.0, Y=0.0, Z=12.0, A=0.0, F=200, ACC=20000, DEA=20000, JERK=80000, Cor=0)
         rpc("write", "GVL.MotionPeakReset", "TRUE")
         rpc("logout")
-        for target in (90, 0, 270, -90, 0):
-            move(p, "A -> %d deg (A only)" % target, A=float(target))
-        move(p, "X 0->30 mm + A 0->90 (one G1)", X=30.0, A=90.0, F=1000, ACC=100000, DEA=100000, JERK=400000)
-        move(p, "X 30->0 mm, A stays", X=0.0, F=1000, ACC=100000, DEA=100000, JERK=400000)
-        move(p, "A back to 0", A=0.0)
+        for target in (90, 0, 270, -90, 540, -720, 0):
+            _, st = move(p, "A -> %d deg (A only)" % target, A=float(target))
+            expect("A only %d" % target, st, target)
+        _, st = move(p, "X 0->30 mm + A 0->90 (one G1)", X=30.0, A=90.0, F=1000, ACC=100000, DEA=100000, JERK=400000)
+        expect("X+A", st, 90)
+        _, st = move(p, "X 30->0 mm, A stays", X=0.0, F=1000, ACC=100000, DEA=100000, JERK=400000)
+        expect("A sticky", st, 90)
+        # queued and blended (Cor 45, as production): each G1 its own A
+        seq = [(20.0, 180.0), (-20.0, -45.0), (0.0, 400.0), (10.0, 400.0), (0.0, 30.0)]
+        t0 = time.time()
+        for x, a_ in seq:
+            p.m("G1", X=x, A=a_, F=2000, ACC=200000, DEA=200000, JERK=800000, Cor=45.0)
+        p.m("WAIT_FOR_MOTION_STOP", timeout=30, timeout_ms=25000)
+        st = axis()
+        log("%-38s %.3f s | A set %8.3f deg" % ("queued blended x5 (Cor 45)", time.time() - t0, st["fSetPosition"]))
+        expect("queued", st, 30)
+        p.m("G1", Cor=0.0, A=0.0)
+        p.m("WAIT_FOR_MOTION_STOP", timeout=30, timeout_ms=25000)
         p.sys("GA_EV", ev=8)
         time.sleep(1)
         log("left in", p.sys("GA_EV", ev=0)["st_str"])
+        log("RESULT:", "all A positions as commanded" if not FAILS else "FAILED: " + "; ".join(FAILS))
 
 
 if __name__ == "__main__":
