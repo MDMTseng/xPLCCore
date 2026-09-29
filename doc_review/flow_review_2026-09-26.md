@@ -189,3 +189,31 @@ from the event log at the "move end" event. The real reel is still
 ~1.6 mm behind the setpoint then (0.8 cell per move); the virtual reel
 is not. The PLC count waits for the reel to stand still and is right.
 To fix in the tool: take the settled position.
+
+## The A axis on the machine (2026-09-29)
+
+The rotation motor is an open-loop stepper on the second axis of the
+QEC 3-axis stepper driver (M2 / "Y"). SpiderR's tool kinematics axis
+`SM_Drive_GenericDSP402` (drive ID 7, logical device 1) maps to exactly
+that axis. It was in virtual mode, so the motor was never driven.
+`EAXIS_A` (logical device 0 = M1) has nothing wired and is in no group.
+
+Units: 6400 steps = 36 u, so 1 u = 10 degrees. This is the /10 wrap
+trick that lets the kinematics' +-180 cover +-1800 real degrees. The old
+limits in those units: ID 7 180000 u/s (no limit at all); EAXIS_A 1800
+u/s = 18000 deg/s = 50 turns/s, far too fast for a stepper.
+
+`jobs/templates/set_group_a_axis.py` made ID 7 real with 36 u/s,
+360 u/s^2, 3600 u/s^3 (one turn per second). `tools/a_axis_test.py`:
+
+- A-only 90 deg: 0.46 s. 270 deg: 0.96 s. 360 deg: 1.21 s. No axis
+  error. Positions right; +-180 and beyond work.
+- The planner holds the axis limits: peak 36.0 u/s, 355 u/s^2.
+- One G1 with X 30 mm + A 90 deg takes 0.46 s; the same X alone takes
+  0.15 s. A in the group stretches every segment it rotates in to A's
+  time. That is the owner's "much slower with A in the group".
+- Open loop: lost steps cannot be seen by the PLC. Next steps:
+  - on-site check of angle and direction, then a step-loss test (mark,
+    or the Y HOME input);
+  - raise the limits step by step;
+  - move the rotations onto the long arm moves.
