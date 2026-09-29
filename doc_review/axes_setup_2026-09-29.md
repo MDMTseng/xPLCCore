@@ -163,3 +163,30 @@ After the power cycle the PLC boots this build. Options: rerun the hang
 sequence while watching the Intewell shell (`task`, `cpuuse`), or roll
 back with snapshot `jobs/snapshots/20260929-225357_sm3_420.project` (SM3
 4.18, Kin_CAxis, /10) and the previous PLC sources (git d62b891^).
+
+## Shorter A rotations in the cycle (2026-09-29, sim)
+
+Per part, A turns three times. From the place angle to the next pick
+angle happens on the way to the feeder. From the pick angle to 90 deg
+happens on the way to the cameras. The half turn plus correction happens
+at the inspection station, standing still: it must be done before the
+rectified side shot. The pick angle was the feeder's angle as is, so
+after a flipped part A could turn up to ~440 deg on the way to the
+feeder.
+
+Now `pickAngle()` (`nozzle.ts`) picks at the feeder angle or a whole turn
+off it (the round nozzle holds the part the same way), whichever makes
+the longer of the two travel rotations shortest. A stays within about a
+turn of 0. The inspection half turn goes the shorter way (-180 when the
+correction is positive). A:0 before the pick is sent only at the start of
+a run.
+
+Estimate at the current A limits (random angles): to the feeder, mean
+0.179 -> 0.145 s, worst 0.272 -> 0.215 s. To the cameras, about the
+same. The half turn at the station is unchanged (mean 0.125 s). Sim
+production run: place to next place, median 1176 -> 1135 ms, p90 1375 ->
+1318 ms. A peak speed in the run 2880 -> 2010 deg/s.
+
+The standing half turn is now the largest A cost. Only higher A limits
+shorten it: with jerk x5, 180 deg takes 0.14 s instead of 0.19 s. That
+needs a step-loss test on the machine.

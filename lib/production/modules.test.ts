@@ -7,7 +7,7 @@ import { IO_PINS, bit } from './io';
 import { GEOMETRY, NOZZLE, TAPE } from './params';
 import { tapeStep } from './tape';
 import { reelOdoMm } from '../protocol';
-import { pickFromFeeder, placePart, tossTo, pickFromTape } from './nozzle';
+import { pickAngle, pickFromFeeder, placePart, tossTo, pickFromTape } from './nozzle';
 import { clearFeederFault, refillFeeder } from './feeder';
 
 type Sent = { pkt: any; waited: boolean };
@@ -156,5 +156,28 @@ describe('feeder', () => {
   it('treats a vision timeout as an empty plate', async () => {
     const { m } = fakeMachine({ vision: {} });
     expect(await refillFeeder(m)).toEqual([]);
+  });
+});
+
+describe('pickAngle', () => {
+  it('keeps the angle when it is already the shortest', () => {
+    expect(pickAngle(-30, 80, 90)).toBe(-30);
+    expect(pickAngle(120, 90, 90)).toBe(120);
+  });
+  it('takes a whole turn off when that shortens the longer rotation', () => {
+    // from 262 (a flipped part) to -170: 432 deg the plain way, 98 via 190
+    expect(pickAngle(-170, 262, 90)).toBe(190);
+    // from -98 to 170: 268 the plain way; -190 is 92 away, then 280 to 90 --
+    // the plain angle stays (its longer leg, 268, beats 280)
+    expect(pickAngle(170, -98, 90)).toBe(170);
+  });
+  it('stays within a turn of 0 over many parts (no hose wind-up)', () => {
+    let a = 0;
+    for (let k = 0; k < 2000; k++) {
+      const target = ((k * 137) % 360) - 180;
+      a = pickAngle(target, a, 90);
+      expect(Math.abs(a)).toBeLessThanOrEqual(450);
+      a = 90 + (k % 2 ? 172 : -8);      // what inspection leaves A at
+    }
   });
 });

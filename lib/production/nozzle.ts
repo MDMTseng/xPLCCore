@@ -14,6 +14,28 @@ const BLOW = bit(IO_PINS.O.Nozzle_blow);
 
 export type Pose = { X?: number; Y?: number; Z: number; A?: number };
 
+/**
+ * The A angle to pick at: `target` or a whole turn off it (the round nozzle
+ * holds the part the same way), whichever makes the longer of the two
+ * rotations around the pick -- from `from` on the way to the feeder, and
+ * on to `next` on the way to the cameras -- shortest. Both ride on arm
+ * moves, so the longer one is what can hold the arm back. Ties go to the
+ * angle nearer 0, which keeps A within a turn or so of 0 (no hose wind-up).
+ */
+export function pickAngle(target: number, from: number, next: number): number {
+  let best = target;
+  let bestKey = [Infinity, Infinity];
+  for (let k = -2; k <= 2; k++) {
+    const c = target + 360 * k;
+    const key = [Math.max(Math.abs(c - from), Math.abs(next - c)), Math.abs(c)];
+    if (key[0] < bestKey[0] - 1e-9 || (Math.abs(key[0] - bestKey[0]) <= 1e-9 && key[1] < bestKey[1])) {
+      best = c;
+      bestKey = key;
+    }
+  }
+  return best;
+}
+
 /** Pick a part off the feeder plate at `p` (Z is the part's Z). */
 export async function pickFromFeeder(m: Machine, p: { X: number; Y: number; Z: number; A: number }) {
   await m.send(cmd.G1({ X: p.X, Y: p.Y, A: p.A }));

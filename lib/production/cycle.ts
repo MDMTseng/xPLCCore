@@ -27,7 +27,7 @@ import type { Machine } from './machine';
 import { nextCycleAction, leadingOkRun } from './plan';
 import { tapeStep, type TapeStepResult, type TopView } from './tape';
 import { clearFeederFault, refillFeeder, type FeederPart } from './feeder';
-import { pickFromFeeder, pickFromTape, placePart, tossTo } from './nozzle';
+import { pickAngle, pickFromFeeder, pickFromTape, placePart, tossTo } from './nozzle';
 import { judgePlacement, placePose, type Bin } from './judge';
 
 export type Checkpoint = (name: string, data: unknown) => Promise<any>;
@@ -75,6 +75,8 @@ type CycleState = {
   tapeFault?: unknown;
   /** The arm is at travel height (after a toss or an NG pick). */
   armAtSafeZ: boolean;
+  /** The last A commanded in this run (deg); undefined before the first. */
+  armA?: number;
   /** Failures in a row, each capped (params): refills that found no part,
    *  parts tossed instead of placed, NG pick-outs from the tape. */
   emptyRefills: number;
@@ -213,11 +215,14 @@ async function runCyclesIn(ctx: CycleContext, s: CycleState): Promise<CycleResul
     await checkpoint('fetch one item on FF', i);
     s.parts.shift();
     if (part.surround_clear === 0) continue;
-    if (!s.armAtSafeZ) await m.send(cmd.G1({ Z: SAFE_Z, A: 0 }));
+    if (!s.armAtSafeZ) await m.send(cmd.G1(s.armA === undefined ? { Z: SAFE_Z, A: 0 } : { Z: SAFE_Z }));
+    s.armA ??= 0;
     const at = ctx.predict(part);
     s.armAtSafeZ = false;
     await checkpoint('go to predicted location', i);
-    await pickFromFeeder(m, { X: at.X, Y: at.Y, Z: at.Z, A: -part.angle_deg });
+    const pickA = pickAngle(-part.angle_deg, s.armA, INSPECTION.BASE_ANGLE_DEG);
+    await pickFromFeeder(m, { X: at.X, Y: at.Y, Z: at.Z, A: pickA });
+    s.armA = pickA;
     // Last part off the plate: refill while this one is inspected and placed.
     if (s.parts.length === 0) {
       s.pendingFeeder = refillFeeder(m);
@@ -260,6 +265,7 @@ async function runCyclesIn(ctx: CycleContext, s: CycleState): Promise<CycleResul
 
     // ── Place or toss the held part.
     const angle = INSPECTION.BASE_ANGLE_DEG + insp.angleOffset;
+    s.armA = angle;
     if (J.place) {
       s.tossesInARow = 0;
       m.mark(EVT.PLACE);
@@ -377,8 +383,11 @@ async function inspectHeldPart(ctx: CycleContext, i: number): Promise<Inspection
   }
 
   // Face the part the right way round, then correct by the bottom
-  // camera's angle and the fixed trim.
-  const angleOffset = (side.facing !== 0 ? 180 : 0) + btm.obj_pose.ang + INSPECTION.ANGLE_TRIM_DEG;
+  // camera's angle and the fixed trim. The half turn goes the way that
+  // makes the whole rotation shorter (it is made standing still).
+  const correction = btm.obj_pose.ang + INSPECTION.ANGLE_TRIM_DEG;
+  const flip = side.facing === 0 ? 0 : correction > 0 ? -180 : 180;
+  const angleOffset = flip + correction;
   await m.send(cmd.G1({ A: base + angleOffset }));
   await checkpoint('[STEP]', i);
 
