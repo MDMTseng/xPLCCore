@@ -521,6 +521,7 @@ END_IF;
                     END_IF;
                     ReelTrkActive := TRUE;
                     ReelTrkStarted := FALSE;
+                    ReelTrkDone := FALSE;
                     ReelTrkStill := 0;
                     ReelTrkAnchor := GVL.ReelMvTravelMm;
                     ReelTrkT0 := RuntimeMs;

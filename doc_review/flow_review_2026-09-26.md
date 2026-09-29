@@ -78,3 +78,25 @@ EtherCAT master OK, test hooks off, EAxis0/1/2 still virtual. The
 download re-initialised the retained plan (BootEpochCount 1); the
 renderer re-sends it at the next RUN. Not yet exercised on the machine:
 everything marked "needs the machine" above.
+
+## Reel on the machine (2026-09-29)
+
+`reelpullmotor` made real in the project (the delta arms stay virtual),
+installed, and driven with `tools/reel_real_test.py` (direct msgpack
+client `tools/plc_direct.py`, no UI; nothing on the reel):
+
+- Standstill: 0 counts of jitter (closed-loop stepper). Item 1's band
+  is not what matters on this drive; the settle below is.
+- The drive settles a few counts short of the target (13 counts =
+  0.05 mm after a slow move). The tracker required the travel within
+  0.05 mm, so the first TAPE_CYCLE came back `reel_interrupted`. Fixed:
+  - a cell counts within 0.5 mm of its boundary (REEL_CELL_TOL_MM);
+  - a move is complete when the move FB reports Done.
+  Only a move without Done (a fault) is judged by its travel.
+- Production dynamics: 1 / 2 / 5 / 3 cells in 0.11-0.19 s, counts right.
+  After fast moves the reel settles 0-26 counts (0-0.1 mm) off the
+  target. Over 25 single cells this does not add up (drift -8 counts):
+  each move starts from the commanded position.
+- Item 2 confirmed: an arm fault (GVL.TestFaultMidReel = 1) during a
+  2-cell move put the FSM in Error, the reel stayed powered and finished,
+  cells_done +2, no open move.

@@ -283,6 +283,7 @@ PROGRAM AxisGroupSM
         ReelTrkStarted  : BOOL;        // the reel has moved since the dispatch
         ReelTrkStill    : INT;         // consecutive scans inside REEL_STILL_BAND_MM
         ReelTrkAnchor   : LREAL;       // travel where the reel last settled
+        ReelTrkDone     : BOOL;        // the move FB reported Done: the drive is at the target
         ReelTrkPos      : LREAL;       // reel position this scan (+ test jitter)
         ReelTrkJitterSign : BOOL;
         ReelTrkT0       : LINT;
@@ -294,7 +295,11 @@ PROGRAM AxisGroupSM
         REEL_TRACK_MAX_MS     : LINT := 20000;   // a move not over by then is closed as it stands
         REEL_POS_TOL_MM       : LREAL := 0.2;    // REEL_RESUME: the reel must still be where it stopped
         REEL_START_TIMEOUT_MS : LINT := 1000;    // never started (fault at dispatch)
-        REEL_CELL_EPS_MM      : LREAL := 0.05;   // a cell counts this close to its boundary
+        REEL_CELL_EPS_MM      : LREAL := 0.05;   // "at the target" without the FB's Done (virtual / old path)
+        // A cell counts this close to its boundary: a real drive settles a
+        // few counts short of the target (the reel: 13 counts = 0.05 mm on
+        // the machine, 2026-09-29), far below half a cell.
+        REEL_CELL_TOL_MM      : LREAL := 0.5;
         REEL_MAX_STEP_MM      : LREAL := 5.0;    // more per scan = the position jumped
         // Speed override (GVL.OverrideFactor), applied per move.
         OverrideNow     : LREAL;
@@ -1190,7 +1195,7 @@ PROGRAM AxisGroupSM
                 ReelTrkStill := ReelTrkStill + 1;
             END_IF;
             IF (GVL.ReelMvCells > 0) AND (GVL.ReelMvCellMm > 0) THEN
-                ReelTrkNew := MIN(TO_DINT(TRUNC((GVL.ReelMvTravelMm + REEL_CELL_EPS_MM) / GVL.ReelMvCellMm)),
+                ReelTrkNew := MIN(TO_DINT(TRUNC((GVL.ReelMvTravelMm + REEL_CELL_TOL_MM) / GVL.ReelMvCellMm)),
                                   GVL.ReelMvCells) - GVL.ReelMvCounted;
                 IF ReelTrkNew > 0 THEN
                     IF PlanCountCells(n := ReelTrkNew, kind := GVL.ReelMvKind) THEN
@@ -1198,6 +1203,9 @@ PROGRAM AxisGroupSM
                     END_IF;
                     GVL.ReelMvCounted := GVL.ReelMvCounted + ReelTrkNew;
                 END_IF;
+            END_IF;
+            IF reelMoveRelative.Done OR reelMoveRelative2.Done THEN
+                ReelTrkDone := TRUE;
             END_IF;
             IF ((ReelTrkStill >= REEL_STILL_SCANS)
                 AND ((ReelTrkStarted AND NOT (reelMoveRelative.Busy OR reelMoveRelative2.Busy))
@@ -1208,9 +1216,15 @@ PROGRAM AxisGroupSM
                 // stands rather than holding every tape command forever).
                 ReelTrkActive := FALSE;
                 GVL.ReelMvStopPos := reelpullmotor.fActPosition;
+                // Complete when the FB says the drive reached the target (a
+                // real axis settles a few counts short: the next move starts
+                // from the commanded position, so that does not add up), or
+                // when the travel is at the target anyway. Otherwise a fault
+                // stopped it: open, and REEL_RESUME moves the rest.
                 IF (GVL.ReelMvCells <= 0)
                    OR ((GVL.ReelMvCounted >= GVL.ReelMvCells)
-                       AND (GVL.ReelMvTravelMm >= DINT_TO_LREAL(GVL.ReelMvCells) * GVL.ReelMvCellMm - REEL_CELL_EPS_MM)) THEN
+                       AND (ReelTrkDone
+                            OR (GVL.ReelMvTravelMm >= DINT_TO_LREAL(GVL.ReelMvCells) * GVL.ReelMvCellMm - REEL_CELL_EPS_MM))) THEN
                     GVL.ReelMvOpen := FALSE;
                 ELSE
                     GVL.ReelInterruptCount := GVL.ReelInterruptCount + 1;
@@ -1258,6 +1272,7 @@ PROGRAM AxisGroupSM
                     END_IF;
                     ReelTrkActive := TRUE;
                     ReelTrkStarted := FALSE;
+                    ReelTrkDone := FALSE;
                     ReelTrkStill := 0;
                     ReelTrkAnchor := 0;
                     ReelTrkT0 := RuntimeMs;
