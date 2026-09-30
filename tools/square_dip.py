@@ -28,6 +28,9 @@ def plc(pkt, timeout_ms=5000):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--half", type=float, default=50.0)
+    ap.add_argument("--path", choices=("square", "line"), default="square",
+                    help="line: back and forth between X -half and X +half at Z0 (no dips), "
+                         "the lightest path for the planner")
     ap.add_argument("--dip", type=float, default=-15.0)
     ap.add_argument("--f", type=float, default=30.0, help="mm/s")
     ap.add_argument("--continuous", action="store_true",
@@ -50,8 +53,12 @@ def main():
     log("F %g mm/s  ACC %g  JERK %g" % (kin["F"], kin["ACC"], kin["JERK"]))
     h = a.half
     pts = [("up to Z0", None, None, 0.0)]
-    for x, y in ((-h, -h), (h, -h), (h, h), (-h, h)) * a.loops:
-        pts += [("corner X%+g Y%+g" % (x, y), x, y, 0.0), ("  dip", x, y, a.dip), ("  up", x, y, 0.0)]
+    if a.path == "line":
+        for x in (-h, h) * a.loops:
+            pts += [("end X%+g" % x, x, 0.0, 0.0)]
+    else:
+        for x, y in ((-h, -h), (h, -h), (h, h), (-h, h)) * a.loops:
+            pts += [("corner X%+g Y%+g" % (x, y), x, y, 0.0), ("  dip", x, y, a.dip), ("  up", x, y, 0.0)]
     pts.append(("home X0 Y0 Z0", 0.0, 0.0, 0.0))
     if a.continuous:
         pkts = []
@@ -79,7 +86,7 @@ def main():
                 while True:
                     time.sleep(10)
                     st = rv.push("plc_stream_status", {})
-                    e = plc({"type": "SYS", "cmd": "EC_STATS"})
+                    e = plc({"type": "SYS", "cmd": "EC_STATS", "obj": 1})
                     log("%4.0f s  laps %4d  lost %d tx_err %d rx_err %d  late100 %d  pmax %.0f us  dc_out %d"
                         "  glitch %s  d2max %s%s" % (
                         time.time() - t0, st["sent"] // len(lap), e["lost"], e["tx_err"], e["rx_err"],
@@ -93,6 +100,9 @@ def main():
                         "/".join(str(e.get("dd%d" % k)) for k in range(3)),
                         e.get("e_stale"), e.get("e_skip"), e.get("e_amin"), e.get("e_amax"),
                         e.get("e_apeak"), e.get("e_late"), e.get("e_late_sum")))
+                    log("       target PDO tap: glitch %s  max|d2| %s  =now %s  =prev %s  neither %s" % tuple(
+                        "/".join(str(e.get("%s%d" % (f, k))) for k in range(3))
+                        for f in ("tg", "td", "tnow", "tprev", "tnone")))
                     if "o0" in e:
                         ob = [e["o%d" % k].rstrip(",").split(",") for k in range(3)]
                         log("       drives 1C32 SM-missed/too-small/sync-err: %s" % "  ".join(

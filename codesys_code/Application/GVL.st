@@ -287,6 +287,22 @@ VAR_GLOBAL
 	DiGlitchThresh  : DINT := 150000;
 	DiGlitchCount   : ARRAY[0..2] OF UDINT;
 	DiD2Max         : ARRAY[0..2] OF DINT;
+	(* Read-only taps on the process image: the Target Position PDO that
+	   SoftMotion's ASDA driver puts in the frame for EAxis0/1/2 (channel
+	   addresses from jobs/templates/dump_drive_target_addr.py). Never
+	   written by the application. *)
+	TapTarget0      AT %QD12 : DINT;
+	TapTarget1      AT %QD16 : DINT;
+	TapTarget2      AT %QD20 : DINT;
+	(* Per drive: glitches of the tapped target (|d2| > DiGlitchThresh),
+	   its max |d2|, and how the tap relates to diSetPosition at the end
+	   of the task: equal to this cycle's (TapEqNow), to last cycle's
+	   (TapEqPrev), or neither (TapEqNone). Reset with EcProfReset. *)
+	TapGlitch       : ARRAY[0..2] OF UDINT;
+	TapD2Max        : ARRAY[0..2] OF DINT;
+	TapEqNow        : ARRAY[0..2] OF UDINT;
+	TapEqPrev       : ARRAY[0..2] OF UDINT;
+	TapEqNone       : ARRAY[0..2] OF UDINT;
 	(* Bus timing probe on the EasyCAT (last slave on the wire, DC-synced
 	   like the drives; firmware/easycat_esp32): the PLC writes a cycle
 	   counter to its outputs 8-11 each EtherCAT cycle; the ESP32 reads it

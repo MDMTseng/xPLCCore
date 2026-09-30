@@ -46,6 +46,11 @@ VAR
     diVelPrev   : ARRAY[0..2] OF DINT;
     diVel         : DINT;
     diD2        : DINT;
+    diTap       : DINT;
+    diTapPrev   : ARRAY[0..2] OF DINT;
+    diTapVelPrev : ARRAY[0..2] OF DINT;
+    diTapVel    : DINT;
+    diTapD2     : DINT;
     uiEspLatePrevMs : UINT;
     udiEspSecPrev   : UDINT;
     // Cycle position and the drives' SM-event counters (GVL.EcTic*, Drv*).
@@ -180,6 +185,11 @@ IF GVL.EcProfReset THEN
         GVL.SetD2Max[iProf] := 0;
         GVL.DiGlitchCount[iProf] := 0;
         GVL.DiD2Max[iProf] := 0;
+        GVL.TapGlitch[iProf] := 0;
+        GVL.TapD2Max[iProf] := 0;
+        GVL.TapEqNow[iProf] := 0;
+        GVL.TapEqPrev[iProf] := 0;
+        GVL.TapEqNone[iProf] := 0;
     END_FOR;
     GVL.EcTicUsMax := 0;
     GVL.EspArrMaxPeak := 0;
@@ -258,6 +268,30 @@ FOR iProf := 0 TO 2 DO
         END_IF;
     END_IF;
     lrSetPrev[iProf] := pAxG^.fSetPosition;
+    // Tap: the Target Position actually in the output image.
+    CASE iProf OF
+        0: diTap := GVL.TapTarget0;
+        1: diTap := GVL.TapTarget1;
+    ELSE
+        diTap := GVL.TapTarget2;
+    END_CASE;
+    diTapVel := diTap - diTapPrev[iProf];
+    diTapD2 := diTapVel - diTapVelPrev[iProf];
+    IF iSetValid[iProf] >= 2 THEN
+        GVL.TapD2Max[iProf] := MAX(GVL.TapD2Max[iProf], ABS(diTapD2));
+        IF ABS(diTapD2) > GVL.DiGlitchThresh THEN
+            GVL.TapGlitch[iProf] := GVL.TapGlitch[iProf] + 1;
+        END_IF;
+        IF diTap = pAxG^.diSetPosition THEN
+            GVL.TapEqNow[iProf] := GVL.TapEqNow[iProf] + 1;
+        ELSIF diTap = diSetPrev[iProf] THEN
+            GVL.TapEqPrev[iProf] := GVL.TapEqPrev[iProf] + 1;
+        ELSE
+            GVL.TapEqNone[iProf] := GVL.TapEqNone[iProf] + 1;
+        END_IF;
+    END_IF;
+    diTapPrev[iProf] := diTap;
+    diTapVelPrev[iProf] := diTapVel;
     lrVelPrev[iProf] := lrV;
     diSetPrev[iProf] := pAxG^.diSetPosition;
     diVelPrev[iProf] := diVel;

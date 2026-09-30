@@ -569,16 +569,18 @@ END_IF;
                 MessagePackerFb.PackKvDint(ADR('se2'), GVL.DrvSyncErr[2]);
                 MessagePackerFb.PackKvDint(ADR('sdo_err'), GVL.EcSdoErr);
                 MessagePackerFb.PackKvLint(ADR('bus_us'), DWORD_TO_LINT(BusPeriodUs));   // EtherCAT_Task interval as read
-                // o0..o2: drive k's sync objects (DrvObj), "v,v,..." text
-                FOR EcTrI := 0 TO 2 DO
-                    EcTrStr := '';
-                    FOR EcObjJ := 0 TO 11 DO
-                        EcTrStr := CONCAT(EcTrStr, DINT_TO_STRING(GVL.DrvObj[EcTrI, EcObjJ]));
-                        EcTrStr := CONCAT(EcTrStr, ',');
+                IF MessageUnpackerFb.TryReadINT64('obj', 0) <> 0 THEN  // long text: only on request
+                    // o0..o2: drive k's sync objects (DrvObj), "v,v,..." text
+                    FOR EcTrI := 0 TO 2 DO
+                        EcTrStr := '';
+                        FOR EcObjJ := 0 TO 11 DO
+                            EcTrStr := CONCAT(EcTrStr, DINT_TO_STRING(GVL.DrvObj[EcTrI, EcObjJ]));
+                            EcTrStr := CONCAT(EcTrStr, ',');
+                        END_FOR;
+                        EcObjKey := CONCAT('o', INT_TO_STRING(EcTrI));
+                        MessagePackerFb.PackKvStr(ADR(EcObjKey), ADR(EcTrStr));
                     END_FOR;
-                    EcObjKey := CONCAT('o', INT_TO_STRING(EcTrI));
-                    MessagePackerFb.PackKvStr(ADR(EcObjKey), ADR(EcTrStr));
-                END_FOR;
+                END_IF;
                 // dg0..2 / dd0..2: the same glitch check on the integer
                 // target sent to the drive (diSetPosition): count, max |d2|
                 MessagePackerFb.PackKvLint(ADR('dg0'), UDINT_TO_LINT(GVL.DiGlitchCount[0]));
@@ -587,6 +589,22 @@ END_IF;
                 MessagePackerFb.PackKvDint(ADR('dd0'), GVL.DiD2Max[0]);
                 MessagePackerFb.PackKvDint(ADR('dd1'), GVL.DiD2Max[1]);
                 MessagePackerFb.PackKvDint(ADR('dd2'), GVL.DiD2Max[2]);
+                // tap*: the Target Position in the output image (read-only AT taps)
+                MessagePackerFb.PackKvLint(ADR('tg0'), UDINT_TO_LINT(GVL.TapGlitch[0]));
+                MessagePackerFb.PackKvDint(ADR('td0'), GVL.TapD2Max[0]);
+                MessagePackerFb.PackKvLint(ADR('tnow0'), UDINT_TO_LINT(GVL.TapEqNow[0]));
+                MessagePackerFb.PackKvLint(ADR('tprev0'), UDINT_TO_LINT(GVL.TapEqPrev[0]));
+                MessagePackerFb.PackKvLint(ADR('tnone0'), UDINT_TO_LINT(GVL.TapEqNone[0]));
+                MessagePackerFb.PackKvLint(ADR('tg1'), UDINT_TO_LINT(GVL.TapGlitch[1]));
+                MessagePackerFb.PackKvDint(ADR('td1'), GVL.TapD2Max[1]);
+                MessagePackerFb.PackKvLint(ADR('tnow1'), UDINT_TO_LINT(GVL.TapEqNow[1]));
+                MessagePackerFb.PackKvLint(ADR('tprev1'), UDINT_TO_LINT(GVL.TapEqPrev[1]));
+                MessagePackerFb.PackKvLint(ADR('tnone1'), UDINT_TO_LINT(GVL.TapEqNone[1]));
+                MessagePackerFb.PackKvLint(ADR('tg2'), UDINT_TO_LINT(GVL.TapGlitch[2]));
+                MessagePackerFb.PackKvDint(ADR('td2'), GVL.TapD2Max[2]);
+                MessagePackerFb.PackKvLint(ADR('tnow2'), UDINT_TO_LINT(GVL.TapEqNow[2]));
+                MessagePackerFb.PackKvLint(ADR('tprev2'), UDINT_TO_LINT(GVL.TapEqPrev[2]));
+                MessagePackerFb.PackKvLint(ADR('tnone2'), UDINT_TO_LINT(GVL.TapEqNone[2]));
                 // EasyCAT bus timing probe: e_stale / e_skip since reset,
                 // e_amin / e_amax arrival after SYNC0 over the last second
                 // (us), e_apeak max since reset, e_late last second,
@@ -598,20 +616,22 @@ END_IF;
                 MessagePackerFb.PackKvDint(ADR('e_apeak'), UINT_TO_DINT(GVL.EspArrMaxPeak));
                 MessagePackerFb.PackKvDint(ADR('e_late'), UINT_TO_DINT(GVL.EspLate));
                 MessagePackerFb.PackKvLint(ADR('e_late_sum'), UDINT_TO_LINT(GVL.EspLateSum));
-                // trl / trh: the last 20 x 500 ms min / max of the above,
-                // oldest first ("lo0,..." as text, us)
-                EcTrStr := '';
-                FOR EcTrI := 0 TO 19 DO
-                    EcTrStr := CONCAT(EcTrStr, REAL_TO_STRING(GVL.EcTicTrMin[(GVL.EcTicIdx + EcTrI) MOD 20]));
-                    EcTrStr := CONCAT(EcTrStr, ',');
-                END_FOR;
-                MessagePackerFb.PackKvStr(ADR('trl'), ADR(EcTrStr));
-                EcTrStr := '';
-                FOR EcTrI := 0 TO 19 DO
-                    EcTrStr := CONCAT(EcTrStr, REAL_TO_STRING(GVL.EcTicTrMax[(GVL.EcTicIdx + EcTrI) MOD 20]));
-                    EcTrStr := CONCAT(EcTrStr, ',');
-                END_FOR;
-                MessagePackerFb.PackKvStr(ADR('trh'), ADR(EcTrStr));
+                IF MessageUnpackerFb.TryReadINT64('tr', 0) <> 0 THEN   // long text: only on request
+                    // trl / trh: the last 20 x 500 ms min / max of the above,
+                    // oldest first ("lo0,..." as text, us)
+                    EcTrStr := '';
+                    FOR EcTrI := 0 TO 19 DO
+                        EcTrStr := CONCAT(EcTrStr, REAL_TO_STRING(GVL.EcTicTrMin[(GVL.EcTicIdx + EcTrI) MOD 20]));
+                        EcTrStr := CONCAT(EcTrStr, ',');
+                    END_FOR;
+                    MessagePackerFb.PackKvStr(ADR('trl'), ADR(EcTrStr));
+                    EcTrStr := '';
+                    FOR EcTrI := 0 TO 19 DO
+                        EcTrStr := CONCAT(EcTrStr, REAL_TO_STRING(GVL.EcTicTrMax[(GVL.EcTicIdx + EcTrI) MOD 20]));
+                        EcTrStr := CONCAT(EcTrStr, ',');
+                    END_FOR;
+                    MessagePackerFb.PackKvStr(ADR('trh'), ADR(EcTrStr));
+                END_IF;
                 IF MessageUnpackerFb.TryReadINT64('reset', 0) <> 0 THEN
                     GVL.EcProfReset := TRUE;
                     GVL.EcStatsClear := TRUE;
