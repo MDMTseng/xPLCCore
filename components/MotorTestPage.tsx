@@ -8,15 +8,15 @@
 // set_axis_limits.py. Setting limits resets the FSM (the group takes them
 // when enabled). Only A moves in the test; the arm holds its position.
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import type { COMCtrlObj } from '../types';
 import { useHarnessAction } from '../harness/registry';
 import {
-  A_AXIS, MOTORS, applyLimits, readAxis, runALadder, runATest, toAxisUnits, toShowUnits, turnsPerUnit,
-  type AxisInfo, type LadderStep, type Limits, type Send, type TestResult,
+  A_AXIS, MOTORS, applyLimits, readAxis, runATest, scaleLimits, toAxisUnits, toShowUnits, turnsPerUnit,
+  type AxisInfo, type Limits, type Send, type TestResult,
 } from '../lib/motors';
 
-type Row = { at: number; label: string; limitsShow: Limits; result?: TestResult; verdict?: string; error?: string };
+type Row = { at: number; label: string; limitsShow: Limits; result?: TestResult; error?: string };
 
 const fmt = (x: number | undefined, d = 0) => (x === undefined || !Number.isFinite(x) ? '-' : x.toFixed(d));
 const AXIS_STATE = ['power off', 'error stop', 'stand still', 'homing', 'discrete', 'continuous', 'synchronized', 'stopping'];
@@ -25,21 +25,15 @@ const cell: React.CSSProperties = { padding: '3px 8px', borderBottom: '1px solid
 const head: React.CSSProperties = { ...cell, fontWeight: 600, background: '#f3f4f6' };
 const left: React.CSSProperties = { ...cell, textAlign: 'left' };
 const box: React.CSSProperties = { border: '1px solid #d1d5db', borderRadius: 6, padding: 12, marginBottom: 12, background: '#fff' };
-const input: React.CSSProperties = { width: 90, marginLeft: 4, marginRight: 12 };
+const SWING = 180;      // deg per move
+const CYCLES = 20;      // back-and-forth pairs per run
 
 export const MotorTestPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrlObj }) => {
   const [infos, setInfos] = useState<(AxisInfo | undefined)[]>([]);
   const [busy, setBusy] = useState<string>('');
   const [log, setLog] = useState<string[]>([]);
   const [rows, setRows] = useState<Row[]>([]);
-  const [lim, setLim] = useState({ v: '', a: '', j: '' });
-  const [amp, setAmp] = useState('180');
-  const [cycles, setCycles] = useState('20');
-  const [factors, setFactors] = useState('1, 1.25, 1.5, 2');
-  const [mode, setMode] = useState<'time' | 'all'>('time');
-  const [ask, setAsk] = useState<LadderStep | null>(null);
-  const answer = useRef<((ok: boolean) => void) | null>(null);
-
+  const [factor, setFactor] = useState(1);
   const addLog = useCallback((s: string) => {
     setLog((l) => [...l.slice(-200), `${new Date().toLocaleTimeString()}  ${s}`]);
   }, []);
@@ -62,15 +56,6 @@ export const MotorTestPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrlObj
     return out;
   }, [send, addLog]);
 
-  // Prefill the A test limits (degrees) from the PLC once.
-  useEffect(() => {
-    const a = infos[A_AXIS];
-    if (a && lim.v === '') {
-      const s = toShowUnits(MOTORS[A_AXIS], { v: a.lv, a: a.la, d: a.ld, j: a.lj });
-      setLim({ v: String(Math.round(s.v)), a: String(Math.round(s.a)), j: String(Math.round(s.j)) });
-    }
-  }, [infos, lim.v]);
-
   const guarded = useCallback(async <T,>(what: string, fn: () => Promise<T>): Promise<T | undefined> => {
     if (busy) { addLog(`busy (${busy}): ${what} ignored`); return undefined; }
     setBusy(what);
@@ -79,63 +64,30 @@ export const MotorTestPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrlObj
     finally { setBusy(''); refresh().catch(() => {}); }
   }, [busy, addLog, refresh]);
 
-  const limitsFromInputs = (): Limits => {
-    const v = Number(lim.v), a = Number(lim.a), j = Number(lim.j);
-    if (!(v > 0 && a > 0 && j > 0)) throw new Error('limits must be > 0');
-    return { v, a, d: a, j };
+  // The downloaded A limits in degrees, scaled by the slider's factor as
+  // the same motion f times faster (v x f, a x f^2, j x f^3).
+  const aBase = (i: AxisInfo | undefined): Limits | undefined =>
+    i ? toShowUnits(MOTORS[A_AXIS], { v: i.cv, a: i.ca, d: i.cd, j: i.cj }) : undefined;
+  const aLimits = (f: number, i = infos[A_AXIS]) => {
+    const base = aBase(i);
+    return base ? scaleLimits(base, f, 'time') : undefined;
   };
-  const testOpts = () => {
-    const amplitude = Number(amp), n = Math.round(Number(cycles));
-    if (!(amplitude > 0 && amplitude <= 1000) || !(n >= 1 && n <= 500)) throw new Error('amplitude 0-1000 deg, cycles 1-500');
-    return { amplitude, cycles: n };
-  };
-
-  const doApply = () => guarded('apply limits', async () => {
-    const l = limitsFromInputs();
-    const r = await applyLimits(send, A_AXIS, toAxisUnits(MOTORS[A_AXIS], l));
-    addLog(`A limits set (u): v ${r.v} a ${r.a} d ${r.d} j ${r.j}; the FSM is in UnInited`);
-    return r;
-  });
-  const doRestore = () => guarded('restore limits', async () => {
-    const r = await applyLimits(send, A_AXIS, 'restore');
-    addLog(`A limits restored (u): v ${r.v} a ${r.a} j ${r.j}`);
-    return r;
-  });
-  const doTest = () => guarded('A test', async () => {
-    const l = limitsFromInputs();
+  const doRun = (f: number) => guarded(`A test x${f}`, async () => {
+    const i = infos[A_AXIS] ?? await readAxis(send, A_AXIS);
+    const l = aLimits(f, i);
+    if (!l) throw new Error('A limits unknown');
     await applyLimits(send, A_AXIS, toAxisUnits(MOTORS[A_AXIS], l));
-    const res = await runATest(send, testOpts(), addLog);
-    setRows((r) => [...r, { at: Date.now(), label: 'single', limitsShow: l, result: res }]);
+    addLog(`x${f}: v ${fmt(l.v)} deg/s (${fmt(l.v / 6)} rpm), a ${fmt(l.a)} deg/s², j ${fmt(l.j)} deg/s³`);
+    const res = await runATest(send, { amplitude: SWING, cycles: CYCLES }, addLog);
+    setRows((r) => [...r, { at: Date.now(), label: `x${f}`, limitsShow: l, result: res }]);
     return res;
-  });
-  const confirmStep = (s: LadderStep) => new Promise<boolean>((resolve) => {
-    setAsk(s);
-    answer.current = (ok) => { setAsk(null); answer.current = null; resolve(ok); };
-  });
-  const doLadder = (auto?: (s: LadderStep, k: number) => boolean) => guarded('A ladder', async () => {
-    const fs = factors.split(/[ ,]+/).map(Number).filter((f) => f > 0);
-    if (fs.length === 0) throw new Error('no factors');
-    let k = 0;
-    const steps = await runALadder(send, {
-      base: limitsFromInputs(), factors: fs, mode, test: testOpts(), log: addLog,
-      confirm: auto ? async (s) => auto(s, k++) : confirmStep,
-    });
-    setRows((r) => [...r, ...steps.filter((s) => s.verdict).map((s) => ({
-      at: Date.now(), label: `x${s.factor} (${mode})`, limitsShow: s.limitsShow, result: s.result, verdict: s.verdict, error: s.error,
-    }))]);
-    return steps;
   });
 
   useEffect(() => { refresh().catch(() => {}); }, [refresh]);
 
   // Harness (remote test driver): the same actions, answers given up front.
   useHarnessAction('motors_info', async () => await refresh(), [refresh]);
-  useHarnessAction('motors_a_test', async (p: any) => {
-    if (p?.v) setLim({ v: String(p.v), a: String(p.a), j: String(p.j) });
-    const l = p?.v ? { v: +p.v, a: +p.a, d: +p.a, j: +p.j } : limitsFromInputs();
-    await applyLimits(send, A_AXIS, toAxisUnits(MOTORS[A_AXIS], l));
-    return await runATest(send, { amplitude: +(p?.amplitude ?? 180), cycles: +(p?.cycles ?? 5) }, addLog);
-  }, [send, addLog, lim]);
+  useHarnessAction('motors_a_test', async (p: any) => await doRun(Number(p?.factor ?? 1)), [doRun]);
   useHarnessAction('motors_restore', async () => await applyLimits(send, A_AXIS, 'restore'), [send]);
 
   const a = infos[A_AXIS];
@@ -190,41 +142,24 @@ export const MotorTestPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrlObj
         <div style={box}>
           <b>A axis limit test</b>
           <div style={{ color: '#6b7280', fontSize: 12, margin: '4px 0 8px' }}>
-            Open-loop stepper: the PLC cannot see a lost step. Put a mark on the nozzle at A = 0 before testing; after each
-            test A is back at 0 -- check the mark. Setting limits resets the FSM (motors off), then the test brings it to Ready.
-            Only A moves.
+            Factor on the downloaded limits (same motion f times faster: v x f, a x f², j x f³). Run: sets the limits
+            (FSM reset, motors off), brings the FSM to Ready, swings A {SWING} deg back and forth {CYCLES} times and stops
+            at 0 -- check the mark. Only A moves.
           </div>
-          <div>
-            v<input style={input} value={lim.v} onChange={(e) => setLim({ ...lim, v: e.target.value })} />deg/s
-            {'  '}a<input style={input} value={lim.a} onChange={(e) => setLim({ ...lim, a: e.target.value })} />deg/s²
-            {'  '}j<input style={input} value={lim.j} onChange={(e) => setLim({ ...lim, j: e.target.value })} />deg/s³
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <input type="range" min={0.5} max={3} step={0.05} value={factor} style={{ width: 320 }}
+              onChange={(e) => setFactor(Number(e.target.value))} disabled={!!busy} />
+            <b style={{ fontSize: 18, fontVariantNumeric: 'tabular-nums', width: 60 }}>x{factor.toFixed(2)}</b>
+            <button style={{ fontSize: 15, padding: '4px 18px' }} disabled={!!busy} onClick={() => doRun(factor).catch(() => {})}>Run</button>
           </div>
-          <div style={{ marginTop: 6 }}>
-            swing<input style={input} value={amp} onChange={(e) => setAmp(e.target.value)} />deg
-            cycles<input style={input} value={cycles} onChange={(e) => setCycles(e.target.value)} />
-            {a && <span style={{ color: '#6b7280', fontSize: 12 }}>motor at v: {fmt((Number(lim.v) / 360) * 60)} rpm, {fmt(Number(lim.v) / 360, 1)} turns/s</span>}
-          </div>
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-            <button disabled={!!busy} onClick={() => doTest().catch(() => {})}>Run test at these limits</button>
-            <button disabled={!!busy} onClick={() => doApply().catch(() => {})}>Only set limits</button>
-            <button disabled={!!busy} onClick={() => doRestore().catch(() => {})}>Restore downloaded limits</button>
-          </div>
-          <div style={{ marginTop: 10 }}>
-            ladder factors<input style={{ ...input, width: 160 }} value={factors} onChange={(e) => setFactors(e.target.value)} />
-            <select value={mode} onChange={(e) => setMode(e.target.value as 'time' | 'all')}>
-              <option value="time">time scale: v x f, a x f², j x f³</option>
-              <option value="all">all limits x f</option>
-            </select>
-            <button style={{ marginLeft: 8 }} disabled={!!busy} onClick={() => doLadder().catch(() => {})}>Run ladder</button>
-          </div>
-          {ask && (
-            <div style={{ marginTop: 10, padding: 10, background: '#eff6ff', border: '1px solid #93c5fd', borderRadius: 6 }}>
-              Step x{ask.factor} done ({ask.result?.moves} moves, {fmt(ask.result?.perMoveS, 3)} s each).
-              Is A back on its 0 mark?
-              <button style={{ marginLeft: 8 }} onClick={() => answer.current?.(true)}>Yes, on the mark</button>
-              <button style={{ marginLeft: 8 }} onClick={() => answer.current?.(false)}>No, steps lost</button>
-            </div>
-          )}
+          {(() => {
+            const l = aLimits(factor);
+            return l && (
+              <div style={{ marginTop: 6, fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>
+                v {fmt(l.v)} deg/s ({fmt(l.v / 6)} rpm) &nbsp; a {fmt(l.a)} deg/s² &nbsp; j {fmt(l.j)} deg/s³
+              </div>
+            );
+          })()}
           {busy && <div style={{ marginTop: 8, color: '#b45309' }}>running: {busy}</div>}
         </div>
 
@@ -233,7 +168,7 @@ export const MotorTestPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrlObj
           <table style={{ borderCollapse: 'collapse', fontSize: 12, marginTop: 6, fontVariantNumeric: 'tabular-nums' }}>
             <thead><tr>
               <th style={{ ...head, textAlign: 'left' }}>run</th><th style={head}>v deg/s</th><th style={head}>a deg/s²</th><th style={head}>j deg/s³</th>
-              <th style={head}>moves</th><th style={head}>s / move</th><th style={head}>peak v %</th><th style={head}>peak a %</th><th style={head}>A on mark</th>
+              <th style={head}>moves</th><th style={head}>s / move</th><th style={head}>peak v %</th><th style={head}>peak a %</th><th style={head}>note</th>
             </tr></thead>
             <tbody>
               {rows.map((r, k) => (
@@ -242,7 +177,7 @@ export const MotorTestPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrlObj
                   <td style={cell}>{fmt(r.limitsShow.v)}</td><td style={cell}>{fmt(r.limitsShow.a)}</td><td style={cell}>{fmt(r.limitsShow.j)}</td>
                   <td style={cell}>{r.result?.moves ?? '-'}</td><td style={cell}>{fmt(r.result?.perMoveS, 3)}</td>
                   <td style={cell}>{fmt(r.result?.peakPct.v)}</td><td style={cell}>{fmt(r.result?.peakPct.a)}</td>
-                  <td style={cell}>{r.error ? `error: ${r.error}` : r.verdict ?? '(check)'}</td>
+                  <td style={cell}>{r.error ? `error: ${r.error}` : ''}</td>
                 </tr>
               ))}
             </tbody>

@@ -420,16 +420,18 @@ A new UI tab "Motors" (`components/MotorTestPage.tsx`, logic in
   position, units per motor turn, limits in force and as downloaded
   (yellow when they differ), motor rpm at the velocity limit, and peaks
   since reset. A is shown in degrees (1 u = 10 deg).
-- **A limit test**: set v / a / j in degrees, swing and cycles; "Run
-  test" sets the limits (SYS `SET_AXIS_LIMITS`), brings the FSM to
-  Ready, and turns A back and forth from and back to 0. Only A moves;
-  the first G1 goes to the arm's actual TCP. The result table shows
-  time per move and peaks against the limits.
-- **Ladder**: factors (e.g. 1, 1.25, 1.5, 2), in time scale (v x f,
-  a x f^2, j x f^3) or all x f. After each step the page asks whether A
-  is back on its 0 mark (a mark on the nozzle: an open-loop stepper's
-  lost steps are invisible to the PLC). It stops at the first "no" and
-  restores the downloaded limits at the end.
+- **A limit test** (owner's wish: only a slider and Run): a factor
+  0.5-3 on the downloaded limits, as the same motion f times faster (v x f,
+  a x f^2, j x f^3). Run sets the limits (SYS `SET_AXIS_LIMITS`; the FSM
+  is reset for it), brings the FSM to Ready, swings A 180 deg back and
+  forth 20 times and stops at 0. The operator checks A's mark on the
+  nozzle: an open-loop stepper's lost steps are invisible to the PLC.
+  Only A moves; the first G1 goes to the arm's actual TCP. The result
+  table shows time per move and peaks against the limits. The limits of
+  the last run stay until the next run (x1 = the downloaded ones), a
+  download or a restart. `lib/motors.ts` also has a ladder
+  (`runALadder`) with a confirm callback; the page does not use it any
+  more.
 - Limits set here are run-time only; a download or restart brings back
   `set_axis_limits.py`'s values. They are set in UnInited: the group
   planner takes an axis' limits when the group is enabled. Writing them
