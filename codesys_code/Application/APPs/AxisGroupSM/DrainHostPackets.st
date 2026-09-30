@@ -531,6 +531,17 @@ END_IF;
                 MessagePackerFb.PackKvLint(ADR('h5'), UDINT_TO_LINT(GVL.EcPeriodHist[5]));
                 MessagePackerFb.PackKvLint(ADR('dc_out'), UDINT_TO_LINT(GVL.EcDcOutCycles));
                 MessagePackerFb.PackKvReal(ADR('agsm_max'), LREAL_TO_REAL(GVL.EcAgsmUsMax));
+                // g0..2 / gms0..2 / d2m0..2: set-position glitches of the
+                // delta joints (count, PLC ms of the last, max |d2| deg/cycle^2)
+                MessagePackerFb.PackKvLint(ADR('g0'), UDINT_TO_LINT(GVL.SetGlitchCount[0]));
+                MessagePackerFb.PackKvLint(ADR('g1'), UDINT_TO_LINT(GVL.SetGlitchCount[1]));
+                MessagePackerFb.PackKvLint(ADR('g2'), UDINT_TO_LINT(GVL.SetGlitchCount[2]));
+                MessagePackerFb.PackKvLint(ADR('gms0'), UDINT_TO_LINT(GVL.SetGlitchLastMs[0]));
+                MessagePackerFb.PackKvLint(ADR('gms1'), UDINT_TO_LINT(GVL.SetGlitchLastMs[1]));
+                MessagePackerFb.PackKvLint(ADR('gms2'), UDINT_TO_LINT(GVL.SetGlitchLastMs[2]));
+                MessagePackerFb.PackKvReal(ADR('d2m0'), LREAL_TO_REAL(GVL.SetD2Max[0]));
+                MessagePackerFb.PackKvReal(ADR('d2m1'), LREAL_TO_REAL(GVL.SetD2Max[1]));
+                MessagePackerFb.PackKvReal(ADR('d2m2'), LREAL_TO_REAL(GVL.SetD2Max[2]));
                 IF MessageUnpackerFb.TryReadINT64('reset', 0) <> 0 THEN
                     GVL.EcProfReset := TRUE;
                     GVL.EcStatsClear := TRUE;

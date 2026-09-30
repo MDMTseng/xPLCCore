@@ -269,6 +269,17 @@ VAR_GLOBAL
 	EcTxErrors    : UDINT;
 	EcRxErrors    : UDINT;
 	EcStatsClear  : BOOL;
+	(* Set-position glitch monitor, delta joints (PRG_EventLog, every
+	   EtherCAT cycle): d2 = second difference of fSetPosition (deg per
+	   cycle^2; 100000 deg/s^2 = 0.1). A cycle with |d2| over
+	   SetGlitchThresh counts as a glitch -- the PLC's own command jumped.
+	   Zero here while the drive's following error still jumps = the jump
+	   happens on the way (bus timing / the drive). Reset with
+	   EcProfReset. *)
+	SetGlitchThresh : LREAL := 0.2;
+	SetGlitchCount  : ARRAY[0..2] OF UDINT;
+	SetGlitchLastMs : ARRAY[0..2] OF UDINT;
+	SetD2Max        : ARRAY[0..2] OF LREAL;
 
 	(* Tape moves that stopped short of their target (the ReelMv block). *)
 	ReelInterruptCount : UDINT;

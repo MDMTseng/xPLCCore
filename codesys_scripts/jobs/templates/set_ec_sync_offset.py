@@ -8,9 +8,12 @@
 # 0 fires SYNC0 as the frame leaves: any master jitter lands the frame
 # after SYNC0 and the drives reuse the last target (a flat cycle, then a
 # double step -- seen on the ASDA scope 2026-09-30). CODESYS default 20.
+# 20 was not enough: the frame goes out after the IEC code (EtherCAT_Task
+# exec avg 179 us, max 362 us, start jitter +-84 us) -- stale targets in
+# bursts during the heavy motion phases. 50 (500 us) covers it.
 
 MASTER = "EtherCAT_Master_SoftMotion"
-WANT = "20"
+WANT = "50"
 
 
 def t(v):

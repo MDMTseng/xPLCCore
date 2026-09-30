@@ -35,6 +35,13 @@ VAR
     lrRestUs    : LREAL;
     iProf       : INT;
     iStatTick   : INT;
+    // Set-position glitch monitor (GVL.SetGlitch*).
+    lrSetPrev   : ARRAY[0..2] OF LREAL;
+    lrVelPrev   : ARRAY[0..2] OF LREAL;
+    lrV         : LREAL;
+    lrD2        : LREAL;
+    iSetValid   : ARRAY[0..2] OF INT;
+    pAxG        : POINTER TO AXIS_REF_SM3;
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
 // Event timestamp log -- see GVL.EvHead. Runs in EtherCAT_Task after
@@ -140,6 +147,10 @@ IF GVL.EcProfReset THEN
     GVL.EcRestUsMax := 0;
     GVL.EcRestUsAvg := 0;
     GVL.EcDcOutCycles := 0;
+    FOR iProf := 0 TO 2 DO
+        GVL.SetGlitchCount[iProf] := 0;
+        GVL.SetD2Max[iProf] := 0;
+    END_FOR;
     xProfPrev := FALSE;
 END_IF;
 lrAgsmUs := ULINT_TO_LREAL(LTIME_TO_ULINT(GVL.EcProfT1 - GVL.EcProfT0)) / 1000.0;
@@ -180,6 +191,31 @@ IF xProfPrev THEN
 END_IF;
 tProfPrevT0 := GVL.EcProfT0;
 xProfPrev := TRUE;
+
+// ---- Set-position glitch monitor (GVL.SetGlitch*) ----
+FOR iProf := 0 TO 2 DO
+    CASE iProf OF
+        0: pAxG := ADR(IoConfig_Globals.EAxis0);
+        1: pAxG := ADR(IoConfig_Globals.EAxis1);
+    ELSE
+        pAxG := ADR(IoConfig_Globals.EAxis2);
+    END_CASE;
+    lrV := pAxG^.fSetPosition - lrSetPrev[iProf];
+    lrD2 := lrV - lrVelPrev[iProf];
+    IF pAxG^.nAxisState = SMC_AXIS_STATE.power_off OR pAxG^.nAxisState = SMC_AXIS_STATE.errorstop THEN
+        iSetValid[iProf] := 0;             // SetPosition / power-up: start over
+    ELSIF iSetValid[iProf] < 2 THEN
+        iSetValid[iProf] := iSetValid[iProf] + 1;
+    ELSE
+        GVL.SetD2Max[iProf] := MAX(GVL.SetD2Max[iProf], ABS(lrD2));
+        IF ABS(lrD2) > GVL.SetGlitchThresh THEN
+            GVL.SetGlitchCount[iProf] := GVL.SetGlitchCount[iProf] + 1;
+            GVL.SetGlitchLastMs[iProf] := udiNow;
+        END_IF;
+    END_IF;
+    lrSetPrev[iProf] := pAxG^.fSetPosition;
+    lrVelPrev[iProf] := lrV;
+END_FOR;
 
 // ---- EtherCAT master frame statistics (GVL.EcLostFrames etc.) ----
 IF GVL.EcStatsClear THEN

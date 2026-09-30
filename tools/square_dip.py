@@ -80,9 +80,13 @@ def main():
                     time.sleep(10)
                     st = rv.push("plc_stream_status", {})
                     e = plc({"type": "SYS", "cmd": "EC_STATS"})
-                    log("%4.0f s  laps %4d  lost %d tx_err %d rx_err %d  late100 %d  pmax %.0f us  dc_out %d%s" % (
+                    log("%4.0f s  laps %4d  lost %d tx_err %d rx_err %d  late100 %d  pmax %.0f us  dc_out %d"
+                        "  glitch %s  d2max %s%s" % (
                         time.time() - t0, st["sent"] // len(lap), e["lost"], e["tx_err"], e["rx_err"],
-                        e["late100"], e["pmax"], e["dc_out"], ("  ERR " + st["err"]) if st["err"] else ""))
+                        e["late100"], e["pmax"], e["dc_out"],
+                        "/".join(str(e.get("g%d" % k, "?")) for k in range(3)),
+                        "/".join("%.3f" % e.get("d2m%d" % k, -1) for k in range(3)),
+                        ("  ERR " + st["err"]) if st["err"] else ""))
                     if not st["running"] or time.time() - t0 > a.minutes * 60:
                         break
             except KeyboardInterrupt:
