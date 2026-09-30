@@ -554,3 +554,15 @@ that they are.
   FALSE). Cold reset, bus restart and the last good build did not bring
   it back; a PLC power cycle did. Download with the drives off (the FSM
   now powers off in UnInited).
+
+### First real homing (2026-09-30 12:15)
+
+Delta real, FSM Powered -> GroupEnabled -> HOME_GO: Ready after ~10 s.
+EAxis1/2 started on their switches and backed off 8 deg. All three rose
+to their switches (hits before the shift -0.14 / -0.18 / -0.17, i.e.
+the switches' hysteresis is ~0.17 deg) and went to 0. The owner checked
+with a level: **all three upper arms level**, the arm in its neutral
+pose.
+
+The joint encoders are not absolute: after the PLC power cycle they read
+about 0 wherever the arms were. Homing is needed after every power-up.
