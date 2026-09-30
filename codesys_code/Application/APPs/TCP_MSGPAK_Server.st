@@ -1,5 +1,9 @@
 PROGRAM TCP_MSGPAK_Server
 VAR
+    CpH : __XWORD;    // Comm task profile: this task's handle
+    CpR : UDINT;
+    CpP : POINTER TO CmpIecTask.Task_Info2;
+    CpOut : LREAL;
     // --- Server Configuration ---
     //
     // Bind to 0.0.0.0 (any interface). Pre-fix the server was bound to a
@@ -65,6 +69,20 @@ VAR
 	CommIter      : INT;     // packets taken / replies sent this scan
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
+// Comm task profile (GVL.Comm*): last scan's task time vs its POU span
+CpH := CmpIecTask.IecTaskGetCurrent(ADR(CpR));
+IF CpR = 0 THEN
+    CpP := CmpIecTask.IecTaskGetInfo3(CpH, ADR(CpR));
+    IF (CpR = 0) AND (CpP <> 0) THEN
+        CpOut := DWORD_TO_LREAL(CpP^.dwCycleTime) - GVL.CommScanUsLast;
+        GVL.CommTaskUsMax := MAX(GVL.CommTaskUsMax, DWORD_TO_LREAL(CpP^.dwCycleTime));
+        GVL.CommOutsideUsMax := MAX(GVL.CommOutsideUsMax, CpOut);
+        IF CpOut > 500.0 THEN
+            GVL.CommOutsideOver500 := GVL.CommOutsideOver500 + 1;
+        END_IF;
+    END_IF;
+END_IF;
+GVL.CommT[0] := LTIME(); GVL.CommCyc[0] := GVL.EcProfCycles;   // Comm task profile (GVL.Comm*)
 
 //==================================================================================================
 // PROGRAM IMPLEMENTATION

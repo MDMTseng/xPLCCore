@@ -347,6 +347,27 @@ VAR_GLOBAL
 	DrvSmMissed     : ARRAY[0..2] OF DINT := [-1, -1, -1];
 	DrvSyncErr      : ARRAY[0..2] OF DINT := [-1, -1, -1];
 	EcSdoErr        : DINT;
+	(* Comm task profile: stamps at the start of TCP_MSGPAK_Server (0),
+	   PRG_MbProbe (1), PRG_EcatEspHttp (2) and its end (3). CommSegUsMax[k]
+	   = longest time from stamp k to k+1 (us, wall time: preemption by
+	   EtherCAT_Task / SoftMotion_PlanningTask included); CommSegBusCyc[k]
+	   = EtherCAT cycles that ran inside that worst one; CommSegOver1ms[k]
+	   = segments over 1 ms. Reset with EcProfReset. *)
+	CommT           : ARRAY[0..3] OF LTIME;
+	CommCyc         : ARRAY[0..3] OF UDINT;
+	CommSegUsMax    : ARRAY[0..2] OF LREAL;
+	CommSegBusCyc   : ARRAY[0..2] OF UDINT;
+	CommSegOver1ms  : ARRAY[0..2] OF UDINT;
+	CommScanUsMax   : LREAL;
+	CommProfReset   : BOOL;
+	(* The Comm task's own execution time of its last scan (CmpIecTask
+	   dwCycleTime) minus the three POUs' span of that scan = time spent
+	   outside the POUs (IO update, task overhead, preemption between
+	   them): worst, and scans where it exceeded 500 us. *)
+	CommScanUsLast  : LREAL;
+	CommOutsideUsMax : LREAL;
+	CommTaskUsMax   : LREAL;
+	CommOutsideOver500 : UDINT;
 	(* The drives' sync objects (PRG_EventLog SDO_IDX / SDO_SUB), [drive,
 	   object]; -1 + DrvObjErr = SDO error. *)
 	DrvObj          : ARRAY[0..2, 0..11] OF DINT;

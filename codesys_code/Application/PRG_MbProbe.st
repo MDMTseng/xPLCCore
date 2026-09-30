@@ -13,6 +13,7 @@ VAR
     udiErrors   : UDINT;
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
+GVL.CommT[1] := LTIME(); GVL.CommCyc[1] := GVL.EcProfCycles;   // Comm task profile
 fbCh(slave := SmartBowlFeeder, xExecute := xRun, iChannelIndex := iChannel);
 
 uiSlaves := Modbus_Client_COM_Port.uiNumberOfCommunicatingSlaves;

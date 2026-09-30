@@ -569,6 +569,21 @@ END_IF;
                 MessagePackerFb.PackKvDint(ADR('se2'), GVL.DrvSyncErr[2]);
                 MessagePackerFb.PackKvDint(ADR('sdo_err'), GVL.EcSdoErr);
                 MessagePackerFb.PackKvLint(ADR('bus_us'), DWORD_TO_LINT(BusPeriodUs));   // EtherCAT_Task interval as read
+                // Comm task profile: cs0..2 worst segment us (TCP server / MbProbe / EspHttp),
+                // cb0..2 bus cycles inside it, co0..2 segments > 1 ms, cscan worst whole scan
+                MessagePackerFb.PackKvReal(ADR('cs0'), LREAL_TO_REAL(GVL.CommSegUsMax[0]));
+                MessagePackerFb.PackKvLint(ADR('cb0'), UDINT_TO_LINT(GVL.CommSegBusCyc[0]));
+                MessagePackerFb.PackKvLint(ADR('co0'), UDINT_TO_LINT(GVL.CommSegOver1ms[0]));
+                MessagePackerFb.PackKvReal(ADR('cs1'), LREAL_TO_REAL(GVL.CommSegUsMax[1]));
+                MessagePackerFb.PackKvLint(ADR('cb1'), UDINT_TO_LINT(GVL.CommSegBusCyc[1]));
+                MessagePackerFb.PackKvLint(ADR('co1'), UDINT_TO_LINT(GVL.CommSegOver1ms[1]));
+                MessagePackerFb.PackKvReal(ADR('cs2'), LREAL_TO_REAL(GVL.CommSegUsMax[2]));
+                MessagePackerFb.PackKvLint(ADR('cb2'), UDINT_TO_LINT(GVL.CommSegBusCyc[2]));
+                MessagePackerFb.PackKvLint(ADR('co2'), UDINT_TO_LINT(GVL.CommSegOver1ms[2]));
+                MessagePackerFb.PackKvReal(ADR('cscan'), LREAL_TO_REAL(GVL.CommScanUsMax));
+                MessagePackerFb.PackKvReal(ADR('ctask'), LREAL_TO_REAL(GVL.CommTaskUsMax));
+                MessagePackerFb.PackKvReal(ADR('cout'), LREAL_TO_REAL(GVL.CommOutsideUsMax));
+                MessagePackerFb.PackKvLint(ADR('cout500'), UDINT_TO_LINT(GVL.CommOutsideOver500));
                 IF MessageUnpackerFb.TryReadINT64('obj', 0) <> 0 THEN  // long text: only on request
                     // o0..o2: drive k's sync objects (DrvObj), "v,v,..." text
                     FOR EcTrI := 0 TO 2 DO
@@ -639,6 +654,7 @@ END_IF;
                 IF MessageUnpackerFb.TryReadINT64('reset', 0) <> 0 THEN
                     GVL.EcProfReset := TRUE;
                     GVL.EcStatsClear := TRUE;
+                    GVL.CommProfReset := TRUE;
                 END_IF;
             ELSIF (CommandType = 'IO_STATE') THEN
                 // The IO slave's inputs as read, in any FSM state (sensor

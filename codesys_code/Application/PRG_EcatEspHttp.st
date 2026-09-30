@@ -3,6 +3,8 @@ VAR CONSTANT
     HTML_LEN        : UDINT := 3061;
 END_VAR
 VAR
+    iProfK          : INT;          // Comm task profile
+    lrSegUs         : LREAL;
     sHtml           : STRING(3062) := '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>EasyCAT &#32232;&#30908;&#22120;</title><style>body{font-family:system-ui,sans-serif;background:#f4f5f7;color:#1f2328;margin:0;padding:16px}h1{font-size:18px;margin:0 0 12px}.row{display:flex;flex-wrap:wrap;gap:12px}.card{background:#fff;border-radius:10px;padding:14px 16px;box-shadow:0 1px 3px rgba(0,0,0,.08);min-width:150px}.k{font-size:12px;color:#656d76}.v{font-size:26px;font-weight:600;font-variant-numeric:tabular-nums}.ok{color:#1a7f37}.bad{color:#cf222e}.warn{color:#9a6700}svg{display:block}#conn{font-size:12px;color:#656d76;margin-top:12px}</style></head><body><h1>EasyCAT + ESP32 &#32232;&#30908;&#22120;&#29376;&#24907;</h1><div class="row"><div class="card"><svg width="170" height="170" viewBox="-85 -85 170 170"><circle r="78" fill="#f4f5f7" stroke="#d0d7de" stroke-width="2"/><line id="nd" x1="0" y1="0" x2="0" y2="-68" stroke="#0969da" stroke-width="5" stroke-linecap="round"/><circle r="5" fill="#0969da"/></svg></div><div class="card"><div class="k">&#35282;&#24230;</div><div class="v" id="deg">-</div><div class="k" style="margin-top:10px">&#21407;&#22987;&#20540; (0-4095)</div><div class="v" id="raw">-</div></div><div class="card"><div class="k">&#22810;&#22280;&#20301;&#32622; (counts)</div><div class="v" id="pos">-</div><div class="k" style="margin-top:10px">&#22280;&#25976;</div><div class="v" id="turns">-</div></div></div><div class="row" style="margin-top:12px"><div class="card"><div class="k">ESP32</div><div class="v" id="alive">-</div></div><div class="card"><div class="k">EtherCAT</div><div class="v" id="ecat">-</div></div><div class="card"><div class="k">&#30913;&#37941;</div><div class="v" id="mag">-</div></div><div class="card"><div class="k">AGC / I2C &#37679;&#35492;</div><div class="v" id="agc">-</div></div></div><div id="conn">-</div><script>var S={1:"INIT",2:"PREOP",3:"BOOT",4:"SAFEOP",8:"OP"};function g(i){return document.getElementById(i)}function put(i,h,c){var e=g(i);e.innerHTML=h;e.className="v "+(c||"")}function tick(){fetch("/s",{cache:"no-store"}).then(function(r){return r.json()}).then(function(j){var deg=j.raw*360/4096;g("nd").setAttribute("transform","rotate("+deg.toFixed(1)+")");put("deg",deg.toFixed(1)+"&deg;");put("raw",j.raw);put("pos",j.pos);put("turns",(j.pos/4096).toFixed(3));put("alive",j.alive?"&#36939;&#20316;&#20013;":"&#28961;&#24515;&#36339;",j.alive?"ok":"bad");put("ecat",S[j.ecat]||j.ecat,j.ecat==8?"ok":"bad");var m=j.st&1?["&#28961;&#24863;&#28204;&#22120;","bad"]:j.st&16?["&#22826;&#24369;","warn"]:j.st&8?["&#22826;&#24375;","warn"]:j.st&32?["&#27491;&#24120;","ok"]:["&#26410;&#20597;&#28204;","bad"];put("mag",m[0],m[1]);put("agc",j.agc+" / "+j.err);g("conn").innerHTML="&#26356;&#26032; "+new Date().toLocaleTimeString()+" &middot; &#35531;&#27714; "+j.hb;setTimeout(tick,200)}).catch(function(){g("conn").innerHTML="&#36899;&#32218;&#20013;&#26039;&#65292;&#37325;&#35430;&#20013;";setTimeout(tick,1000)})}tick();</script></body></html>';
     sHdrHtml        : STRING(200) := 'HTTP/1.1 200 OK$R$NContent-Type: text/html; charset=utf-8$R$NCache-Control: no-store$R$NConnection: close$R$N$R$N';
     sHdrJson        : STRING(200) := 'HTTP/1.1 200 OK$R$NContent-Type: application/json$R$NCache-Control: no-store$R$NConnection: close$R$N$R$N';
@@ -72,6 +74,7 @@ VAR
     udiStreamWriteErr : UDINT;
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
+GVL.CommT[2] := LTIME(); GVL.CommCyc[2] := GVL.EcProfCycles;   // Comm task profile
 fbServer();
 itfServer := fbServer.itfServer;
 fbConn(itfServer := itfServer, xEnable := (itfServer <> 0) AND NOT xReset);
@@ -284,3 +287,31 @@ END_IF
 IF fbStream.xError THEN
     xStreamReset := TRUE;
 END_IF
+
+// ---- Comm task profile (GVL.Comm*): the last POU of the Comm task ----
+GVL.CommT[3] := LTIME();
+GVL.CommCyc[3] := GVL.EcProfCycles;
+IF GVL.CommProfReset THEN
+    GVL.CommProfReset := FALSE;
+    FOR iProfK := 0 TO 2 DO
+        GVL.CommSegUsMax[iProfK] := 0;
+        GVL.CommSegBusCyc[iProfK] := 0;
+        GVL.CommSegOver1ms[iProfK] := 0;
+    END_FOR;
+    GVL.CommScanUsMax := 0;
+    GVL.CommOutsideUsMax := 0;
+    GVL.CommTaskUsMax := 0;
+    GVL.CommOutsideOver500 := 0;
+END_IF;
+FOR iProfK := 0 TO 2 DO
+    lrSegUs := ULINT_TO_LREAL(LTIME_TO_ULINT(GVL.CommT[iProfK + 1] - GVL.CommT[iProfK])) / 1000.0;
+    IF lrSegUs > GVL.CommSegUsMax[iProfK] THEN
+        GVL.CommSegUsMax[iProfK] := lrSegUs;
+        GVL.CommSegBusCyc[iProfK] := GVL.CommCyc[iProfK + 1] - GVL.CommCyc[iProfK];
+    END_IF;
+    IF lrSegUs > 1000.0 THEN
+        GVL.CommSegOver1ms[iProfK] := GVL.CommSegOver1ms[iProfK] + 1;
+    END_IF;
+END_FOR;
+GVL.CommScanUsLast := ULINT_TO_LREAL(LTIME_TO_ULINT(GVL.CommT[3] - GVL.CommT[0])) / 1000.0;
+GVL.CommScanUsMax := MAX(GVL.CommScanUsMax, GVL.CommScanUsLast);
