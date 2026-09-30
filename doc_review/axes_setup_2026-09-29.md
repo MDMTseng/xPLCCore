@@ -527,3 +527,30 @@ direct write of `EAxisN.bRegulatorOn` switched them. Earlier "A is
 power_off in UnInited" readings came from bus restarts and downloads,
 not from the FSM. To fix: the FSM must switch the axes off, and check
 that they are.
+
+### Fixes: FSM power-off, homing on the IO switches (2026-09-30)
+
+- `AxisGroupManager.Update`: `SMC_GroupPower` is called before the CASE,
+  in every state. UnInited leaves the CASE with RETURN, so the call
+  after it never ran there. The group (delta + A) now powers off on a
+  reset and on again on Powered. Checked: UnInited -> A power_off,
+  `bRegulatorOn` FALSE, group power status FALSE; power on again -> TRUE.
+  The reel's `MC_Power` is unchanged (still not called in UnInited; the
+  reel stays powered there, as before).
+- `FB_Homing` rewritten on the IO switches (input N for EAxisN, on = at
+  the switch):
+  1. A joint already on its switch backs off 8 deg down.
+  2. All three move up at 5 deg/s, each stopping on the scan its
+     switch turns on (position kept).
+  3. `MC_SetPosition` (relative) makes that point read
+     `GVL.HomeSwitchAngle` = 20.25 / 19.82 / 19.93.
+  4. All three go to 0 (level) together.
+  This replaces SMC_Homing (FAST_BSLOW_S_STOP), which references on the
+  switch turning off while backing off (a hysteresis away from where the
+  angles were measured). Virtual check (`SimHomeSwitchEnable`, switch at
+  10): HOME_GO -> Ready in 5.9 s, hits at 10.005, joints at 0.
+- **EtherCAT did not come up after a download made while the delta
+  drives were powered** (all slaves stayed in BOOT, `xConfigFinished`
+  FALSE). Cold reset, bus restart and the last good build did not bring
+  it back; a PLC power cycle did. Download with the drives off (the FSM
+  now powers off in UnInited).

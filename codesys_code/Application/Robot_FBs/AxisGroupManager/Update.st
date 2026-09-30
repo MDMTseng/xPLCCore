@@ -10,6 +10,19 @@ END_VAR
 
 Update:=TRUE;
 
+// Group power (delta joints + A), every state. It used to be called after
+// the CASE, which UnInited leaves with RETURN: in UnInited it was never
+// called, so GroupPower_Flag FALSE never reached the axes and they stayed
+// powered after a reset (found 2026-09-30 on the delta bench test; only a
+// bus restart or a download switched them off). GroupPower_Flag is the
+// one set by the previous scan's state; one scan of delay.
+SMC_GroupPower_0(
+    AxisGroup    := _agAxisGroup,
+    Enable       := TRUE,
+    bRegulatorOn := GroupPower_Flag,
+    bDriveStart  := GroupPower_Flag
+);
+
 CASE _eState OF
     E_RobotState.UnInited:
         IF(uidx=-1)THEN // On Entry
@@ -236,13 +249,7 @@ END_CASE
 
 // --- CALL FUNCTION BLOCKS OUTSIDE THE CASE ---
 
-// 1. Robot Group Power
-SMC_GroupPower_0(
-    AxisGroup    := _agAxisGroup,
-    Enable       := TRUE,
-    bRegulatorOn := GroupPower_Flag,
-    bDriveStart  := GroupPower_Flag
-);
+// 1. Robot Group Power: called before the CASE (see there), every state.
 
 // 2. Single Motor Power (Reel Pull)
 fbPowerReel(

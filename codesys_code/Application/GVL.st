@@ -413,6 +413,13 @@ VAR_GLOBAL
 	FlushCmdCount : UDINT := 0;
 	(* SYS SET_AXIS_LIMITS accepted (run-time limits, motor limit test). *)
 	AxisLimitSetCount : UDINT := 0;
+	(* Delta home switches (FB_Homing): the joint angle above level at which
+	   each switch turns on, the arm moving up at 5 deg/s. Measured on the
+	   machine 2026-09-30: switch position minus the position with the upper
+	   arm set level by hand, twice, repeatable to 0.002 deg. *)
+	HomeSwitchAngle : ARRAY[0..2] OF LREAL := [20.25, 19.82, 19.93];
+	(* Where each switch turned on in the last homing, before the shift. *)
+	HomeLastHitPos  : ARRAY[0..2] OF LREAL;
 
 	(* SCRATCHPAD_WRITE partial-write rejection. The §4(2) wire contract
 	   requires the host to send ALL 5 fields per write (plan_id,

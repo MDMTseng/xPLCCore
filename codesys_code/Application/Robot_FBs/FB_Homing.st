@@ -10,91 +10,77 @@ VAR_OUTPUT
     bBusy : BOOL;     // TRUE while the block is working
 END_VAR
 VAR
-    // Phase A: three SMC_Homing run in parallel; each independently
-    // searches the limit switch and stops there (bReturnToZero=FALSE)
-    // so the encoder is set to fHomePosition without further motion.
-    // The outer state machine waits until ALL three report bDone before
-    // moving on -- this enforces "都到位後" (all-on-position) before
-    // anyone leaves the home switch.
-    fbHome_Axis0 : SM3_Basic.SMC_Homing;
-    fbHome_Axis1 : SM3_Basic.SMC_Homing;
-    fbHome_Axis2 : SM3_Basic.SMC_Homing;
+    // Home switches: a slot light barrier per joint, on when the arm is
+    // raised into it; IO slave input N for EAxisN (terminal CH1). Positive
+    // joint direction = arm up (both measured on the machine 2026-09-30).
+    //
+    // Phase A: every joint moves up at HOME_SEEK_VEL until its switch turns
+    // on; the actual position on the scan it does (hit) is kept and the
+    // joint stops. A joint whose switch is already on first backs off
+    // HOME_BACKOFF down. The position is then shifted (MC_SetPosition,
+    // relative) so that the hit reads GVL.HomeSwitchAngle[k] -- the switch
+    // angle above level measured the same way (rising edge, up, 5 deg/s),
+    // so the joints' 0 is level.
+    // Phase B: all three move to 0 (level) together.
+    //
+    // Replaced SMC_Homing (FAST_BSLOW_S_STOP): it references on the switch
+    // turning off while backing off slowly, a different point (the
+    // sensor's hysteresis) from the one the angles were measured at.
+    fbSeek    : ARRAY[0..2] OF SM3_Basic.MC_MoveRelative;
+    fbHalt    : ARRAY[0..2] OF SM3_Basic.MC_Halt;
+    fbSetPos  : ARRAY[0..2] OF SM3_Basic.MC_SetPosition;
+    fbZero    : ARRAY[0..2] OF SM3_Basic.MC_MoveAbsolute;
+    pAx       : ARRAY[0..2] OF POINTER TO AXIS_REF_SM3;
+    bSeek     : ARRAY[0..2] OF BOOL;
+    bHalt     : ARRAY[0..2] OF BOOL;
+    bHit      : ARRAY[0..2] OF BOOL;
+    fHitPos   : ARRAY[0..2] OF LREAL;
+    bOn       : ARRAY[0..2] OF BOOL;
+    bOnPrev   : ARRAY[0..2] OF BOOL;
+    fSeekDist : ARRAY[0..2] OF LREAL;
+    bSetPos   : BOOL;
+    bExecZero : BOOL;
+    k         : INT;
+    bAll      : BOOL;
+    bAny      : BOOL;
 
-    // Phase B: synchronized return-to-zero. Started AT THE SAME SCAN on
-    // all three axes (state 30 entry) so they move toward joint 0 in
-    // lockstep. Using MC_MoveAbsolute per axis (vs MC_GroupMove*) keeps
-    // each axis in its own command stream -- the kinematic group is
-    // still in ErrorStop after SMC_Homing per the comment in
-    // AxisGroupManager.Update.st:171-178, and the SMC_GroupReset that
-    // clears it only runs once the Ready state is entered.
-    fbZero_Axis0 : SM3_Basic.MC_MoveAbsolute;
-    fbZero_Axis1 : SM3_Basic.MC_MoveAbsolute;
-    fbZero_Axis2 : SM3_Basic.MC_MoveAbsolute;
-
-    // State machine + per-phase timeout. udiTimeout governs phase A
-    // (mechanical switch search is slow and may travel the full axis),
-    // udiZeroTimeout governs phase B (deterministic absolute move from
-    // homePose to 0, shorter budget).
     iHomingState : INT := 0;
     fbTimeoutTimer : TON;
-
-    // Triggers gated by state so SMC_Homing and MC_MoveAbsolute never
-    // both assert bExecute on the same axis at once (SoftMotion
-    // single-motion-FB-per-axis rule).
-    bExecHoming : BOOL;
-    bExecZero   : BOOL;
-
-    // Home switch per axis: IOHUB_motN_limit (active low), or the
-    // simulated switch for a virtual axis (GVL.SimHomeSwitchEnable).
-    // SMC_Homing reads bReferenceSwitch = FALSE as "switch reached"
-    // (observed 2026-09-24 in the virtual scene: with TRUE at the switch,
-    // axes ran past it at search speed; with FALSE away from it, they
-    // backed off slowly). The real mapping IOHUB_motN_limit = 0 therefore
-    // assumes a sensor that reads 1 when hit -- verify on the machine.
-    bRef0 : BOOL;
-    bRef1 : BOOL;
-    bRef2 : BOOL;
 END_VAR
-
-// --- Local Constants for Homing Parameters ---
 VAR CONSTANT
-    Speed: REAL := 10;
-    // Joint position the encoder is set to when the home switch is hit.
-    // Phase B then moves all three to 0 -- so 20 is the "lift-off home
-    // switch" offset, NOT a final resting position. The arm visibly
-    // settles at joint 0 after Phase B.
-    homePose: REAL := 20.0;
-    // Phase-B velocity / accel: slower than the Speed*N home-search
-    // because the move starts from a known stop and is a deterministic
-    // short hop. Conservative defaults; tune if mechanical settling
-    // overshoots.
-    ZeroVel: REAL := 10.0;
-    ZeroAcc: REAL := 50.0;
-    ZeroJerk: REAL := 500.0;
+    HOME_SEEK_VEL  : LREAL := 5.0;     // deg/s up to the switch (as measured)
+    HOME_SEEK_MAX  : LREAL := 60.0;    // deg: no switch within this = error
+    HOME_BACKOFF   : LREAL := 8.0;     // deg down first if already on the switch
+    ZeroVel        : LREAL := 10.0;
+    ZeroAcc        : LREAL := 50.0;
+    ZeroJerk       : LREAL := 500.0;
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
-// Two-phase homing per 2026-06-24 requirement:
-//   Phase A (state 10/20): all three Delta axes find limit switches in
-//                          parallel. SMC_Homing.bReturnToZero := FALSE
-//                          so each axis stops at the switch with
-//                          encoder = homePose. Wait for ALL three
-//                          bDone before moving on.
-//   Phase B (state 30/40): all three axes simultaneously
-//                          MC_MoveAbsolute -> joint 0. Wait for ALL
-//                          three bDone before reporting overall bDone.
-//
-// Reel and A axis are not homed (per spec); they remain in whatever
-// state EV_GROUP_ENABLE left them.
+pAx[0] := ADR(IoConfig_Globals.EAxis0);
+pAx[1] := ADR(IoConfig_Globals.EAxis1);
+pAx[2] := ADR(IoConfig_Globals.EAxis2);
 
-// Abort: the caller dropped bExecute mid-sequence (Homing state left
-// on timeout, EV_ERROR, EV_RESET). Without this the FB stayed in 20/40
-// with its timer running, and the next homing attempt inherited the
-// expired timer and failed at once (review 2026-09-24 P0-1).
+// The switches: real input, or the simulated one for a virtual joint
+// (GVL.SimHomeSwitchEnable: on above GVL.SimHomeSwitchPos).
+FOR k := 0 TO 2 DO
+    IF GVL.SimHomeSwitchEnable AND pAx[k]^.bVirtual THEN
+        bOn[k] := pAx[k]^.fActPosition >= GVL.SimHomeSwitchPos;
+    ELSE
+        bOn[k] := (SHR(AxisGroupSM.InputCHs[1], k) AND 1) = 1;
+    END_IF;
+END_FOR;
+
+// Abort: the caller dropped bExecute mid-sequence (Homing state left on
+// timeout, EV_ERROR, EV_RESET).
 IF NOT bExecute AND (iHomingState >= 10) AND (iHomingState <= 40) THEN
-    bExecHoming := FALSE;
+    FOR k := 0 TO 2 DO
+        bSeek[k] := FALSE;
+        bHalt[k] := FALSE;
+    END_FOR;
+    bSetPos := FALSE;
     bExecZero := FALSE;
     bBusy := FALSE;
-    fbTimeoutTimer(IN:=FALSE);
+    fbTimeoutTimer(IN := FALSE);
     iHomingState := 0;
 END_IF
 
@@ -103,178 +89,148 @@ CASE iHomingState OF
         bBusy := FALSE;
         bDone := FALSE;
         bError := FALSE;
-        bExecHoming := FALSE;
+        bSetPos := FALSE;
         bExecZero := FALSE;
-
+        FOR k := 0 TO 2 DO
+            bSeek[k] := FALSE;
+            bHalt[k] := FALSE;
+        END_FOR;
         IF bExecute THEN
             iHomingState := 10;
         END_IF
 
-    10: // Phase A start: kick off SMC_Homing on all three.
+    10: // Start: a joint already on its switch backs off first.
         bBusy := TRUE;
-        bExecHoming := TRUE;
-        fbTimeoutTimer(IN:=FALSE);   // fresh timer, whatever came before
-        fbTimeoutTimer(IN:=TRUE, PT:=UDINT_TO_TIME(udiTimeout));
-        iHomingState := 20;
+        fbTimeoutTimer(IN := FALSE);
+        fbTimeoutTimer(IN := TRUE, PT := UDINT_TO_TIME(udiTimeout));
+        FOR k := 0 TO 2 DO
+            bHit[k] := FALSE;
+            fHitPos[k] := 0;
+            fSeekDist[k] := -HOME_BACKOFF;
+            bSeek[k] := bOn[k];
+        END_FOR;
+        iHomingState := 15;
 
-    20: // Phase A wait: all three reached home switch.
-        fbTimeoutTimer(IN:=TRUE, PT:=UDINT_TO_TIME(udiTimeout));
-
-        IF fbHome_Axis0.bDone AND fbHome_Axis1.bDone AND fbHome_Axis2.bDone THEN
-            // Drop phase-A trigger so SoftMotion releases the axes
-            // before phase-B MC_MoveAbsolute claims them. The single-
-            // motion-FB-per-axis rule means bExecute on a new FB while
-            // the previous one is still active is rejected with error.
-            bExecHoming := FALSE;
-            fbTimeoutTimer(IN:=FALSE);
-            iHomingState := 30;
-
-        ELSIF fbHome_Axis0.bError OR fbHome_Axis1.bError OR fbHome_Axis2.bError OR fbTimeoutTimer.Q THEN
+    15: // Back-offs done (none needed: at once).
+        fbTimeoutTimer(IN := TRUE, PT := UDINT_TO_TIME(udiTimeout));
+        bAll := TRUE;
+        FOR k := 0 TO 2 DO
+            IF bSeek[k] AND NOT fbSeek[k].Done THEN
+                bAll := FALSE;
+            END_IF;
+        END_FOR;
+        IF bAll THEN
+            FOR k := 0 TO 2 DO
+                bSeek[k] := FALSE;          // falling edge before the seek
+            END_FOR;
+            iHomingState := 17;
+        ELSIF fbTimeoutTimer.Q THEN
             iHomingState := 99;
-        END_IF
+        END_IF;
 
-    30: // Phase B start: kick off MC_MoveAbsolute on all three.
-        fbTimeoutTimer(IN:=FALSE);
-        // bExecHoming already FALSE from state 20 transition; this scan
-        // is the rising edge of bExecZero so the three MC_MoveAbsolute
-        // FBs latch their Position parameter and begin the move.
+    17: // All three seek up together.
+        fbTimeoutTimer(IN := TRUE, PT := UDINT_TO_TIME(udiTimeout));
+        FOR k := 0 TO 2 DO
+            IF bOn[k] THEN                  // still on after backing off
+                iHomingState := 99;
+            END_IF;
+            fSeekDist[k] := HOME_SEEK_MAX;
+            bSeek[k] := TRUE;
+        END_FOR;
+        IF iHomingState = 17 THEN
+            iHomingState := 20;
+        END_IF;
+
+    20: // Seek: stop each joint where its switch turns on.
+        fbTimeoutTimer(IN := TRUE, PT := UDINT_TO_TIME(udiTimeout));
+        bAll := TRUE;
+        bAny := FALSE;
+        FOR k := 0 TO 2 DO
+            IF NOT bHit[k] THEN
+                IF bOn[k] AND NOT bOnPrev[k] THEN
+                    bHit[k] := TRUE;
+                    fHitPos[k] := pAx[k]^.fActPosition;
+                    bSeek[k] := FALSE;
+                    bHalt[k] := TRUE;
+                ELSIF fbSeek[k].Done THEN
+                    bAny := TRUE;                  // full travel, no switch
+                END_IF;
+            END_IF;
+            bAll := bAll AND bHit[k] AND (NOT bHalt[k] OR fbHalt[k].Done);
+        END_FOR;
+        IF bAll THEN
+            FOR k := 0 TO 2 DO
+                bHalt[k] := FALSE;
+            END_FOR;
+            fbTimeoutTimer(IN := FALSE);
+            iHomingState := 25;
+        ELSIF bAny OR fbTimeoutTimer.Q THEN
+            iHomingState := 99;
+        END_IF;
+
+    25: // The hit becomes the switch angle (relative shift, all three).
+        bSetPos := TRUE;
+        IF fbSetPos[0].Done AND fbSetPos[1].Done AND fbSetPos[2].Done THEN
+            bSetPos := FALSE;
+            iHomingState := 30;
+        END_IF;
+
+    30: // Phase B start: all three to 0 (level) together.
+        fbTimeoutTimer(IN := FALSE);
         bExecZero := TRUE;
-        fbTimeoutTimer(IN:=TRUE, PT:=UDINT_TO_TIME(udiZeroTimeout));
+        fbTimeoutTimer(IN := TRUE, PT := UDINT_TO_TIME(udiZeroTimeout));
         iHomingState := 40;
 
-    40: // Phase B wait: all three reached joint 0.
-        fbTimeoutTimer(IN:=TRUE, PT:=UDINT_TO_TIME(udiZeroTimeout));
-
-        IF fbZero_Axis0.Done AND fbZero_Axis1.Done AND fbZero_Axis2.Done THEN
+    40: // Phase B wait.
+        fbTimeoutTimer(IN := TRUE, PT := UDINT_TO_TIME(udiZeroTimeout));
+        IF fbZero[0].Done AND fbZero[1].Done AND fbZero[2].Done THEN
             iHomingState := 50;
-        ELSIF fbZero_Axis0.Error OR fbZero_Axis1.Error OR fbZero_Axis2.Error OR fbTimeoutTimer.Q THEN
+        ELSIF fbZero[0].Error OR fbZero[1].Error OR fbZero[2].Error OR fbTimeoutTimer.Q THEN
             iHomingState := 99;
         END_IF
 
-    50: // Both phases complete.
+    50: // Done.
         bBusy := FALSE;
         bDone := TRUE;
         bExecZero := FALSE;
-        fbTimeoutTimer(IN:=FALSE);
-
+        fbTimeoutTimer(IN := FALSE);
         IF NOT bExecute THEN
             iHomingState := 0;
         END_IF
 
-    99: // Error: switch search or return-to-zero failed.
+    99: // Error: no switch, a move failed, or a timeout.
         bBusy := FALSE;
         bError := TRUE;
-        bExecHoming := FALSE;
+        bSetPos := FALSE;
         bExecZero := FALSE;
-        fbTimeoutTimer(IN:=FALSE);
-
+        FOR k := 0 TO 2 DO
+            bSeek[k] := FALSE;
+            bHalt[k] := FALSE;
+        END_FOR;
+        fbTimeoutTimer(IN := FALSE);
         IF NOT bExecute THEN
             iHomingState := 0;
         END_IF
 END_CASE;
 
-bRef0 := SEL(GVL.SimHomeSwitchEnable AND IoConfig_Globals.EAxis0.bVirtual,
-             IOHUB_mot0_limit = 0, IoConfig_Globals.EAxis0.fActPosition < GVL.SimHomeSwitchPos);
-bRef1 := SEL(GVL.SimHomeSwitchEnable AND IoConfig_Globals.EAxis1.bVirtual,
-             IOHUB_mot1_limit = 0, IoConfig_Globals.EAxis1.fActPosition < GVL.SimHomeSwitchPos);
-bRef2 := SEL(GVL.SimHomeSwitchEnable AND IoConfig_Globals.EAxis2.bVirtual,
-             IOHUB_mot2_limit = 0, IoConfig_Globals.EAxis2.fActPosition < GVL.SimHomeSwitchPos);
+FOR k := 0 TO 2 DO
+    fbSeek[k](Axis := pAx[k]^, Execute := bSeek[k], Distance := fSeekDist[k],
+              Velocity := HOME_SEEK_VEL, Acceleration := HOME_SEEK_VEL * 5,
+              Deceleration := HOME_SEEK_VEL * 5, Jerk := HOME_SEEK_VEL * 50);
+    fbHalt[k](Axis := pAx[k]^, Execute := bHalt[k],
+              Deceleration := HOME_SEEK_VEL * 20, Jerk := HOME_SEEK_VEL * 400);
+    fbSetPos[k](Axis := pAx[k]^, Execute := bSetPos, Position := GVL.HomeSwitchAngle[k] - fHitPos[k],
+                Mode := TRUE);   // relative: the hit reads HomeSwitchAngle[k]
+    fbZero[k](Axis := pAx[k]^, Execute := bExecZero, Position := 0.0, Velocity := ZeroVel,
+              Acceleration := ZeroAcc, Deceleration := ZeroAcc, Jerk := ZeroJerk,
+              Direction := SM3_Basic.MC_DIRECTION.positive);
+    IF (iHomingState >= 10) AND (iHomingState <= 40)
+       AND (fbSeek[k].Error OR fbHalt[k].Error OR fbSetPos[k].Error) THEN
+        iHomingState := 99;
+    END_IF;
+    bOnPrev[k] := bOn[k];
+END_FOR;
 
-// --- Phase A: SMC_Homing instances ---
-// bReturnToZero := FALSE so each axis stops at the home switch with
-// encoder set to fHomePosition; the synchronized return-to-zero is
-// done by phase B below.
-
-fbHome_Axis0(
-    Axis:=IoConfig_Globals.EAxis0,
-    bExecute:=bExecHoming,
-    fHomePosition:=homePose,
-    fVelocitySlow:=Speed/10,
-    fVelocityFast:=Speed,
-    fAcceleration:=Speed*2,
-    fDeceleration:=Speed*10,
-    fJerk:=Speed*100,
-    nDirection:=SM3_Basic.MC_DIRECTION.positive,
-    bReferenceSwitch:=bRef0,
-    fSignalDelay:=0,
-    nHomingMode:=SM3_Basic.SMC_HOMING_MODE.FAST_BSLOW_S_STOP,
-    bReturnToZero:=FALSE,
-    bIgnoreHWLimit:=TRUE
-);
-
-fbHome_Axis1(
-    Axis:=IoConfig_Globals.EAxis1,
-    bExecute:=bExecHoming,
-    fHomePosition:=homePose,
-    fVelocitySlow:=Speed/10,
-    fVelocityFast:=Speed,
-    fAcceleration:=Speed*2,
-    fDeceleration:=Speed*10,
-    fJerk:=Speed*100,
-    nDirection:=SM3_Basic.MC_DIRECTION.positive,
-    bReferenceSwitch:=bRef1,
-    fSignalDelay:=0,
-    nHomingMode:=SM3_Basic.SMC_HOMING_MODE.FAST_BSLOW_S_STOP,
-    bReturnToZero:=FALSE,
-    bIgnoreHWLimit:=TRUE
-);
-
-fbHome_Axis2(
-    Axis:=IoConfig_Globals.EAxis2,
-    bExecute:=bExecHoming,
-    fHomePosition:=homePose,
-    fVelocitySlow:=Speed/10,
-    fVelocityFast:=Speed,
-    fAcceleration:=Speed*2,
-    fDeceleration:=Speed*10,
-    fJerk:=Speed*100,
-    nDirection:=SM3_Basic.MC_DIRECTION.positive,
-    bReferenceSwitch:=bRef2,
-    fSignalDelay:=0,
-    nHomingMode:=SM3_Basic.SMC_HOMING_MODE.FAST_BSLOW_S_STOP,
-    bReturnToZero:=FALSE,
-    bIgnoreHWLimit:=TRUE
-);
-
-// --- Phase B: MC_MoveAbsolute instances, all targeting joint 0 ---
-// Execute rising edge happens at state 30 entry, latching Position=0
-// on all three so the move starts on the same scan -> synchronized
-// return to joint 0.
-
-fbZero_Axis0(
-    Axis:=IoConfig_Globals.EAxis0,
-    Execute:=bExecZero,
-    Position:=0.0,
-    Velocity:=ZeroVel,
-    Acceleration:=ZeroAcc,
-    Deceleration:=ZeroAcc,
-    Jerk:=ZeroJerk,
-    Direction:=SM3_Basic.MC_DIRECTION.positive
-);
-
-fbZero_Axis1(
-    Axis:=IoConfig_Globals.EAxis1,
-    Execute:=bExecZero,
-    Position:=0.0,
-    Velocity:=ZeroVel,
-    Acceleration:=ZeroAcc,
-    Deceleration:=ZeroAcc,
-    Jerk:=ZeroJerk,
-    Direction:=SM3_Basic.MC_DIRECTION.positive
-);
-
-fbZero_Axis2(
-    Axis:=IoConfig_Globals.EAxis2,
-    Execute:=bExecZero,
-    Position:=0.0,
-    Velocity:=ZeroVel,
-    Acceleration:=ZeroAcc,
-    Deceleration:=ZeroAcc,
-    Jerk:=ZeroJerk,
-    Direction:=SM3_Basic.MC_DIRECTION.positive
-);
-
-// Outputs bDone/bError/bBusy are owned by the state machine above.
-// Do NOT recompute from axis flags here -- state 99 (timeout) sets
-// bError:=TRUE, and axis flags would clobber it back to FALSE on the
-// next scan, hiding the timeout from the outer FSM.
+// GVL.HomeLastHitPos: where each switch turned on in the last homing (before
+// the shift), for diagnostics.
+GVL.HomeLastHitPos := fHitPos;
