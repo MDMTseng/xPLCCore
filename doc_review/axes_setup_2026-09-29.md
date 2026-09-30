@@ -452,3 +452,18 @@ A test, 180 deg x 10 moves:
 
 Then restored: 288 / 4320 / 86 400. Whether A kept its steps at x1.5 is
 the operator's check at the mark (not done here).
+
+### A limit found by the owner (2026-09-30)
+
+QEC driver current for the A motor: **0.62 A**, set by the driver's
+hardware switch (nothing to write at start-up; set a replacement driver
+the same). At that current the owner found **x2** (time scale on the
+downloaded limits: 5760 deg/s = 960 rpm, 172 800 deg/s^2, 6.9e6
+deg/s^3; 180 deg in ~0.094 s) to be about where A starts losing steps,
+checked at the mark with the Motors page. A different current means a
+new test.
+
+Proposed for production: x1.5 (4320 deg/s, 97 200 deg/s^2, 2.9e6
+deg/s^3; `set_axis_limits.py` 432 / 9720 / 291 600 u). Its acceleration,
+i.e. the torque needed, is 56 % of the limit's; the rest is margin for
+heat and supply.
