@@ -260,6 +260,15 @@ VAR_GLOBAL
 	EcRestUsMax   : LREAL;
 	EcRestUsAvg   : LREAL;
 	EcDcOutCycles : UDINT;      (* cycles with the master's DC not in sync *)
+	(* The EtherCAT master's frame statistics (GetStatistics, every 100
+	   cycles; the IDE's master status page shows the same). Zero on a
+	   healthy bus: a lost frame is a cycle the drives got no new set
+	   position -- cabling, a connector, or the NIC. EcStatsClear clears
+	   them (ClearStatistics). *)
+	EcLostFrames  : UDINT;
+	EcTxErrors    : UDINT;
+	EcRxErrors    : UDINT;
+	EcStatsClear  : BOOL;
 
 	(* Tape moves that stopped short of their target (the ReelMv block). *)
 	ReelInterruptCount : UDINT;

@@ -504,6 +504,37 @@ END_IF;
                     MessagePackerFb.PackKvDint(ADR('e1'), TO_DINT(JtErrId[1]));
                     MessagePackerFb.PackKvDint(ADR('e2'), TO_DINT(JtErrId[2]));
                 END_IF;
+            ELSIF (CommandType = 'EC_STATS') THEN
+                // EtherCAT health: the master's frame statistics (lost /
+                // tx_err / rx_err, updated every 100 cycles) and the task
+                // timing monitor (GVL.EcProf*: cycles, late100 / late500 =
+                // periods over nominal + 100 / 500 us, pmin / pmax us,
+                // h0..h5 = |period - nominal| < 20/50/100/200/500/>=500 us,
+                // dc_out = cycles with DC out of sync, agsm_max us). reset:1
+                // starts all of them over after this reply.
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                MessagePackerFb.PackKvLint(ADR('lost'), UDINT_TO_LINT(GVL.EcLostFrames));
+                MessagePackerFb.PackKvLint(ADR('tx_err'), UDINT_TO_LINT(GVL.EcTxErrors));
+                MessagePackerFb.PackKvLint(ADR('rx_err'), UDINT_TO_LINT(GVL.EcRxErrors));
+                MessagePackerFb.PackKvLint(ADR('cycles'), UDINT_TO_LINT(GVL.EcProfCycles));
+                MessagePackerFb.PackKvLint(ADR('late100'), UDINT_TO_LINT(GVL.EcLate100));
+                MessagePackerFb.PackKvLint(ADR('late500'), UDINT_TO_LINT(GVL.EcLate500));
+                MessagePackerFb.PackKvReal(ADR('pmin'), LREAL_TO_REAL(GVL.EcPeriodUsMin));
+                MessagePackerFb.PackKvReal(ADR('pmax'), LREAL_TO_REAL(GVL.EcPeriodUsMax));
+                MessagePackerFb.PackKvLint(ADR('h0'), UDINT_TO_LINT(GVL.EcPeriodHist[0]));
+                MessagePackerFb.PackKvLint(ADR('h1'), UDINT_TO_LINT(GVL.EcPeriodHist[1]));
+                MessagePackerFb.PackKvLint(ADR('h2'), UDINT_TO_LINT(GVL.EcPeriodHist[2]));
+                MessagePackerFb.PackKvLint(ADR('h3'), UDINT_TO_LINT(GVL.EcPeriodHist[3]));
+                MessagePackerFb.PackKvLint(ADR('h4'), UDINT_TO_LINT(GVL.EcPeriodHist[4]));
+                MessagePackerFb.PackKvLint(ADR('h5'), UDINT_TO_LINT(GVL.EcPeriodHist[5]));
+                MessagePackerFb.PackKvLint(ADR('dc_out'), UDINT_TO_LINT(GVL.EcDcOutCycles));
+                MessagePackerFb.PackKvReal(ADR('agsm_max'), LREAL_TO_REAL(GVL.EcAgsmUsMax));
+                IF MessageUnpackerFb.TryReadINT64('reset', 0) <> 0 THEN
+                    GVL.EcProfReset := TRUE;
+                    GVL.EcStatsClear := TRUE;
+                END_IF;
             ELSIF (CommandType = 'IO_STATE') THEN
                 // The IO slave's inputs as read, in any FSM state (sensor
                 // check). in1 / in2: the terminal's CH1 / CH2 = input pins

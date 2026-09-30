@@ -34,6 +34,7 @@ VAR
     lrAgsmUs    : LREAL;
     lrRestUs    : LREAL;
     iProf       : INT;
+    iStatTick   : INT;
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
 // Event timestamp log -- see GVL.EvHead. Runs in EtherCAT_Task after
@@ -179,3 +180,18 @@ IF xProfPrev THEN
 END_IF;
 tProfPrevT0 := GVL.EcProfT0;
 xProfPrev := TRUE;
+
+// ---- EtherCAT master frame statistics (GVL.EcLostFrames etc.) ----
+IF GVL.EcStatsClear THEN
+    GVL.EcStatsClear := FALSE;
+    IoConfig_Globals.EtherCAT_Master_SoftMotion.ClearStatistics();
+    iStatTick := 100;
+END_IF;
+iStatTick := iStatTick + 1;
+IF iStatTick >= 100 THEN
+    iStatTick := 0;
+    IoConfig_Globals.EtherCAT_Master_SoftMotion.GetStatistics(
+        udiLostFrameCount => GVL.EcLostFrames,
+        udiTxErrorCount => GVL.EcTxErrors,
+        udiRxErrorCount => GVL.EcRxErrors);
+END_IF;
