@@ -280,6 +280,30 @@ VAR_GLOBAL
 	SetGlitchCount  : ARRAY[0..2] OF UDINT;
 	SetGlitchLastMs : ARRAY[0..2] OF UDINT;
 	SetD2Max        : ARRAY[0..2] OF LREAL;
+	(* The same on the integer target the drive gets (diSetPosition,
+	   increments = the ASDA scope's Cmd Pos PUU): |d2| per cycle^2 over
+	   DiGlitchThresh counts. 150000 = the threshold used on the ASDA
+	   scope recordings (normal p99 ~50000 at 50 % speed). *)
+	DiGlitchThresh  : DINT := 150000;
+	DiGlitchCount   : ARRAY[0..2] OF UDINT;
+	DiD2Max         : ARRAY[0..2] OF DINT;
+	(* Bus timing probe on the EasyCAT (last slave on the wire, DC-synced
+	   like the drives; firmware/easycat_esp32): the PLC writes a cycle
+	   counter to its outputs 8-11 each EtherCAT cycle; the ESP32 reads it
+	   at SYNC0 and reports stale (same counter as last SYNC0 = the frame
+	   had not arrived -- the drives' symptom), skipped, the frame arrival
+	   time after SYNC0 (min / max over the last second, us) and late
+	   (not arrived by the next SYNC0, last second). *)
+	EspSeq          : UDINT;
+	EspStale        : UINT;
+	EspSkip         : UINT;
+	EspArrMinUs     : UINT;
+	EspArrMaxUs     : UINT;
+	EspLate         : UINT;
+	EspArrMaxPeak   : UINT;      (* max of EspArrMaxUs since EcProfReset *)
+	EspLateSum      : UDINT;     (* EspLate summed per second since EcProfReset *)
+	EspStale0       : UINT;      (* EspStale at EcProfReset *)
+	EspSkip0        : UINT;
 	(* Where in the DC cycle the EtherCAT task's IEC code ends (the frame
 	   goes out after it): GetCurrentTimeInCycle at the end of
 	   PRG_EventLog, us. SYNC0 sits at SyncOffset % of the cycle; a frame

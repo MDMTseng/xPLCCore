@@ -42,6 +42,12 @@ VAR
     lrD2        : LREAL;
     iSetValid   : ARRAY[0..2] OF INT;
     pAxG        : POINTER TO AXIS_REF_SM3;
+    diSetPrev   : ARRAY[0..2] OF DINT;
+    diVelPrev   : ARRAY[0..2] OF DINT;
+    diVel         : DINT;
+    diD2        : DINT;
+    uiEspLatePrevMs : UINT;
+    udiEspSecPrev   : UDINT;
     // Cycle position and the drives' SM-event counters (GVL.EcTic*, Drv*).
     lrTicUs     : LREAL;
     uliTicRaw   : ULINT;
@@ -162,8 +168,14 @@ IF GVL.EcProfReset THEN
     FOR iProf := 0 TO 2 DO
         GVL.SetGlitchCount[iProf] := 0;
         GVL.SetD2Max[iProf] := 0;
+        GVL.DiGlitchCount[iProf] := 0;
+        GVL.DiD2Max[iProf] := 0;
     END_FOR;
     GVL.EcTicUsMax := 0;
+    GVL.EspArrMaxPeak := 0;
+    GVL.EspLateSum := 0;
+    GVL.EspStale0 := GVL.EspStale;
+    GVL.EspSkip0 := GVL.EspSkip;
     FOR iProf := 0 TO 9 DO
         GVL.EcTicHist[iProf] := 0;
     END_FOR;
@@ -217,6 +229,8 @@ FOR iProf := 0 TO 2 DO
         pAxG := ADR(IoConfig_Globals.EAxis2);
     END_CASE;
     lrV := pAxG^.fSetPosition - lrSetPrev[iProf];
+    diVel := pAxG^.diSetPosition - diSetPrev[iProf];   // wraps like the drive's 32-bit target
+    diD2 := diVel - diVelPrev[iProf];
     lrD2 := lrV - lrVelPrev[iProf];
     IF pAxG^.nAxisState = SMC_AXIS_STATE.power_off OR pAxG^.nAxisState = SMC_AXIS_STATE.errorstop THEN
         iSetValid[iProf] := 0;             // SetPosition / power-up: start over
@@ -224,6 +238,10 @@ FOR iProf := 0 TO 2 DO
         iSetValid[iProf] := iSetValid[iProf] + 1;
     ELSE
         GVL.SetD2Max[iProf] := MAX(GVL.SetD2Max[iProf], ABS(lrD2));
+        GVL.DiD2Max[iProf] := MAX(GVL.DiD2Max[iProf], ABS(diD2));
+        IF ABS(diD2) > GVL.DiGlitchThresh THEN
+            GVL.DiGlitchCount[iProf] := GVL.DiGlitchCount[iProf] + 1;
+        END_IF;
         IF ABS(lrD2) > GVL.SetGlitchThresh THEN
             GVL.SetGlitchCount[iProf] := GVL.SetGlitchCount[iProf] + 1;
             GVL.SetGlitchLastMs[iProf] := udiNow;
@@ -231,7 +249,27 @@ FOR iProf := 0 TO 2 DO
     END_IF;
     lrSetPrev[iProf] := pAxG^.fSetPosition;
     lrVelPrev[iProf] := lrV;
+    diSetPrev[iProf] := pAxG^.diSetPosition;
+    diVelPrev[iProf] := diVel;
 END_FOR;
+
+// ---- Bus timing probe on the EasyCAT (GVL.Esp*) ----
+GVL.EspSeq := GVL.EspSeq + 1;
+ecat_esp_out8 := TO_USINT(GVL.EspSeq AND 16#FF);
+ecat_esp_out9 := TO_USINT(SHR(GVL.EspSeq, 8) AND 16#FF);
+ecat_esp_out10 := TO_USINT(SHR(GVL.EspSeq, 16) AND 16#FF);
+ecat_esp_out11 := TO_USINT(SHR(GVL.EspSeq, 24) AND 16#FF);
+GVL.EspStale := TO_UINT(ecat_esp_in22) + TO_UINT(ecat_esp_in23) * 256;
+GVL.EspSkip := TO_UINT(ecat_esp_in24) + TO_UINT(ecat_esp_in25) * 256;
+GVL.EspArrMinUs := TO_UINT(ecat_esp_in26) + TO_UINT(ecat_esp_in27) * 256;
+GVL.EspArrMaxUs := TO_UINT(ecat_esp_in28) + TO_UINT(ecat_esp_in29) * 256;
+GVL.EspLate := TO_UINT(ecat_esp_in30) + TO_UINT(ecat_esp_in31) * 256;
+GVL.EspArrMaxPeak := MAX(GVL.EspArrMaxPeak, GVL.EspArrMaxUs);
+// The ESP32 publishes a new min / max / late once a second; sum late per second.
+IF udiNow - udiEspSecPrev >= 1000 THEN
+    udiEspSecPrev := udiNow;
+    GVL.EspLateSum := GVL.EspLateSum + GVL.EspLate;
+END_IF;
 
 // ---- EtherCAT master frame statistics (GVL.EcLostFrames etc.) ----
 IF GVL.EcStatsClear THEN

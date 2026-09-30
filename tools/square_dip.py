@@ -87,9 +87,12 @@ def main():
                         "/".join(str(e.get("g%d" % k, "?")) for k in range(3)),
                         "/".join("%.3f" % e.get("d2m%d" % k, -1) for k in range(3)),
                         ("  ERR " + st["err"]) if st["err"] else ""))
-                    log("       tic_max %.0f us  sm %s  trl %s  trh %s" % (
-                        e.get("tic_max", -1), "/".join(str(e.get("sm%d" % k)) for k in range(3)),
-                        e.get("trl", "").rstrip(","), e.get("trh", "").rstrip(",")))
+                    log("       tic_max %.0f us  int-target glitch %s  max|d2| %s | EasyCAT stale %s skip %s"
+                        "  arrival %s..%s us (peak %s)  late %s/s (sum %s)" % (
+                        e.get("tic_max", -1), "/".join(str(e.get("dg%d" % k)) for k in range(3)),
+                        "/".join(str(e.get("dd%d" % k)) for k in range(3)),
+                        e.get("e_stale"), e.get("e_skip"), e.get("e_amin"), e.get("e_amax"),
+                        e.get("e_apeak"), e.get("e_late"), e.get("e_late_sum")))
                     if not st["running"] or time.time() - t0 > a.minutes * 60:
                         break
             except KeyboardInterrupt:

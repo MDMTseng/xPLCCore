@@ -388,6 +388,21 @@ class EasyCAT
     
     PROCBUFFER_OUT BufferOut;               // output process data buffer 
     PROCBUFFER_IN BufferIn;                 // input process data buffer    
+
+    // Added (xPLCCore): read an ESC core register at the library's SPI
+    // speed, e.g. SM2 status 0x0815 for the frame-arrival timing.
+    unsigned long ReadEsc(unsigned short Address, unsigned char Len)
+    {
+      SPI.beginTransaction(SPISettings(SpiSpeed, MSBFIRST, SPI_MODE0));
+      unsigned long v = SPIReadRegisterIndirect(Address, Len);
+      SPI.endTransaction();
+      return v;
+    }
+
+    // Added (xPLCCore): read the whole output process RAM (as MainTask
+    // does -- the full SM2 area, so the ESC hands over its newest buffer)
+    // into dst, without touching BufferOut. For the frame-arrival probe.
+    void PeekOutputs(unsigned char *dst);
   
   private:
     void SPIWriteRegisterDirect(unsigned short Address, unsigned long DataOut);
@@ -1114,5 +1129,25 @@ void EasyCAT::SPIWriteProcRamFifo()    // write data to the input process ram, t
     SCS_High_macro                                              // disable SPI chip select    
   #endif     
 }
+
+
+//---- added (xPLCCore): see the declaration ----
+void EasyCAT::PeekOutputs(unsigned char *dst)
+    {
+      ULONG TempLong;
+      SPI.beginTransaction(SPISettings(SpiSpeed, MSBFIRST, SPI_MODE0));
+      SPIWriteRegisterDirect (ECAT_PRAM_RD_CMD, PRAM_ABORT);
+      SPIWriteRegisterDirect (ECAT_PRAM_RD_ADDR_LEN, (0x00001000 | (((uint32_t)TOT_BYTE_NUM_OUT) << 16)));
+      SPIWriteRegisterDirect (ECAT_PRAM_RD_CMD, 0x80000000);
+      do { TempLong.Long = SPIReadRegisterDirect (ECAT_PRAM_RD_CMD,2); }
+      while (TempLong.Byte[1] != (FST_BYTE_NUM_ROUND_OUT/4));
+      SCS_Low_macro
+      SPI_TransferTx(COMM_SPI_READ);
+      SPI_TransferTx(0x00);
+      SPI_TransferTxLast(0x00);
+      for (unsigned char i=0; i< FST_BYTE_NUM_ROUND_OUT; i++) dst[i] = SPI_TransferRx(DUMMY_BYTE);
+      SCS_High_macro
+      SPI.endTransaction();
+    }
 
 #endif

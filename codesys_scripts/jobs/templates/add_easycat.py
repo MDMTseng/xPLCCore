@@ -57,6 +57,12 @@ for _i in (2, 4, 5, 6, 7):
     MAP[("Output", "Byte%d" % _i)] = "ecat_esp_out%d" % _i
 for _i in range(16, 22):
     MAP[("Input", "Byte%d" % _i)] = "ecat_esp_in%d" % _i
+# Bus timing probe (firmware main.cpp): outputs 8-11 the PLC cycle
+# counter; inputs 22-31 stale / skipped / arrival min / max / late.
+for _i in range(8, 12):
+    MAP[("Output", "Byte%d" % _i)] = "ecat_esp_out%d" % _i
+for _i in range(22, 32):
+    MAP[("Input", "Byte%d" % _i)] = "ecat_esp_in%d" % _i
 
 
 def t(v):

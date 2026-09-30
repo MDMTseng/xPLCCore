@@ -14,7 +14,7 @@
 # (exec max 344 us, so another delay after the task); 75 tried next.
 
 MASTER = "EtherCAT_Master_SoftMotion"
-WANT = "75"
+WANT = "50"
 
 
 def t(v):

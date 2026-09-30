@@ -566,6 +566,25 @@ END_IF;
                 MessagePackerFb.PackKvDint(ADR('se1'), GVL.DrvSyncErr[1]);
                 MessagePackerFb.PackKvDint(ADR('se2'), GVL.DrvSyncErr[2]);
                 MessagePackerFb.PackKvDint(ADR('sdo_err'), GVL.EcSdoErr);
+                // dg0..2 / dd0..2: the same glitch check on the integer
+                // target sent to the drive (diSetPosition): count, max |d2|
+                MessagePackerFb.PackKvLint(ADR('dg0'), UDINT_TO_LINT(GVL.DiGlitchCount[0]));
+                MessagePackerFb.PackKvLint(ADR('dg1'), UDINT_TO_LINT(GVL.DiGlitchCount[1]));
+                MessagePackerFb.PackKvLint(ADR('dg2'), UDINT_TO_LINT(GVL.DiGlitchCount[2]));
+                MessagePackerFb.PackKvDint(ADR('dd0'), GVL.DiD2Max[0]);
+                MessagePackerFb.PackKvDint(ADR('dd1'), GVL.DiD2Max[1]);
+                MessagePackerFb.PackKvDint(ADR('dd2'), GVL.DiD2Max[2]);
+                // EasyCAT bus timing probe: e_stale / e_skip since reset,
+                // e_amin / e_amax arrival after SYNC0 over the last second
+                // (us), e_apeak max since reset, e_late last second,
+                // e_late_sum since reset
+                MessagePackerFb.PackKvDint(ADR('e_stale'), UINT_TO_DINT(GVL.EspStale - GVL.EspStale0));
+                MessagePackerFb.PackKvDint(ADR('e_skip'), UINT_TO_DINT(GVL.EspSkip - GVL.EspSkip0));
+                MessagePackerFb.PackKvDint(ADR('e_amin'), UINT_TO_DINT(GVL.EspArrMinUs));
+                MessagePackerFb.PackKvDint(ADR('e_amax'), UINT_TO_DINT(GVL.EspArrMaxUs));
+                MessagePackerFb.PackKvDint(ADR('e_apeak'), UINT_TO_DINT(GVL.EspArrMaxPeak));
+                MessagePackerFb.PackKvDint(ADR('e_late'), UINT_TO_DINT(GVL.EspLate));
+                MessagePackerFb.PackKvLint(ADR('e_late_sum'), UDINT_TO_LINT(GVL.EspLateSum));
                 // trl / trh: the last 20 x 500 ms min / max of the above,
                 // oldest first ("lo0,..." as text, us)
                 EcTrStr := '';
