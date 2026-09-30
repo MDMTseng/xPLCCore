@@ -104,6 +104,14 @@ class Plc:
             time.sleep(0.005)
         raise TimeoutError("no reply to %s within %.1f s" % (pkt.get("cmd"), timeout or self.timeout))
 
+    def send_nowait(self, pkt):
+        """Send one packet, do not wait for the reply (it is kept in replies)."""
+        with self.lock:
+            self.next_id += 1
+            pid = self.next_id
+        self.sock.sendall(msgpack.packb(dict(pkt, id=pid, protocol_version=PROTOCOL_VERSION), use_bin_type=True))
+        return pid
+
     def sys(self, cmd, timeout=None, **kw):
         return self.send(dict(kw, type="SYS", cmd=cmd), timeout)
 

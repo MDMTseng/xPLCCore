@@ -58,12 +58,25 @@ END_IF;
 // The host went away: what it queued belongs to its session. An M4 aimed
 // at "the next move" would otherwise fire on the new session's first G1,
 // and the duplicate filter would match the new session's restarted ids.
+// Packets it sent that are not processed yet are dropped too (nobody to
+// answer; an M4 registered after the flush would be an orphan). Motion
+// the group already accepted runs to its end.
 IF PrevClientActive AND NOT TCP_MSGPAK_Server.fbMyServer.CLIENT.xActive THEN
     FOR DupeLoopIdx := 0 TO DUPE_RING_SIZE - 1 DO
         RecentCmdIds[DupeLoopIdx] := 0;
         RecentCmdMoveIds[DupeLoopIdx] := 0;
     END_FOR;
     RecentCmdRingHead := 0;
+    // Consumer side of both SPSC rings (the Comm task only pushes).
+    WHILE GVL.minfo_buf_ridx.Size() > 0 DO
+        GVL.minfo_buf_ridx.ConsumeTail();
+        GVL.HostGonePacketDropCount := GVL.HostGonePacketDropCount + 1;
+    END_WHILE;
+    WHILE GVL.sysinfo_buf_ridx.Size() > 0 DO
+        GVL.sysinfo_buf_ridx.ConsumeTail();
+        GVL.HostGonePacketDropCount := GVL.HostGonePacketDropCount + 1;
+    END_WHILE;
+    RetryMotionCommandCooldown := 0;
     FlushFlyEvents(notify := FALSE);
 END_IF;
 PrevClientActive := TCP_MSGPAK_Server.fbMyServer.CLIENT.xActive;

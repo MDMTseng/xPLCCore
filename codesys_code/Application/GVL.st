@@ -396,6 +396,9 @@ VAR_GLOBAL
 	CoordMismatchNakCount : UDINT := 0;
 	(* Times the PLC applied the machine frame by itself on Ready entry. *)
 	CoordAutoApplyCount : UDINT := 0;
+	(* Host packets dropped unprocessed because the host disconnected
+	   (UpdateRuntimeAndInputEvent); accepted motion runs to its end. *)
+	HostGonePacketDropCount : UDINT := 0;
 
 	(* SCRATCHPAD_WRITE partial-write rejection. The §4(2) wire contract
 	   requires the host to send ALL 5 fields per write (plan_id,
