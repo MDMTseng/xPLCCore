@@ -92,11 +92,23 @@ export const MotorTestPage: React.FC<{ COMCtrlObj: COMCtrlObj; active?: boolean 
   useHarnessAction('motors_a_test', async (p: any) => await doRun(Number(p?.factor ?? 1)), [doRun]);
   // Test driver: any PLC command through this page's link (JOINT_* etc.).
   useHarnessAction('plc_send', async (p: any) => await send(p?.pkt, p?.timeoutMs ?? 5000), [send]);
-  // A sequence in order, each reply awaited here (ms) instead of a harness
-  // round trip (~1 s) per packet: a queued path keeps the motion buffer fed.
+  // A sequence sent in order with up to `window` (default 8, production's
+  // MAX_IN_FLIGHT, below the PLC's motion buffer threshold) replies
+  // outstanding, instead of a harness round trip (~1 s) per packet: a
+  // queued path keeps the motion buffer fed.
   useHarnessAction('plc_send_many', async (p: any) => {
-    const out: any[] = [];
-    for (const pkt of p?.pkts ?? []) out.push(await send(pkt, p?.timeoutMs ?? 30000));
+    const pkts: any[] = p?.pkts ?? [];
+    const win = Math.max(1, Number(p?.window ?? 8));
+    const out: any[] = new Array(pkts.length);
+    const pending = new Set<Promise<void>>();
+    for (let i = 0; i < pkts.length; i++) {
+      while (pending.size >= win) await Promise.race(pending);
+      const pr: Promise<void> = send(pkts[i], p?.timeoutMs ?? 30000)
+        .then((r: any) => { out[i] = r; })
+        .finally(() => { pending.delete(pr); });
+      pending.add(pr);
+    }
+    await Promise.all(pending);
     return out;
   }, [send]);
   useHarnessAction('io_state', async (p: any) => await send({ type: 'SYS', cmd: 'IO_STATE', ...(p?.reset ? { reset: 1 } : {}) }), [send]);

@@ -35,6 +35,9 @@ def main():
                          "G4 --dwell at each dip's bottom, one wait at the end")
     ap.add_argument("--cor", type=float, default=7.0, help="corner distance (mm) with --continuous; at most half the dip")
     ap.add_argument("--dwell", type=float, default=0.01, help="s at the dip's bottom with --continuous")
+    ap.add_argument("--minutes", type=float, default=0,
+                    help="with --continuous: keep lapping this long (batches of --loops laps, "
+                         "sent back to back), EC_STATS logged per batch; Ctrl-C stops after the queue")
     ap.add_argument("--loops", type=int, default=1, help="laps of the square before going home")
     ap.add_argument("--acc", type=float, help="mm/s^2 (default F*10)")
     ap.add_argument("--jerk", type=float, help="mm/s^3 (default ACC*10)")
@@ -63,6 +66,21 @@ def main():
             if label == "  dip":
                 pkts.append({"type": "M", "cmd": "G4", "P": a.dwell})
         t0 = time.time()
+        if a.minutes > 0:
+            lap = pkts[1:-1]                     # the corners, no Z0 lead-in / home
+            plc({"type": "SYS", "cmd": "EC_STATS", "reset": 1})
+            rv.push("plc_send_many", {"pkts": pkts[:1]}, timeout=60)
+            n = 0
+            try:
+                while time.time() - t0 < a.minutes * 60:
+                    rv.push("plc_send_many", {"pkts": lap, "timeoutMs": 30000}, timeout=600)
+                    n += a.loops
+                    e = plc({"type": "SYS", "cmd": "EC_STATS"})
+                    log("laps %5d  lost %d tx_err %d rx_err %d  late100 %d  pmax %.0f us  dc_out %d" % (
+                        n, e["lost"], e["tx_err"], e["rx_err"], e["late100"], e["pmax"], e["dc_out"]))
+            except KeyboardInterrupt:
+                log("stopping: the queued laps finish, then home")
+            pkts = pkts[-1:]
         rv.push("plc_send_many", {"pkts": pkts, "timeoutMs": 30000}, timeout=600)
         t1 = time.time()
         plc({"type": "M", "cmd": "WAIT_FOR_MOTION_STOP", "timeout": 60, "timeout_ms": 55000}, 60000)
