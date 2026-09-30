@@ -27,8 +27,9 @@ CASE _eState OF
             GVL.LastErrorSource := '';
             GVL.LastErrorID     := 0;
 
-            // Reset the coord-system gate: after any reset, operator must
-            // re-call SetCoord0/SetCoord1 before G1 motion is accepted.
+            // Reset the coord-system gate: after any reset the frame is
+            // applied again (by the PLC on Ready entry, or SetCoord0/1)
+            // before G1 motion is accepted.
             GVL.CoordSystemConfigured := FALSE;
 
             // 2026-06-23 code-review fix: clear COORD1 tracking state on

@@ -71,7 +71,8 @@ Three shapes:
 | `err` | When |
 |---|---|
 | `group_not_ready` | Motion command sent while FSM ≠ Ready. |
-| `coord_not_configured` | `G1` sent before `SetCoord0`/`SetCoord1` since last UnInited entry. |
+| `coord_not_configured` | `G1` while no coordinate system is set since the last UnInited / Error entry. The PLC applies the machine frame (SetCoord1's) itself on Ready entry, so this means that apply failed or a `SetCoord` was refused. |
+| `coord_mismatch` | `G1` while the group's actual MCS transform (read back every scan) differs from the one set and none is being applied. A G1 sent while the frame is being applied waits for it instead. |
 | `block_timeout` | A `BLOCK_FOR_*` / `WAIT_FOR_*` wait exceeded its `timeout_ms`. |
 | `wait_busy` | A wait of the same kind (motion / reel / input) is already pending. |
 | `missing_type_field` | Outbound packet without `type` (or unrecognised). |

@@ -112,7 +112,7 @@ known-safe state.
 | Invariant | Owner | Mechanism |
 |---|---|---|
 | Motion only runs in `Ready` | PLC | Dispatcher NAKs motion in non-Ready states with `err='group_not_ready'` (counter `GroupNotReadyNakCount`) |
-| Group must be coord-configured before G1 | PLC | `CoordSystemConfigured` gate (cleared on UnInited entry, set by `SetCoord0`/`SetCoord1`); G1 NAKs `err='coord_not_configured'` (counter `CoordNotConfiguredNakCount`) |
+| Group must be coord-configured before G1 | PLC | The PLC applies the machine frame (`COORD1_FRAME_A`, SetCoord1's) on every Ready entry (`CoordAutoApplyCount`); `SetCoord0`/`SetCoord1` still set it. `CoordSystemConfigured` gate (cleared on UnInited / Error entry): G1 NAKs `coord_not_configured` (`CoordNotConfiguredNakCount`). Each G1 also checks the group's actual transform: waits while it is being applied, else NAKs `coord_mismatch` (`CoordMismatchNakCount`). |
 | Host must be alive | PLC | UI-heartbeat supervisor: when Ready and `RuntimeMs - LastUiPingMs > UI_HEARTBEAT_TIMEOUT_MS` (5000ms), FSM→Error with `err_src='Supervisor:UiHeartbeatStale'` (counter `UiHeartbeatStaleCount`) |
 | Blocking commands can't park forever | PLC | `BLOCK_FOR_*` accept optional `timeout_ms`; NAK `err='block_timeout'` on expiry |
 | Wire format compatible | PLC | `protocol_version` field on every packet; mismatch → NAK `err='protocol_version_mismatch'` (counter `ProtocolVersionMismatchCount`) |

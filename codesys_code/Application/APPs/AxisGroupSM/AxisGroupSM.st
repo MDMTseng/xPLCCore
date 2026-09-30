@@ -29,6 +29,22 @@ PROGRAM AxisGroupSM
         // Both ends MUST match. See doc/1-concepts/coupling_invariants.md
         // "A-axis /10 scaling" before changing.
         A_AXIS_KIN_WRAP_SCALE   : LREAL := 10;
+        // Where G1 A = 0 is on the A axis, in real degrees, whatever the
+        // coordinate system. SetCoord's frame rotation (CoordTransform.A,
+        // the machine's 60 deg mounting offset in XY) also turns the
+        // Kin_CAxis orientation by the same number of pose units -- and a
+        // pose unit is 10 real degrees here (/10 wrap), so 60 became 600.
+        // G1 cancels the frame's share and applies this fixed offset
+        // instead: -600 keeps A exactly where SetCoord1 always put it
+        // (axis = G1 A - 600 deg), so the angle calibration is unchanged,
+        // and a change of the frame angle no longer moves A 10x.
+        A_AXIS_ZERO_DEG         : LREAL := -600;
+        // The machine's coordinate system (SetCoord1): XY turned by 60 deg
+        // for the delta's mounting against the kinematic model. Applied by
+        // the PLC itself on every Ready entry (CheckAxisGroupReady), and
+        // each G1 checks the group's actual transform against it.
+        COORD1_FRAME_A          : LREAL := 60.0;
+        COORD_MATCH_TOL         : LREAL := 1.0E-6;
         // Bound on per-scan SYS-drain iterations. Prevents a flood of SYS
         // packets from monopolising the EC task. 16 covers normal bursts
         // (PING + GA_EV + GET_MACHINE_STATE x a few); leftover slots wait
@@ -439,6 +455,12 @@ PROGRAM AxisGroupSM
     // MovmentProgressTrigger (default 20) and DistanceTrigger (120).
     FlyEventTriggerSelect : INT;
     MotionPoseTempReal : REAL;
+    // Last G1 A (deg, sticky: a G1 without A keeps it). MotionPose.c.A is
+    // derived from it on every G1 (A_AXIS_ZERO_DEG, CoordTransform.A).
+    G1ADeg : LREAL;
+    // The group's actual MCS->WCS transform equals CoordTransform
+    // (ReadMcsTransformFb, every scan in ProcessFlyEventsAndIo).
+    CoordFrameOk : BOOL;
     // Phase 3: G1 `frame` field. 0=coord0 (default/legacy, MoveLinearAbsolute
     // CoordSystem := WCS), 1=coord1 (Phase 4 step 2: CoordSystem := PCS_1;
     // MC_TrackConveyorBelt keeps PCS_1 synced to the belt). Tag is also

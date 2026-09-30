@@ -14,7 +14,7 @@ Entries are ordered roughly by blast radius (most dangerous first).
 - [`AxisGroupSM.st`](../../codesys_code/Application/APPs/AxisGroupSM/AxisGroupSM.st) VAR_INPUT — `A_AXIS_KIN_WRAP_SCALE : LREAL := 10` (the constant)
 - `SM_Drive_GenericDSP402` axis scaling (CODESYS GUI) — has matching `A_AXIS_KIN_WRAP_SCALE`x to undo it
 
-**Constraint:** Either both ends use `/10` and `*10`, or neither.
+**Constraint:** Either both ends use `/10` and `*10`, or neither. The pose A is `(G1 A + A_AXIS_ZERO_DEG) / 10 + CoordTransform.A`: the frame's A rotation (the machine's 60 deg, in pose units = 600 real deg with the /10) is cancelled, and `A_AXIS_ZERO_DEG` (-600) puts A's zero where SetCoord1 always had it -- the angle calibration relies on it.
 
 **Why it exists:** SpiderR's chained `Kin_CAxis` structurally wraps `c.A` to ±180°.
 UI commands ±360°. The 10x scale dodges the wrap by sending ±36° through the kinematic
@@ -26,13 +26,15 @@ and reversing it at the axis. See [`memory/a_axis_div10_workaround.md`](../../.c
 
 ## Coordinate-system gate
 **Sites:**
-- [`UpdateAxisGroupState.st`](../../codesys_code/Application/APPs/AxisGroupSM/UpdateAxisGroupState.st) / `Update.st` — `GVL.CoordSystemConfigured := FALSE` on UnInited entry
-- [`ProcessMotionPacket.st`](../../codesys_code/Application/APPs/AxisGroupSM/ProcessMotionPacket.st) — G1 NAKs with `coord_not_configured` if gate is FALSE
-- UI flows (e.g. `OperationPage.tsx` `init_plc_motion`) — must call `cmd.SetCoord0()` or `cmd.SetCoord1()` after Ready, before any G1
+- [`CheckAxisGroupReady.st`](../../codesys_code/Application/APPs/AxisGroupSM/CheckAxisGroupReady.st) — on Ready entry with the gate cleared, the PLC applies the machine frame (`COORD1_FRAME_A`) itself
+- `Update.st` — `GVL.CoordSystemConfigured := FALSE` on UnInited and Error entry
+- [`ProcessFlyEventsAndIo.st`](../../codesys_code/Application/APPs/AxisGroupSM/ProcessFlyEventsAndIo.st) — `SetCoordTransformFb` (a failure closes the gate and raises the FSM error); `CoordFrameOk` = the group's actual MCS transform equals `CoordTransform`
+- [`ProcessMotionPacket.st`](../../codesys_code/Application/APPs/AxisGroupSM/ProcessMotionPacket.st) — G1 NAKs `coord_not_configured` (gate FALSE), waits while the frame is being applied, NAKs `coord_mismatch` otherwise when `CoordFrameOk` is FALSE
+- UI flows still send `cmd.SetCoord1()` after Ready: harmless (the same frame again), no longer required
 
-**Constraint:** Every Ready entry that wasn't preceded by an explicit SetCoord call → first G1 NAKs. Every reset/Error→UnInited transition resets the gate.
+**Constraint:** The frame is set after every reset/Error before any G1, and a G1 only runs in the frame that was set. `COORD1_FRAME_A` is the one place for the machine's 60 deg.
 
-**Failure mode if broken:** Cryptic `err='coord_not_configured'` on first motion after recovery, looking like the operator's UI is broken.
+**Failure mode if broken:** G1 in the kinematic model's frame (XY turned by 60 deg): the arm goes somewhere else.
 
 ---
 

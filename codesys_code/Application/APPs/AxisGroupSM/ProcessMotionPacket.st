@@ -104,7 +104,7 @@
             MessagePackerFb.PackKvReal(ADR('X'), TO_REAL(MotionPose.c.X));
             MessagePackerFb.PackKvReal(ADR('Y'), TO_REAL(MotionPose.c.Y));
             MessagePackerFb.PackKvReal(ADR('Z'), TO_REAL(MotionPose.c.Z));
-            MessagePackerFb.PackKvReal(ADR('A'), TO_REAL(MotionPose.c.A));
+            MessagePackerFb.PackKvReal(ADR('A'), TO_REAL(G1ADeg));   // degrees, as sent in G1
             MessagePackerFb.PackKvReal(ADR('B'), TO_REAL(MotionPose.c.B));
             MessagePackerFb.PackKvReal(ADR('C'), TO_REAL(MotionPose.c.C));
 
@@ -187,7 +187,7 @@
                 CoordTransform.X := 0.0;
                 CoordTransform.Y := 0.0;
                 CoordTransform.Z := 0.0;
-                CoordTransform.A := 60.0;
+                CoordTransform.A := COORD1_FRAME_A;
                 CoordTransform.B := 0.0;
                 CoordTransform.C := 0.0;
                 ApplyCoordTransform := TRUE;
@@ -692,13 +692,27 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
                 GVL.DupeCommandCount := GVL.DupeCommandCount + 1;
                 GVL.minfo_buf_ridx.ConsumeTail();
 
-            // Post-homing coord-system gate. Refuse G1 motion until the
-            // operator has called SetCoord0 or SetCoord1 since the last
-            // UnInited entry. Prevents machine-coord crashes when the UI
-            // (or a test script) skips the SetCoord call after homing.
+            // Coord-system gate. The PLC applies the machine frame itself
+            // on Ready entry (CheckAxisGroupReady); SetCoord0/1 also set
+            // it. Refuse G1 until one of them has since the last UnInited
+            // / Error entry, and check the group's actual transform.
             ELSIF (NOT GVL.CoordSystemConfigured) THEN
                 MessagePackerFb.PackKvStr(ADR('err'), ADR('coord_not_configured'));
                 GVL.CoordNotConfiguredNakCount := GVL.CoordNotConfiguredNakCount + 1;
+                ShouldReturn := TRUE;
+                CommandAck := FALSE;
+                GVL.minfo_buf_ridx.ConsumeTail();
+
+            // The transform being applied (SetCoord or the Ready-entry
+            // auto-apply): hold the G1 until the group has it.
+            ELSIF (NOT CoordFrameOk AND (ApplyCoordTransform OR SetCoordTransformFb.Busy)) THEN
+                RetryMotionCommandCooldown := RETRY_COOLDOWN_G1_MS;
+
+            // The group's actual transform is not the one set: never move
+            // in an unknown frame.
+            ELSIF (NOT CoordFrameOk) THEN
+                MessagePackerFb.PackKvStr(ADR('err'), ADR('coord_mismatch'));
+                GVL.CoordMismatchNakCount := GVL.CoordMismatchNakCount + 1;
                 ShouldReturn := TRUE;
                 CommandAck := FALSE;
                 GVL.minfo_buf_ridx.ConsumeTail();
@@ -725,13 +739,15 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
             MotionPose.c.X := MessageUnpackerFb.TryReadREAL('X', MotionPose.c.X);
             MotionPose.c.Y := MessageUnpackerFb.TryReadREAL('Y', MotionPose.c.Y);
             MotionPose.c.Z := MessageUnpackerFb.TryReadREAL('Z', MotionPose.c.Z);
-            // A-axis Kin_CAxis wrap workaround. Constant lives in AxisGroupSM
-            // VAR_INPUT (A_AXIS_KIN_WRAP_SCALE) so the comment-with-coupling
-            // is at the declaration site, not buried here.
+            // A: degrees -> Kin_CAxis pose units (/10 wrap), on the fixed
+            // zero A_AXIS_ZERO_DEG, with the frame's A rotation cancelled
+            // (the planner subtracts CoordTransform.A from the pose A).
+            // Constants and the why: AxisGroupSM VAR CONSTANT.
             MotionPoseTempReal := MessageUnpackerFb.TryReadREAL('A', G1_A_UNSET_SENTINEL);
             IF (MotionPoseTempReal <> G1_A_UNSET_SENTINEL) THEN
-                MotionPose.c.A := MotionPoseTempReal / A_AXIS_KIN_WRAP_SCALE;
+                G1ADeg := MotionPoseTempReal;
             END_IF;
+            MotionPose.c.A := (G1ADeg + A_AXIS_ZERO_DEG) / A_AXIS_KIN_WRAP_SCALE + CoordTransform.A;
 
             LatestFeedRate := MessageUnpackerFb.TryReadREAL('F', LatestFeedRate);
             LatestAcceleration := MessageUnpackerFb.TryReadREAL('ACC', LatestAcceleration);

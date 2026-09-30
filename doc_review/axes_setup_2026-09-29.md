@@ -373,3 +373,40 @@ Two findings on the way:
   included: ~250 deg of margin. The positive side was not probed. The
   additional-axis build's -720 deg test landed fine because there -720
   deg was -12 800 steps.
+
+## A decoupled from the frame; the frame always applied (2026-09-30)
+
+**A.** SetCoord1's frame turns XY by 60 deg: the machine against the
+kinematic model, which is right for XY. With Kin_CAxis the same 60 also
+turned the tool orientation, in pose units: 600 real deg with the /10.
+G1 now cancels the frame's share and puts A's zero at a fixed place:
+
+    pose A = (G1 A + A_AXIS_ZERO_DEG) / 10 + CoordTransform.A,  A_AXIS_ZERO_DEG = -600
+
+In SetCoord1 this is exactly the old value, so A did not move and no
+angle calibration changed. Checked on the machine: G1 A 0 -> axis -60 u
+(-600 deg), A 90 -> -51 u. `a_axis_test.py`: all positions as before.
+Changing the frame angle no longer moves A, let alone 10x. `READ_LATEST_CMD_LOCATION`
+now reports A in degrees as sent (was the pose value, A / 10 - 60).
+
+**Frame.** The PLC applies the machine frame (`COORD1_FRAME_A` = 60) by
+itself on every Ready entry, so a forgotten or failed SetCoord cannot
+leave the arm in the model's frame. Each G1 also compares the group's
+actual MCS transform (`ReadMcsTransformFb`, every scan) with the one set
+(`CoordFrameOk`, 1e-6). If a transform is being applied, the G1 waits.
+Otherwise it gets NAK `coord_mismatch`. A failed apply closes the gate
+and raises the FSM error, as before. SetCoord0/1 still work; the UI's
+SetCoord1 after Ready is now redundant and harmless.
+
+Checked on the machine:
+
+| step | result |
+|---|---|
+| Ready, no SetCoord sent | frame applied (`CoordAutoApplyCount` 1, readback A = 60), G1 accepted |
+| `CoordTransform.A` written to 61 without applying | G1 NAK `coord_mismatch` (`CoordMismatchNakCount` 1) |
+| SetCoord1, then G1 | accepted, `CoordFrameOk` TRUE again |
+| reset -> UnInited (gate FALSE) -> Ready, G1 at once | applied again (count 2), G1 accepted |
+| `a_axis_test.py` incl. the queued Cor 45 G1s | all as commanded |
+
+The group keeps its transform through UnInited: the readback stays at 60
+while the FSM is reset.

@@ -34,4 +34,25 @@ IF NOT AxisGroupReady THEN
     MotionPose.c.A := 0;
     MotionPose.c.B := 0;
     MotionPose.c.C := 0;
+    G1ADeg := 0;
+END_IF;
+
+// Always apply the machine's coordinate system: on every Ready entry (the
+// gate is cleared on UnInited / Error), without waiting for the host's
+// SetCoord1 -- a forgotten or failed SetCoord must not leave the arm in
+// the kinematic model's frame. A failure of the FB closes the gate and
+// raises the FSM error (ProcessFlyEventsAndIo); G1 also checks the
+// group's actual transform (CoordFrameOk). SetCoord0 / SetCoord1 still
+// work (SetCoord1 re-applies the same frame).
+IF AxisGroupReady AND NOT GVL.CoordSystemConfigured AND NOT ApplyCoordTransform
+        AND MotionBufferSize = 0 THEN
+    CoordTransform.X := 0.0;
+    CoordTransform.Y := 0.0;
+    CoordTransform.Z := 0.0;
+    CoordTransform.A := COORD1_FRAME_A;
+    CoordTransform.B := 0.0;
+    CoordTransform.C := 0.0;
+    ApplyCoordTransform := TRUE;
+    GVL.CoordSystemConfigured := TRUE;
+    GVL.CoordAutoApplyCount := GVL.CoordAutoApplyCount + 1;
 END_IF;

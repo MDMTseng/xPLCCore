@@ -331,6 +331,13 @@ ReadMcsTransformFb(
     ErrorID => ,
     CoordTransform =>
 );
+CoordFrameOk := ReadMcsTransformFb.Valid AND NOT ReadMcsTransformFb.Error
+    AND ABS(ReadMcsTransformFb.CoordTransform.X - CoordTransform.X) < COORD_MATCH_TOL
+    AND ABS(ReadMcsTransformFb.CoordTransform.Y - CoordTransform.Y) < COORD_MATCH_TOL
+    AND ABS(ReadMcsTransformFb.CoordTransform.Z - CoordTransform.Z) < COORD_MATCH_TOL
+    AND ABS(ReadMcsTransformFb.CoordTransform.A - CoordTransform.A) < COORD_MATCH_TOL
+    AND ABS(ReadMcsTransformFb.CoordTransform.B - CoordTransform.B) < COORD_MATCH_TOL
+    AND ABS(ReadMcsTransformFb.CoordTransform.C - CoordTransform.C) < COORD_MATCH_TOL;
 
 // Phase 4 step 2 diagnostic: read kernel-side PCS_1 origin in WCS.
 // MC_TrackConveyorBelt mutates this every scan; comparing it to the
