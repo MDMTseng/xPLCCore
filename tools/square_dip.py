@@ -67,19 +67,29 @@ def main():
                 pkts.append({"type": "M", "cmd": "G4", "P": a.dwell})
         t0 = time.time()
         if a.minutes > 0:
-            lap = pkts[1:-1]                     # the corners, no Z0 lead-in / home
+            # One background stream for the whole run (the UI keeps 8 in flight,
+            # the motion buffer never runs dry); EC_STATS polled alongside
+            # every 10 s. Ctrl-C: plc_send_many_abort, the queued moves
+            # finish, then home.
+            lap = pkts[1:1 + len(pkts[1:-1]) // a.loops]    # one lap
+            laps = int(a.minutes * 60 / 1.0) + 1             # over-provision; stopped on time
             plc({"type": "SYS", "cmd": "EC_STATS", "reset": 1})
-            rv.push("plc_send_many", {"pkts": pkts[:1]}, timeout=60)
-            n = 0
+            rv.push("plc_stream_start", {"pkts": pkts[:1] + lap * laps, "timeoutMs": 30000})
             try:
-                while time.time() - t0 < a.minutes * 60:
-                    rv.push("plc_send_many", {"pkts": lap, "timeoutMs": 30000}, timeout=600)
-                    n += a.loops
+                while True:
+                    time.sleep(10)
+                    st = rv.push("plc_stream_status", {})
                     e = plc({"type": "SYS", "cmd": "EC_STATS"})
-                    log("laps %5d  lost %d tx_err %d rx_err %d  late100 %d  pmax %.0f us  dc_out %d" % (
-                        n, e["lost"], e["tx_err"], e["rx_err"], e["late100"], e["pmax"], e["dc_out"]))
+                    log("%4.0f s  laps %4d  lost %d tx_err %d rx_err %d  late100 %d  pmax %.0f us  dc_out %d%s" % (
+                        time.time() - t0, st["sent"] // len(lap), e["lost"], e["tx_err"], e["rx_err"],
+                        e["late100"], e["pmax"], e["dc_out"], ("  ERR " + st["err"]) if st["err"] else ""))
+                    if not st["running"] or time.time() - t0 > a.minutes * 60:
+                        break
             except KeyboardInterrupt:
-                log("stopping: the queued laps finish, then home")
+                pass
+            rv.push("plc_send_many_abort", {})
+            while rv.push("plc_stream_status", {})["running"]:
+                time.sleep(0.5)
             pkts = pkts[-1:]
         rv.push("plc_send_many", {"pkts": pkts, "timeoutMs": 30000}, timeout=600)
         t1 = time.time()

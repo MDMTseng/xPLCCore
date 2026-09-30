@@ -8,7 +8,7 @@
 // set_axis_limits.py. Setting limits resets the FSM (the group takes them
 // when enabled). Only A moves in the test; the arm holds its position.
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { COMCtrlObj } from '../types';
 import { useHarnessAction } from '../harness/registry';
 import { InputMonitor } from './InputMonitor';
@@ -96,20 +96,59 @@ export const MotorTestPage: React.FC<{ COMCtrlObj: COMCtrlObj; active?: boolean 
   // MAX_IN_FLIGHT, below the PLC's motion buffer threshold) replies
   // outstanding, instead of a harness round trip (~1 s) per packet: a
   // queued path keeps the motion buffer fed.
+  const sendManyAbort = useRef(false);
+  // A long stream in the background (the harness caps an instruction at
+  // 15 s): plc_stream_start returns at once; plc_stream_status reports
+  // {sent, total, running, err}; plc_send_many_abort stops sending (the
+  // moves already queued in the PLC still run).
+  const stream = useRef<{ sent: number; total: number; running: boolean; err: string }>({ sent: 0, total: 0, running: false, err: '' });
+  useHarnessAction('plc_stream_status', async () => ({ ...stream.current }), []);
+  useHarnessAction('plc_stream_start', async (p: any) => {
+    if (stream.current.running) throw new Error('stream already running');
+    const pkts: any[] = p?.pkts ?? [];
+    const win = Math.max(1, Number(p?.window ?? 8));
+    sendManyAbort.current = false;
+    stream.current = { sent: 0, total: pkts.length, running: true, err: '' };
+    (async () => {
+      const pending = new Set<Promise<void>>();
+      try {
+        for (let i = 0; i < pkts.length && !sendManyAbort.current; i++) {
+          while (pending.size >= win) await Promise.race(pending);
+          if (sendManyAbort.current) break;
+          const pr: Promise<void> = send(pkts[i], p?.timeoutMs ?? 30000)
+            .then(() => { stream.current.sent++; })
+            .finally(() => { pending.delete(pr); });
+          pending.add(pr);
+        }
+        await Promise.all(pending);
+      } catch (e: any) {
+        stream.current.err = String(e?.message ?? e);
+      } finally {
+        stream.current.running = false;
+      }
+    })();
+    return { total: pkts.length };
+  }, [send]);
+
+  useHarnessAction('plc_send_many_abort', async () => { sendManyAbort.current = true; return true; }, []);
   useHarnessAction('plc_send_many', async (p: any) => {
+    sendManyAbort.current = false;
     const pkts: any[] = p?.pkts ?? [];
     const win = Math.max(1, Number(p?.window ?? 8));
     const out: any[] = new Array(pkts.length);
     const pending = new Set<Promise<void>>();
-    for (let i = 0; i < pkts.length; i++) {
+    let sent = 0;
+    for (let i = 0; i < pkts.length && !sendManyAbort.current; i++) {
       while (pending.size >= win) await Promise.race(pending);
+      if (sendManyAbort.current) break;
+      sent = i + 1;
       const pr: Promise<void> = send(pkts[i], p?.timeoutMs ?? 30000)
         .then((r: any) => { out[i] = r; })
         .finally(() => { pending.delete(pr); });
       pending.add(pr);
     }
     await Promise.all(pending);
-    return out;
+    return p?.brief ? { sent, aborted: sendManyAbort.current } : out;
   }, [send]);
   useHarnessAction('io_state', async (p: any) => await send({ type: 'SYS', cmd: 'IO_STATE', ...(p?.reset ? { reset: 1 } : {}) }), [send]);
   useHarnessAction('motors_restore', async () => await applyLimits(send, A_AXIS, 'restore'), [send]);
