@@ -499,3 +499,31 @@ arm 0 lies 60 deg off, hence the machine frame's XY rotation
   / stop) through the UI; the Motors page shows the joints live with a
   STOP. Real is set at run time only (a PLC restart makes the delta
   virtual again).
+
+### Home switch angles (2026-09-30, machine)
+
+Seek up at 5 deg/s, all three together, stop where the switch turns on
+(the position is taken on the scan the input rises; the arm stops ~0.18
+deg later). The owner then set the upper arms level by hand (drives off,
+the gear holds them; no brakes) and the positions were read. A second seek
+followed.
+
+| joint | level | switch on, run 1 | run 2 | switch above level |
+|---|---|---|---|---|
+| EAxis0 | -5.225 | 15.025 | 15.023 | **20.25 deg** |
+| EAxis1 | -8.210 | 11.604 | 11.606 | **19.82 deg** |
+| EAxis2 | -17.175 | 2.756 | 2.755 | **19.93 deg** |
+
+Repeatable to 0.002 deg. The encoder zeros of the three joints differ
+(level reads -5 / -8 / -17), which is what homing is for. The switch
+angles match the old FB_Homing's homePose 20.
+
+**Found on the way: FSM power-off does not reach the axes.** In UnInited
+(`GroupPower_Flag` FALSE) `SMC_GroupPower` kept `Status` TRUE and every
+axis of the group powered (delta and A, `bRegulatorOn` TRUE,
+standstill). Toggling Powered -> UnInited did not change it. Back in
+Powered it did not power them on either (it thinks they are on). Only a
+direct write of `EAxisN.bRegulatorOn` switched them. Earlier "A is
+power_off in UnInited" readings came from bus restarts and downloads,
+not from the FSM. To fix: the FSM must switch the axes off, and check
+that they are.
