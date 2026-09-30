@@ -74,6 +74,7 @@ A-only G1) saves about 0.08 s at 8 turns/s.
 | `tools/plc_direct.py` | msgpack client for the PLC, no UI (close the UI link first) |
 | `tools/a_axis_test.py` | A moves, positions, peaks against the limits |
 | `tools/a_speed_compare.py` | motion time per part, with / without A rotations (`--held-only` for a group without A) |
+| `tools/a_blend_stress.py` | queued blended G1s with A, many rounds: FSM, A end position, task times |
 | `tools/limit_test.py` | back-and-forth strokes at absurd dynamics: limits hold? |
 | `tools/reel_real_test.py` | the reel: cell count, odometer, fault mid move |
 | `tools/ec_stress.py` | EtherCAT / task timing under load (`--rounds N`) |
@@ -81,15 +82,20 @@ A-only G1) saves about 0.08 s at 8 turns/s.
 
 ## Open
 
-1. The real project: A as additional axis (done on the sim, see below).
+1. The real project: A as additional axis. Installed, single moves OK;
+   the PLC hung on the first queued blended sequence (see "On the
+   machine"). Waits for a power cycle.
 2. The UI speed override should also scale the axis limits
    (`VelFactor` x f, `AccFactor` x f^2, `JerkFactor` x f^3). Today a
    segment held back by A ignores the override.
 3. Delta real again: check torque and following error at these limits.
-4. A: step-loss margin at 8 turns/s, and homing with the QEC's Y HOME
-   input.
-5. The sim project has not got today's axis settings (they are device
-   configuration, not sources): run the same jobs there when it matters.
+4. A: step-loss margin, and homing with the QEC's Y HOME input. The
+   step-loss test decides how far the A limits can go up (see "A limits:
+   how much faster").
+5. The sim project has SM3 4.20, CmpIecTask and A as additional axis
+   (limits x1), but still the old delta limits (100 000 / 800 000 / 1e7).
+   Compare timings within the sim only.
+6. The PLC hang: cause open (see "On the machine").
 
 ## A as additional axis (2026-09-29, sim)
 
@@ -190,3 +196,99 @@ production run: place to next place, median 1176 -> 1135 ms, p90 1375 ->
 The standing half turn is now the largest A cost. Only higher A limits
 shorten it: with jerk x5, 180 deg takes 0.14 s instead of 0.19 s. That
 needs a step-loss test on the machine.
+
+## How the planner times a segment with A (measured)
+
+The planner scales the slowest axis's time, not a combined speed. `F` is
+the speed along the XYZ path only; A is not part of the path length (as
+an additional axis now, and as the Kin_CAxis orientation before). A
+follows the path in proportion: at 30 % of the path, 30 % of the
+rotation. The planner then slows the whole segment until no axis
+(delta joints, A) is over its velocity / acceleration / jerk limit. So a
+segment takes about max(XYZ time at F, A time at A's limits). A segment
+with only A has no path length; A's limits alone set its time.
+
+| measurement | time |
+|---|---|
+| machine, A at 1 turn/s: X only | 0.15 s |
+| machine, A at 1 turn/s: A 90 deg only | 0.46 s |
+| machine, A at 1 turn/s: X and A 90 deg in one G1 | 0.46 s |
+| sim, today's limits: A 90 deg only | 0.176 s |
+| sim, today's limits: X 30 mm + A 90 deg in one G1 | 0.177 s |
+
+A turning with an arm move is free while it takes less time than the
+move. When it takes longer, the whole segment slows, X included, so both
+arrive together. The standing half turn at the inspection station has no
+arm move to ride on, so all of it counts.
+
+## A limits: how much faster (2026-09-30, sim)
+
+### Rest-to-rest time of one A move (jerk-limited S-curve, computed)
+
+| A limits (deg/s, deg/s^2, deg/s^3) | 90 deg | 180 deg | 270 deg | 450 deg |
+|---|---|---|---|---|
+| x1: 2880 / 43 200 / 864 000 (8 turns/s, 120 turns/s^2) | 0.149 s | 0.188 s | 0.216 s | 0.273 s |
+| jerk x5 only | 0.102 | 0.139 | 0.170 | 0.233 |
+| 3600 / 72 000 / 4.32e6 (10 turns/s, 200 turns/s^2) | 0.089 | 0.118 | 0.142 | 0.192 |
+| x2 / x2 / x2: 5760 / 86 400 / 1.728e6 | 0.119 | 0.149 | 0.171 | 0.203 |
+| x2 / x4 / x8: 5760 / 172 800 / 6.912e6 | 0.075 | 0.094 | 0.108 | 0.136 |
+| 4320 / 108 000 / 8.64e6 (12 turns/s, 300 turns/s^2) | 0.072 | 0.095 | 0.115 | 0.157 |
+
+The computed x1 times match the machine: A 90 deg measured 0.160 s,
+round trip included.
+
+Why x2 / x4 / x8: the same motion profile at half the time needs 2x the
+speed, 4x the acceleration and 8x the jerk. With all three x2, only the
+speed scales fully. The A moves here (90-270 deg) are short and spend
+most of their time accelerating and braking, so x2 / x2 / x2 gives only
+about 1.26x.
+
+### Measured on the sim
+
+The same sim, one setting after another (`set_axis_limits.py`-style job
+on SM_Drive_GenericDSP402 only, install, then both tools). The cycle
+code with `pickAngle()`. Medians: `a_speed_compare.py`'s means swing
+with one fixed outlier part (up to 2.6 s).
+
+| | x1 | x2 / x2 / x2 | x2 / x4 / x8 |
+|---|---|---|---|
+| `a_speed_compare.py`, A as in production, median per part | 1.025 s | 0.892 s | 0.751 s |
+| `a_speed_compare.py`, A on long moves, median | 0.936 s | 0.841 s | 0.718 s |
+| `a_speed_compare.py`, A held, median | 0.660 s | 0.661 s | 0.658 s |
+| `run_virtual.py --cycles 30`, place to next place, median | 1135 ms | 999 ms (-12 %) | 867 ms (-24 %) |
+| `run_virtual.py`, place to next place, p90 | 1318 ms | 1146 ms | 942 ms |
+| A peak in the production run, velocity | 2010 deg/s | 2560 deg/s | 3778 deg/s (630 rpm) |
+| A peak in the production run, acceleration | ~40 500 deg/s^2 | 64 326 deg/s^2 | 146 145 deg/s^2 (406 turns/s^2) |
+
+At x2 / x4 / x8 the part with A turning is only ~0.09 s slower than with
+A held. A is no longer the main cost; the delta moves and the camera
+waits are. The sim is back at x1 (the repo's limits are x1).
+
+### On the machine: what it takes
+
+A is an open-loop stepper. The acceleration needs torque: x4
+acceleration is about 4x the torque for the rotor and the nozzle
+inertia. A stepper's torque falls with speed. A missing step is not seen
+by the PLC. Before raising the limits on the machine:
+1. Raise one step at a time. Jerk first: it costs no extra torque at
+   peak and gives most of the first gain (180 deg: 0.188 -> 0.139 s at
+   jerk x5). Then acceleration, then speed.
+2. At each step, run the production rotations many times, then check the
+   angle: the bottom camera's angle error on a known part, or a move back
+   to the Y HOME input.
+3. Settle below the first setting that loses steps, with margin.
+
+`set_axis_limits.py` holds the chosen A limits (degrees).
+
+## Numbers at a glance (2026-09-29 / 30)
+
+| what | value | where |
+|---|---|---|
+| per-part motion, A held (sim) | 0.66 s | same with Kin_CAxis and additional axis |
+| per-part motion, A turning, x1 (sim, median) | 1.03 s | Kin_CAxis 1.03 s too |
+| place to next place, sim production, x1 before / after `pickAngle` | 1176 / 1135 ms median | |
+| same, x2 / x2 / x2 and x2 / x4 / x8 | 999 / 867 ms | |
+| A 180 deg, x1 / x2x4x8 | 0.188 / 0.094 s | computed; machine matches at x1 |
+| sim vs machine | sim ~5-10 % slower | 1 ms tasks run 95 % of their cycles |
+| real PLC with SM3 4.20: task times | EtherCAT avg 93 / max 288 us, planning max 26 us | before the hang |
+| sim blended stress | 200 rounds, 0 failures, planning max 3.3 ms | `a_blend_stress.py` |
