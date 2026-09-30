@@ -165,6 +165,11 @@ square path:
   it with `s.dtr = False; s.rts = False` set before `open()`.
 - **Scope files.** Saved as `.parscp` (7-zip) or `.parscp.scp` (bare). Parse
   from byte 1000 (section 5). One file was named `scope8..parscp`.
+- **`joint_bench.py virtual` used to leave the delta real after the next
+  FSM reset.** It sent SET_AXIS_SIM 7 but left `GVL.AxisSimConfigMask` at 0,
+  and UnInited re-applies that mask. Fixed 2026-09-30: it now writes 7 too.
+  Verified that the mask stays 7 across a reset. The dry runs were checked
+  at mask 7 before they ran; the real arm did not move.
 - **Real delta runs need the owner at the machine.** Ask before every run.
   Once today a run was started after the owner had left; it was aborted
   with `plc_send_many_abort` and the delta powered off.

@@ -106,9 +106,12 @@ def main():
         run_move(a.axis, a.dist, a.vel, a.what == "seek")
     elif a.what in ("real", "virtual"):
         go_state("UnInited")
-        if a.what == "real":
-            subprocess.run(RPC + ["write", "GVL.AxisSimConfigMask", "0"], capture_output=True)
-            subprocess.run(RPC + ["logout"], capture_output=True)
+        # GVL.AxisSimConfigMask is re-applied on every UnInited entry, so it
+        # must follow too (virtual once only sent SET_AXIS_SIM 7, and the
+        # next FSM reset made the delta real again -- 2026-09-30).
+        subprocess.run(RPC + ["write", "GVL.AxisSimConfigMask", "0" if a.what == "real" else "7"],
+                       capture_output=True)
+        subprocess.run(RPC + ["logout"], capture_output=True)
         r = plc({"type": "SYS", "cmd": "SET_AXIS_SIM", "mask": 0 if a.what == "real" else 7})
         log("SET_AXIS_SIM ->", r.get("mask"))
         want = 0 if a.what == "real" else 7
