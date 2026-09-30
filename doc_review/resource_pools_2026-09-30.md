@@ -111,3 +111,31 @@ The clean-disconnect test again: 13 run + 7 dropped = 20, PASS.
 | 1 unprocessed packets after disconnect | dropped on the disconnect edge | `host_gone_test.py` PASS |
 | 2 M4 without TTL | default TTL 10 s (`SET_FLY_TTL`), SYS `FLUSH` at run start / end | `fly_leftover_test.py` PASS |
 | 3 lost host | idle reset `HostIdleTimeoutMs` 5 s; A3 counts only, motion runs on | `host_gone_test.py --silent` PASS |
+
+## Host PC crash (blue screen): can it connect again? (2026-09-30)
+
+Owner's report: after the PC died without warning, the rebooted PC could
+not connect until the PLC was restarted or cold reset.
+
+`tools/host_crash_test.py` (run as administrator; this PC reaches the
+PLC through its own NIC "以太网", 192.168.1.100) connects and pings, then
+disables that NIC and drops the socket abortively, so no FIN reaches
+the PLC. It keeps the NIC down for 90 s (a reboot), enables it, then
+connects again. Current build:
+
+| variant | PLC server after the outage | new connection |
+|---|---|---|
+| idle link (pings only) | `xActive` FALSE, `xResetting` FALSE (reset done during the outage) | at once, PASS |
+| `--traffic`: 20 slow G1s + GET_DIAGs queued, the PLC keeps replying to the dead host | same | at once, PASS |
+
+Not reproduced. The history has the likely fix: 81414f9 (2026-04-25)
+"re-enable TCP idle watchdog so abrupt host disconnect releases socket".
+Before it, a dead host kept the server's single connection slot (`udiMaxConnections 1`)
+until a restart, which is the reported symptom. Related later fixes:
+1934773 (TX half-open -> reset), 0d6c4f6 (socket drained independent of
+the rings; no spurious idle resets). Now `GVL.HostIdleTimeoutMs` (5 s)
+bounds it.
+
+Not covered by the test: a reset that never completes. The FB waits for
+`CLIENT.xActive` to drop after disabling the connection, and a stack that
+never confirms would hold the slot again.
