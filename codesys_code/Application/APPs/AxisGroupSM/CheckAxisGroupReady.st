@@ -34,5 +34,4 @@ IF NOT AxisGroupReady THEN
     MotionPose.c.A := 0;
     MotionPose.c.B := 0;
     MotionPose.c.C := 0;
-    AddAxTargetA := 0;
 END_IF;

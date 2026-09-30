@@ -1,4 +1,4 @@
-"""Queued, blended G1s that turn A (the group's additional axis), over and
+"""Queued, blended G1s that turn A, over and
 over: the move pattern the real PLC hung on right after SM3 4.20 was
 installed (2026-09-29, 5 queued G1s at Cor 45 with a different A each).
 
@@ -34,11 +34,15 @@ def rpc(*args):
     return r.stdout.strip().splitlines()[-1] if r.stdout.strip() else r.stderr.strip()
 
 
+DEG_PER_U = 10.0     # --deg-per-u: 10 for Kin_CAxis /10, 1 for A as additional axis
+A_OFFSET = -600.0    # --a-offset: axis deg minus G1 A (Kin_CAxis in SetCoord1)
+
+
 def a_set():
     v = rpc("read", "SM_Drive_GenericDSP402.fSetPosition")
     rpc("logout")
     try:
-        return float(v.split("#")[-1])
+        return float(v.split("#")[-1]) * DEG_PER_U - A_OFFSET
     except ValueError:
         return v
 
@@ -78,7 +82,12 @@ def main():
     ap.add_argument("--rounds", type=int, default=200)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--check-every", type=int, default=10, help="read A back every N rounds (slow)")
+    ap.add_argument("--deg-per-u", type=float, default=10.0)
+    ap.add_argument("--a-offset", type=float, default=-600.0)
     a = ap.parse_args()
+    global DEG_PER_U, A_OFFSET
+    DEG_PER_U = a.deg_per_u
+    A_OFFSET = a.a_offset
     rng = random.Random(a.seed)
     fails = 0
     with Plc(a.plc) as p:
@@ -120,7 +129,7 @@ def main():
                 continue
             if k % a.check_every == 0:
                 got = a_set()
-                ok = last_a is None or (isinstance(got, float) and abs(got - last_a) < 0.01)
+                ok = last_a is None or (isinstance(got, float) and abs(got - last_a) < 0.05)
                 if not ok:
                     fails += 1
                 log("round %d: A %s (last sent %s)%s" % (k, got, last_a, "" if ok else "  MISMATCH"))

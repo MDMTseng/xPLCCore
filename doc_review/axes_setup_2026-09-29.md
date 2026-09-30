@@ -10,7 +10,7 @@ the machine" on).
 | SoftMotion axis | drive | wired to | mode now | in group SpiderR |
 |---|---|---|---|---|
 | EAxis0 / 1 / 2 | ASDA-B3-E x3 (EtherCAT) | the delta arms, 31:1 | **virtual** (keep until the owner says otherwise) | main kinematics `Kin_Tripod_Rotary` |
-| SM_Drive_GenericDSP402 | QEC 3-axis stepper driver, logical device 1 = **axis 2 (M2 / "Y")** | the A rotation (open-loop stepper, no encoder) | **real** | **additional axis 0** (was tool kinematics `Kin_CAxis`, see below) |
+| SM_Drive_GenericDSP402 | QEC 3-axis stepper driver, logical device 1 = **axis 2 (M2 / "Y")** | the A rotation (open-loop stepper, no encoder) | **real** | tool kinematics `Kin_CAxis` (additional axis tried and rolled back, see below) |
 | EAXIS_A | same QEC, logical device 0 = axis 1 (M1 / "X") | nothing | real, never commanded | no |
 | reelpullmotor | CL3-E57H closed-loop stepper | the tape reel (sprocket) | **real** | no (single axis, `MC_MoveRelative`) |
 
@@ -21,25 +21,26 @@ the machine" on).
 | axis | unit | scaling |
 |---|---|---|
 | delta joints | degree at the joint | motor turns x31 |
-| A | **degree** | 6400 steps (one motor turn) = 360 u |
+| A | **u = 10 degrees** (Kin_CAxis, the /10 wrap; back since the rollback) | 6400 steps (one motor turn) = 36 u |
 | reel | mm of tape | 51200 counts = 200 mm, a cell 8 mm, modulo 200 |
 
-A: `G1 A` is in degrees and goes to the axis 1:1, no wrap. Before, A was
-the tool kinematics `Kin_CAxis`, which normalises to +-180; the PLC
-divided by 10 and the scaling (36 u per turn) multiplied back. See "A as
-additional axis" below.
+A: `G1 A` is in degrees. The PLC divides by 10 (`A_AXIS_KIN_WRAP_SCALE`)
+for the tool kinematics `Kin_CAxis` (normalised to +-180), and the axis
+scaling (36 u per turn) multiplies back. Limits are in u: deg / 10. A as
+additional axis (degrees, no /10) was tried and rolled back; see
+"Rollback".
 
 ## Dynamic limits (`jobs/templates/set_axis_limits.py`)
 
 | axis | velocity | acceleration / deceleration | jerk | basis |
 |---|---|---|---|---|
 | delta joints | 1160 deg/s (~6000 motor rpm) | 100 000 deg/s^2 | 1e7 deg/s^3 | production peaks 946-1084 deg/s, <= 78 500 deg/s^2, ~1e7 jerk; the ASDA-B3's ~6000 rpm |
-| A | 2880 deg/s = 8 turns/s | 43 200 deg/s^2 = 120 turns/s^2 | 864 000 deg/s^3 | production reached 92-97 %; step loss watched with the bottom camera |
+| A | 288 u/s = 2880 deg/s = 8 turns/s | 4320 u/s^2 = 43 200 deg/s^2 | 86 400 u/s^3 | production reached 92-97 %; step loss watched with the bottom camera |
 | reel | 5000 mm/s | 100 000 mm/s^2 | 1e5 mm/s^3 | = `TAPE.REEL_MOVE` |
 
 Before: delta 100 000 / 800 000 / 1e7 and A 180 000 u/s (no limits), and
-A virtual. `jobs/templates/set_a_additional_axis.py` sets A's group
-role, scaling and limits (`set_group_a_axis.py` was the Kin_CAxis setup).
+A virtual. `jobs/templates/set_group_a_axis.py` set A's mode (its
+limits are superseded by `set_axis_limits.py`).
 
 How the planner uses them (measured):
 - The planner holds every axis of the group within its limits. When a
@@ -83,9 +84,10 @@ A-only G1) saves about 0.08 s at 8 turns/s.
 
 ## Open
 
-1. The real project: A as additional axis. Installed, single moves OK;
-   the PLC hung on the first queued blended sequence (see "On the
-   machine"). Waits for a power cycle.
+1. A as additional axis: rolled back (the PLC hangs on blending with it
+   on SM3 4.20). Only with a fix from Kyland / CODESYS, or a later
+   SoftMotion version, and then with A's calibration moved by 600 deg
+   (see "Rollback").
 2. The UI speed override should also scale the axis limits
    (`VelFactor` x f, `AccFactor` x f^2, `JerkFactor` x f^3). Today a
    segment held back by A ignores the override.
@@ -96,7 +98,13 @@ A-only G1) saves about 0.08 s at 8 turns/s.
 5. The sim project has SM3 4.20, CmpIecTask and A as additional axis
    (limits x1), but still the old delta limits (100 000 / 800 000 / 1e7).
    Compare timings within the sim only.
-6. The PLC hang: cause open (see "On the machine").
+6. The PLC hang on 4.20: cause open. A report to Kyland / CODESYS would
+   need: SM3 4.20.1, Intewell vm1, axis group with an additional axis,
+   first BlendingNext movement -> whole OS hangs, the Windows runtime
+   does not.
+7. The QEC clamps A at -20000 steps (see "Rollback") with no error in
+   the PLC. Consider axis software limits in the PLC (-112 u) so a
+   command past it faults instead of silently losing position.
 
 ## A as additional axis (2026-09-29, sim)
 
@@ -318,3 +326,50 @@ by the PLC. Before raising the limits on the machine:
 | sim vs machine | sim ~5-10 % slower | 1 ms tasks run 95 % of their cycles |
 | real PLC with SM3 4.20: task times | EtherCAT avg 93 / max 288 us, planning max 26 us | before the hang |
 | sim blended stress | 200 rounds, 0 failures, planning max 3.3 ms | `a_blend_stress.py` |
+
+## Rollback to SM3 4.18 + Kin_CAxis (2026-09-30)
+
+After the second hang the machine went back to the build it ran before:
+- Project: `supervisor.py restore 20260929-225357_sm3_420.project` (taken
+  right before `set_sm3_420.py`): SM3 4.18, SpiderR with Kin_CAxis, A
+  36 u per turn, limits 288 / 4320 / 86 400 u. Checked with a group
+  export and the library list.
+- Sources: the three PLC files, `set_axis_limits.py`,
+  `set_group_a_axis.py` and `coupling_invariants.md` back to d62b891^. A
+  push found 6 more files different; each only in line endings (checked
+  against the snapshot with CR/LF normalised).
+- `install --on-site` (download 10.4 s). EtherCAT OK, DC in sync, A real
+  at 288 u/s, delta virtual.
+
+Checked on the machine, with `intewell_watch.py` running:
+- `a_axis_test.py --deg-per-u 10`: every move done. That includes the 5
+  queued Cor 45 G1s that hung 4.20.
+- `a_blend_stress.py --plc 192.168.1.70 --rounds 40`: the hang sequence
+  plus 40 rounds of queued blended G1s with A. 0 failures, A at the last
+  target each time. Tasks: EtherCAT avg 114-124 / max 304 us, planning
+  max 12.6 ms (a spike, as with the synthetic dense blends before).
+
+Two findings on the way:
+- **SetCoord1 turns A by 600 deg.** Its frame has A = 60, and with
+  Kin_CAxis that is 60 u = 600 deg of the real A: the axis is at G1 A -
+  600 deg (`--a-offset -600` in the tools). Production has always run
+  like this, and its angle calibration contains it. As an additional
+  axis, A is not part of the frame, so that build turned the part 600
+  deg (= 240 deg) off from the Kin_CAxis build. Any future switch must
+  move A's calibration by that amount.
+- **The QEC stops A at -20000 steps** (-112.5 u, -1125 deg on the axis).
+  With the offset, that is G1 A -525 deg. The set position runs on
+  without an error:
+
+  | G1 A | axis set | actual |
+  |---|---|---|
+  | -500 deg | -19 556 steps | -19 556 |
+  | -600 deg | -21 333 | **-20 000** |
+  | -700 deg | -23 111 | **-20 000** |
+  | -800 deg | -24 889 | **-20 000** |
+
+  A later move back inside the range lands correctly (CSP targets are
+  absolute). Production stays above about -276 deg G1 A, `pickAngle`
+  included: ~250 deg of margin. The positive side was not probed. The
+  additional-axis build's -720 deg test landed fine because there -720
+  deg was -12 800 steps.

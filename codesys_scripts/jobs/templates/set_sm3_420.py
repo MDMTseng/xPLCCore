@@ -1,4 +1,8 @@
 # -*- coding: ascii -*-
+# NOT IN USE (2026-09-30): the real PLC hangs on the first blended G1 with
+# A as additional axis on SM3 4.20; the machine runs SM3 4.18 + Kin_CAxis.
+# See doc_review/axes_setup_2026-09-29.md "Rollback".
+#
 # Resolve the SoftMotion (SM3_*) library placeholders of the Application to
 # the newest installed versions (SoftMotion 4.20: SM3_Robotics 4.20.1.0, the
 # drive libraries 4.19). Needed for additional axes in the axis group

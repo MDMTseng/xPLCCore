@@ -5,8 +5,9 @@ against the axis limits.
 
     python tools/a_axis_test.py [--plc 192.168.1.70]
 
-A is additional axis 0 of the group SpiderR, in degrees (6400 steps = 360
-u, 1 u = 1 deg; no wrap, no /10). Checked: moves beyond +-180, A together
+G1 A is in degrees. The axis' unit depends on the setup: Kin_CAxis with
+the /10 wrap (6400 steps = 36 u, --deg-per-u 10, the default) or A as
+additional axis (360 u per turn, --deg-per-u 1). Checked: moves beyond +-180, A together
 with a path move in one G1, a G1 without A keeps A, and a queued blended
 sequence (every G1 its own additional-axes instance in the PLC) ends at
 the last A. Open loop: the PLC cannot see lost steps; watch the motor, or
@@ -45,10 +46,20 @@ def num(s):
         return s
 
 
+DEG_PER_U = 10.0
+A_OFFSET = 0.0   # --a-offset: axis deg minus G1 A (Kin_CAxis in SetCoord1: -600, the frame's A 60 u)
+
+
 def axis():
     out = {k: num(rpc("read", "%s.%s" % (AX, k))) for k in ("fSetPosition", "fActPosition", "bError", "nAxisState")}
     out["peak_vel"] = num(rpc("read", "GVL.MotionPeakVel[3]"))
     out["peak_acc"] = num(rpc("read", "GVL.MotionPeakAcc[3]"))
+    for k in ("fSetPosition", "fActPosition", "peak_vel", "peak_acc"):
+        if isinstance(out[k], float):
+            out[k] *= DEG_PER_U
+    for k in ("fSetPosition", "fActPosition"):
+        if isinstance(out[k], float):
+            out[k] -= A_OFFSET
     rpc("logout")
     return out
 
@@ -86,7 +97,7 @@ FAILS = []
 
 
 def expect(label, a, want):
-    if not isinstance(a["fSetPosition"], float) or abs(a["fSetPosition"] - want) > 0.01:
+    if not isinstance(a["fSetPosition"], float) or abs(a["fSetPosition"] - want) > 0.05:
         FAILS.append("%s: A %s, expected %.3f" % (label, a["fSetPosition"], want))
         log("  FAIL: A", a["fSetPosition"], "expected", want)
 
@@ -94,14 +105,20 @@ def expect(label, a, want):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--plc", default="192.168.1.70")
+    ap.add_argument("--deg-per-u", type=float, default=10.0, help="10: Kin_CAxis /10 setup; 1: A as additional axis")
+    ap.add_argument("--a-offset", type=float, default=-600.0,
+                    help="axis deg minus G1 A: -600 with Kin_CAxis (SetCoord1 turns the frame's A by 60 u), 0 as additional axis")
     a = ap.parse_args()
+    global DEG_PER_U, A_OFFSET
+    DEG_PER_U = a.deg_per_u
+    A_OFFSET = a.a_offset
     with Plc(a.plc) as p:
         ms = p.sys("GET_MACHINE_STATE")
         if (ms.get("axes_sim_mask", 0) & 7) != 7:
             raise SystemExit("REFUSED: the delta arms are not all simulated")
         to_ready(p)
-        log("limits: v %s  a %s  j %s deg" % tuple(
-            num(rpc("read", "%s.%s" % (AX, k))) for k in ("fSWMaxVelocity", "fSWMaxAcceleration", "fSWMaxJerk")))
+        log("limits: v %s  a %s  j %s u (1 u = %g deg)" % (tuple(
+            num(rpc("read", "%s.%s" % (AX, k))) for k in ("fSWMaxVelocity", "fSWMaxAcceleration", "fSWMaxJerk")) + (DEG_PER_U,)))
         p.m("SetCoord1")
         move(p, "start pose X0 Y0 Z12 A0", X=0.0, Y=0.0, Z=12.0, A=0.0, F=200, ACC=20000, DEA=20000, JERK=80000, Cor=0)
         rpc("write", "GVL.MotionPeakReset", "TRUE")

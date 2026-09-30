@@ -1,4 +1,9 @@
 # -*- coding: ascii -*-
+# NOT IN USE (2026-09-30): the real PLC hangs on the first blended G1 with
+# A as additional axis on SM3 4.20; the machine runs SM3 4.18 + Kin_CAxis.
+# The PLC sources for it are in git d62b891. See
+# doc_review/axes_setup_2026-09-29.md "Rollback".
+#
 # Make the A rotation an additional axis of the axis group SpiderR instead
 # of its tool kinematics (Kin_CAxis), and put A in degrees.
 #
