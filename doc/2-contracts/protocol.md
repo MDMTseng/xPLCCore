@@ -129,6 +129,7 @@ parameters.
 | `SET_FLY_TTL` | `ttl_ms` (100..3 600 000; negative = never) | `{ack:true, ttl_ms}` | TTL of an M4 sent without `ttl_ms` (`GVL.FlyEventDefaultTtlMs`, 10 000 at start). The UI sets `FLY_EVENT.DEFAULT_TTL_MS` / speed override at run start and speed changes. |
 | `AXIS_INFO` | `axis` (0-2 delta joints, 3 A, 4 EAXIS_A, 5 reel), `reset_peaks` (1 = reset all axes' peaks) | `{axis, virt, st, err_flag, pos, act, vel, lv, la, ld, lj, cv, ca, cd, cj, sf, pv, pa, pj, arm_ok, arm_x, arm_y, arm_z}` | One axis for the Motors page, axis units: limits in force (`l*`) and as downloaded (`c*`), peaks of the set values since reset (`p*`), increments per unit (`sf`), the arm's TCP in the G1 frame. Order-free SYS ring. NAK `bad_axis`. |
 | `SET_AXIS_LIMITS` | `axis`; `v`, `a`, `d`, `j` (> 0, each optional) or `restore:1` | `{ack:true, lv, la, ld, lj}` | Run-time dynamic limits (not saved; download / restart restores). Only in UnInited: the group takes them when enabled, and a change under an enabled group stops it. NAK `bad_axis`, `not_uninited`, `bad_value`. |
+| `IO_STATE` | `reset` (1 = clear the change marks after this reply) | `{ack:true, in0, in1, in2, chg0, chg1, chg2, out, sim}` | The IO slave's input bytes as read, in any FSM state: `in1`/`in2` = input pins 0-7 / 8-15 (terminal CH1 / CH2), `in0` = the EC0808DN's own CH1; `chg*` = bits changed since the last reset; `out` = output bits; `sim` = simulated inputs in use by the program. Order-free SYS ring. The Motors page's input lamps (`InputMonitor`). |
 
 ## Push events (PLC → UI, no `id`)
 

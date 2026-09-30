@@ -471,6 +471,13 @@ PROGRAM AxisGroupSM
     // scan, so a test can restore them.
     AxCfgV, AxCfgA, AxCfgD, AxCfgJ : ARRAY[0..5] OF LREAL;
     AxCfgCaptured : BOOL;
+    // SYS IO_STATE: the IO slave's input bytes as read (InputCHs[0..2],
+    // not the simulated ones) and, per bit, "changed since the last
+    // reset" -- a sensor passed in a flash still shows.
+    IoChg      : ARRAY[0..2] OF BYTE;
+    IoPrev     : ARRAY[0..2] OF BYTE;
+    IoPrevInit : BOOL;
+    IoIdx      : INT;
     AxInfoIdx     : INT;
     pAx           : POINTER TO AXIS_REF_SM3;
     FlushDropped   : INT;
@@ -1094,6 +1101,15 @@ GVL.EcProfT0 := LTIME();
            GVL.TestDiBurstToggles := GVL.TestDiBurstToggles - 1;
        END_IF
    END_IF
+
+   // Change latches of the real input bytes (SYS IO_STATE).
+   FOR IoIdx := 0 TO 2 DO
+       IF IoPrevInit THEN
+           IoChg[IoIdx] := IoChg[IoIdx] OR (USINT_TO_BYTE(InputCHs[IoIdx]) XOR IoPrev[IoIdx]);
+       END_IF;
+       IoPrev[IoIdx] := USINT_TO_BYTE(InputCHs[IoIdx]);
+   END_FOR;
+   IoPrevInit := TRUE;
 
    IF GVL.SimDigitalInputEnable THEN
        DigitalInputPointer := ADR(GVL.SimDigitalInput);

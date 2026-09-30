@@ -241,7 +241,7 @@ export const ControlPage: React.FC<{
             <RecoveryDemoPage COMCtrlObj={COMCtrlObj} />
           </div>
           <div style={{ display: tab === "Motors" ? "block" : "none" }}>
-            <MotorTestPage COMCtrlObj={COMCtrlObj} />
+            <MotorTestPage COMCtrlObj={COMCtrlObj} active={tab === "Motors"} />
           </div>
           <div style={{ display: tab === "Binding" ? "block" : "none" }}>
             <BindingTestPage COMCtrlObj={COMCtrlObj} />

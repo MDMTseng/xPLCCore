@@ -11,6 +11,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import type { COMCtrlObj } from '../types';
 import { useHarnessAction } from '../harness/registry';
+import { InputMonitor } from './InputMonitor';
 import {
   A_AXIS, MOTORS, applyLimits, readAxis, runATest, scaleLimits, toAxisUnits, toShowUnits, turnsPerUnit,
   type AxisInfo, type Limits, type Send, type TestResult,
@@ -28,7 +29,7 @@ const box: React.CSSProperties = { border: '1px solid #d1d5db', borderRadius: 6,
 const SWING = 180;      // deg per move
 const CYCLES = 20;      // back-and-forth pairs per run
 
-export const MotorTestPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrlObj }) => {
+export const MotorTestPage: React.FC<{ COMCtrlObj: COMCtrlObj; active?: boolean }> = ({ COMCtrlObj, active = true }) => {
   const [infos, setInfos] = useState<(AxisInfo | undefined)[]>([]);
   const [busy, setBusy] = useState<string>('');
   const [log, setLog] = useState<string[]>([]);
@@ -88,12 +89,16 @@ export const MotorTestPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrlObj
   // Harness (remote test driver): the same actions, answers given up front.
   useHarnessAction('motors_info', async () => await refresh(), [refresh]);
   useHarnessAction('motors_a_test', async (p: any) => await doRun(Number(p?.factor ?? 1)), [doRun]);
+  useHarnessAction('io_state', async (p: any) => await send({ type: 'SYS', cmd: 'IO_STATE', ...(p?.reset ? { reset: 1 } : {}) }), [send]);
   useHarnessAction('motors_restore', async () => await applyLimits(send, A_AXIS, 'restore'), [send]);
 
   const a = infos[A_AXIS];
   return (
     <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: 8 }}>
       <div style={{ flex: 3, minWidth: 0 }}>
+        <div style={box}>
+          <InputMonitor send={send} active={active} />
+        </div>
         <div style={box}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
             <b>Motors (as the PLC has them)</b>

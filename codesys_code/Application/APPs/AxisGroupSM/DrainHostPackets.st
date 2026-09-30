@@ -433,6 +433,30 @@ END_IF;
                 ResponsePacketPointer^.ele_count := 0;
                 GVL.OverrideFactor := LIMIT(0.01, TO_LREAL(MessageUnpackerFb.TryReadREAL('factor', TO_REAL(GVL.OverrideFactor))), 1.0);
                 MessagePackerFb.PackKvReal(ADR('factor'), TO_REAL(GVL.OverrideFactor));
+            ELSIF (CommandType = 'IO_STATE') THEN
+                // The IO slave's inputs as read, in any FSM state (sensor
+                // check). in1 / in2: the terminal's CH1 / CH2 = input pins
+                // 0-7 / 8-15 (the machine's input numbering); in0: the
+                // EC0808DN's own CH1. chg0..2: bits that changed since the
+                // last reset:1 (which clears them after this reply). out:
+                // the output bits. sim: inputs replaced by the simulated
+                // ones for the rest of the program. Order-free SYS ring.
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                MessagePackerFb.PackKvDint(ADR('in0'), USINT_TO_DINT(InputCHs[0]));
+                MessagePackerFb.PackKvDint(ADR('in1'), USINT_TO_DINT(InputCHs[1]));
+                MessagePackerFb.PackKvDint(ADR('in2'), USINT_TO_DINT(InputCHs[2]));
+                MessagePackerFb.PackKvDint(ADR('chg0'), BYTE_TO_DINT(IoChg[0]));
+                MessagePackerFb.PackKvDint(ADR('chg1'), BYTE_TO_DINT(IoChg[1]));
+                MessagePackerFb.PackKvDint(ADR('chg2'), BYTE_TO_DINT(IoChg[2]));
+                MessagePackerFb.PackKvLint(ADR('out'), ULINT_TO_LINT(DigitalOutputBits));
+                MessagePackerFb.PackKvBool(ADR('sim'), GVL.SimDigitalInputEnable);
+                IF MessageUnpackerFb.TryReadINT64('reset', 0) <> 0 THEN
+                    IoChg[0] := 0;
+                    IoChg[1] := 0;
+                    IoChg[2] := 0;
+                END_IF;
             ELSIF (CommandType = 'AXIS_INFO') THEN
                 // One axis (motor limit test page): `axis` 0-5 as PeakAxis
                 // (0-2 delta joints, 3 A, 4 EAXIS_A, 5 reel). Axis units.
