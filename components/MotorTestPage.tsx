@@ -12,6 +12,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import type { COMCtrlObj } from '../types';
 import { useHarnessAction } from '../harness/registry';
 import { InputMonitor } from './InputMonitor';
+import { JointPanel } from './JointPanel';
 import {
   A_AXIS, MOTORS, applyLimits, readAxis, runATest, scaleLimits, toAxisUnits, toShowUnits, turnsPerUnit,
   type AxisInfo, type Limits, type Send, type TestResult,
@@ -89,6 +90,8 @@ export const MotorTestPage: React.FC<{ COMCtrlObj: COMCtrlObj; active?: boolean 
   // Harness (remote test driver): the same actions, answers given up front.
   useHarnessAction('motors_info', async () => await refresh(), [refresh]);
   useHarnessAction('motors_a_test', async (p: any) => await doRun(Number(p?.factor ?? 1)), [doRun]);
+  // Test driver: any PLC command through this page's link (JOINT_* etc.).
+  useHarnessAction('plc_send', async (p: any) => await send(p?.pkt, p?.timeoutMs ?? 5000), [send]);
   useHarnessAction('io_state', async (p: any) => await send({ type: 'SYS', cmd: 'IO_STATE', ...(p?.reset ? { reset: 1 } : {}) }), [send]);
   useHarnessAction('motors_restore', async () => await applyLimits(send, A_AXIS, 'restore'), [send]);
 
@@ -98,6 +101,9 @@ export const MotorTestPage: React.FC<{ COMCtrlObj: COMCtrlObj; active?: boolean 
       <div style={{ flex: 3, minWidth: 0 }}>
         <div style={box}>
           <InputMonitor send={send} active={active} />
+        </div>
+        <div style={box}>
+          <JointPanel send={send} active={active} log={addLog} />
         </div>
         <div style={box}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>

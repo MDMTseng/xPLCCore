@@ -478,6 +478,25 @@ PROGRAM AxisGroupSM
     IoPrev     : ARRAY[0..2] OF BYTE;
     IoPrevInit : BOOL;
     IoIdx      : INT;
+    // Delta joint bench test (SYS JOINT_MOVE / JOINT_STOP / JOINT_STATE):
+    // one joint at a time, slowly, only while the FSM is Powered (drives on,
+    // group not enabled). seek: stop when the joint's home switch (IO slave
+    // input N for EAxisN) turns on, and keep the position where it did.
+    // JtState: 0 idle, 1 moving, 2 done, 3 stopped at the switch, 4 error,
+    // 5 seek ran its full travel without the switch, 6 stopped by JOINT_STOP.
+    JtMove     : ARRAY[0..2] OF SM3_Basic.MC_MoveRelative;
+    JtHalt     : ARRAY[0..2] OF SM3_Basic.MC_Halt;
+    JtExec     : ARRAY[0..2] OF BOOL;
+    JtHaltExec : ARRAY[0..2] OF BOOL;
+    JtDist     : ARRAY[0..2] OF LREAL;
+    JtVel      : ARRAY[0..2] OF LREAL;
+    JtSeek     : ARRAY[0..2] OF BOOL;
+    JtState    : ARRAY[0..2] OF INT;
+    JtHitPos   : ARRAY[0..2] OF LREAL;
+    JtErrId    : ARRAY[0..2] OF DWORD;
+    JtInPrev   : ARRAY[0..2] OF BOOL;
+    JtIn       : BOOL;
+    JtK        : INT;
     AxInfoIdx     : INT;
     pAx           : POINTER TO AXIS_REF_SM3;
     FlushDropped   : INT;
@@ -972,6 +991,43 @@ GVL.EcProfT0 := LTIME();
             GVL.MotionPeakJerk[PeakIdx] := MAX(GVL.MotionPeakJerk[PeakIdx], PeakJerkNow);
         END_IF;
         PeakPrevAcc[PeakIdx] := PeakAxis[PeakIdx]^.fSetAcceleration;
+    END_FOR;
+
+    // ---- Delta joint bench test (SYS JOINT_*) ----
+    FOR JtK := 0 TO 2 DO
+        JtIn := (SHR(InputCHs[1], JtK) AND 1) = 1;
+        IF AxisGroupManagerFb._eState <> E_RobotState.Powered THEN
+            // Left Powered (reset, error, group enable): the test is over.
+            JtExec[JtK] := FALSE;
+            JtHaltExec[JtK] := FALSE;
+            IF JtState[JtK] = 1 THEN
+                JtState[JtK] := 6;
+            END_IF;
+        ELSIF (JtState[JtK] = 1) AND JtSeek[JtK] AND JtIn AND NOT JtInPrev[JtK] THEN
+            JtHitPos[JtK] := PeakAxis[JtK]^.fActPosition;
+            JtExec[JtK] := FALSE;
+            JtHaltExec[JtK] := TRUE;
+            JtState[JtK] := 3;
+        END_IF;
+        JtMove[JtK](Axis := PeakAxis[JtK]^, Execute := JtExec[JtK], Distance := JtDist[JtK],
+                    Velocity := JtVel[JtK], Acceleration := JtVel[JtK] * 5, Deceleration := JtVel[JtK] * 5,
+                    Jerk := JtVel[JtK] * 50);
+        JtHalt[JtK](Axis := PeakAxis[JtK]^, Execute := JtHaltExec[JtK],
+                    Deceleration := JtVel[JtK] * 20, Jerk := JtVel[JtK] * 400);
+        IF (JtState[JtK] = 1) AND JtMove[JtK].Done THEN
+            JtExec[JtK] := FALSE;
+            JtState[JtK] := SEL(JtSeek[JtK], 2, 5);
+        END_IF;
+        IF JtMove[JtK].Error OR JtHalt[JtK].Error THEN
+            JtErrId[JtK] := TO_DWORD(JtMove[JtK].ErrorID) OR TO_DWORD(JtHalt[JtK].ErrorID);
+            JtExec[JtK] := FALSE;
+            JtHaltExec[JtK] := FALSE;
+            JtState[JtK] := 4;
+        END_IF;
+        IF JtHaltExec[JtK] AND JtHalt[JtK].Done THEN
+            JtHaltExec[JtK] := FALSE;
+        END_IF;
+        JtInPrev[JtK] := JtIn;
     END_FOR;
     PeakHavePrev := TRUE;
 

@@ -433,6 +433,77 @@ END_IF;
                 ResponsePacketPointer^.ele_count := 0;
                 GVL.OverrideFactor := LIMIT(0.01, TO_LREAL(MessageUnpackerFb.TryReadREAL('factor', TO_REAL(GVL.OverrideFactor))), 1.0);
                 MessagePackerFb.PackKvReal(ADR('factor'), TO_REAL(GVL.OverrideFactor));
+            ELSIF (CommandType = 'JOINT_MOVE') THEN
+                // Delta joint bench test: move EAxis `axis` (0-2) by `dist`
+                // deg (|dist| <= 90) at `vel` deg/s (<= 20), alone, only in
+                // the FSM state Powered. seek:1 stops it where its home
+                // switch (input `axis`) turns on (JOINT_STATE hit_pos); the
+                // switch must be off at the start. Order-free SYS ring.
+                ShouldReturn := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                AxInfoIdx := TO_INT(MessageUnpackerFb.TryReadINT64('axis', -1));
+                CommandAck := FALSE;
+                IF (AxInfoIdx < 0) OR (AxInfoIdx > 2) OR (PeakAxis[0] = 0) THEN
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('bad_axis'));
+                ELSIF AxisGroupManagerFb._eState <> E_RobotState.Powered THEN
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('not_powered'));
+                ELSIF (JtState[AxInfoIdx] = 1) OR JtHaltExec[AxInfoIdx] OR JtExec[AxInfoIdx] THEN
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('busy'));
+                ELSIF (ABS(MessageUnpackerFb.TryReadREAL('dist', 0)) > 90) OR (MessageUnpackerFb.TryReadREAL('dist', 0) = 0) THEN
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('bad_dist'));
+                ELSIF (MessageUnpackerFb.TryReadINT64('seek', 0) <> 0) AND ((SHR(InputCHs[1], AxInfoIdx) AND 1) = 1) THEN
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('switch_already_on'));
+                ELSE
+                    JtDist[AxInfoIdx] := MessageUnpackerFb.TryReadREAL('dist', 0);
+                    JtVel[AxInfoIdx] := LIMIT(0.1, MessageUnpackerFb.TryReadREAL('vel', 5), 20);
+                    JtSeek[AxInfoIdx] := MessageUnpackerFb.TryReadINT64('seek', 0) <> 0;
+                    JtHitPos[AxInfoIdx] := 0;
+                    JtErrId[AxInfoIdx] := 0;
+                    JtInPrev[AxInfoIdx] := (SHR(InputCHs[1], AxInfoIdx) AND 1) = 1;
+                    JtExec[AxInfoIdx] := TRUE;
+                    JtState[AxInfoIdx] := 1;
+                    CommandAck := TRUE;
+                    MessagePackerFb.PackKvReal(ADR('vel'), LREAL_TO_REAL(JtVel[AxInfoIdx]));
+                END_IF;
+            ELSIF (CommandType = 'JOINT_STOP') THEN
+                // Stop the joint bench test moves (all joints).
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                FOR AxInfoIdx := 0 TO 2 DO
+                    IF (JtState[AxInfoIdx] = 1) OR JtExec[AxInfoIdx] THEN
+                        JtExec[AxInfoIdx] := FALSE;
+                        IF AxisGroupManagerFb._eState = E_RobotState.Powered THEN
+                            JtHaltExec[AxInfoIdx] := TRUE;
+                        END_IF;
+                        JtState[AxInfoIdx] := 6;
+                    END_IF;
+                END_FOR;
+            ELSIF (CommandType = 'JOINT_STATE') THEN
+                // Joints k = 0..2: sk state (see AxisGroupSM JtState),
+                // pk actual position (deg), hk position where the switch
+                // turned on, ik the switch now, vk virtual, ek error id.
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                IF PeakAxis[0] <> 0 THEN
+                    MessagePackerFb.PackKvDint(ADR('s0'), JtState[0]);
+                    MessagePackerFb.PackKvDint(ADR('s1'), JtState[1]);
+                    MessagePackerFb.PackKvDint(ADR('s2'), JtState[2]);
+                    MessagePackerFb.PackKvReal(ADR('p0'), LREAL_TO_REAL(PeakAxis[0]^.fActPosition));
+                    MessagePackerFb.PackKvReal(ADR('p1'), LREAL_TO_REAL(PeakAxis[1]^.fActPosition));
+                    MessagePackerFb.PackKvReal(ADR('p2'), LREAL_TO_REAL(PeakAxis[2]^.fActPosition));
+                    MessagePackerFb.PackKvReal(ADR('h0'), LREAL_TO_REAL(JtHitPos[0]));
+                    MessagePackerFb.PackKvReal(ADR('h1'), LREAL_TO_REAL(JtHitPos[1]));
+                    MessagePackerFb.PackKvReal(ADR('h2'), LREAL_TO_REAL(JtHitPos[2]));
+                    MessagePackerFb.PackKvDint(ADR('in'), USINT_TO_DINT(InputCHs[1] AND 7));
+                    MessagePackerFb.PackKvBool(ADR('v0'), PeakAxis[0]^.bVirtual);
+                    MessagePackerFb.PackKvBool(ADR('v1'), PeakAxis[1]^.bVirtual);
+                    MessagePackerFb.PackKvBool(ADR('v2'), PeakAxis[2]^.bVirtual);
+                    MessagePackerFb.PackKvDint(ADR('e0'), TO_DINT(JtErrId[0]));
+                    MessagePackerFb.PackKvDint(ADR('e1'), TO_DINT(JtErrId[1]));
+                    MessagePackerFb.PackKvDint(ADR('e2'), TO_DINT(JtErrId[2]));
+                END_IF;
             ELSIF (CommandType = 'IO_STATE') THEN
                 // The IO slave's inputs as read, in any FSM state (sensor
                 // check). in1 / in2: the terminal's CH1 / CH2 = input pins
