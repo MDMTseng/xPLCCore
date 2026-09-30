@@ -1,4 +1,15 @@
 (* =========== IMPLEMENTATION =========== *)
+IF BusPeriodUs = 0 THEN
+    BpH := CmpIecTask.IecTaskGetCurrent(ADR(BpR));
+    IF BpR = 0 THEN
+        BpP := CmpIecTask.IecTaskGetInfo3(BpH, ADR(BpR));
+        IF (BpR = 0) AND (BpP <> 0) AND (BpP^.dwInterval >= 1000) THEN
+            BusPeriodUs := BpP^.dwInterval;
+            BusPeriod := DWORD_TO_DINT(BusPeriodUs / 1000);
+            GVL.EcNominalUs := DWORD_TO_LREAL(BusPeriodUs);
+        END_IF;
+    END_IF;
+END_IF;
 RuntimeMs := RuntimeMs + BusPeriod;
 
 // VisuEventControl=0 is the idle/no-op default so the TCP handler

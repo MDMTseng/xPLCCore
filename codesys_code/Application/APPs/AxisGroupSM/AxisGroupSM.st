@@ -56,7 +56,14 @@ PROGRAM AxisGroupSM
 		OutputCHs:ARRAY[0..15] OF USINT;
 		InputCHs:ARRAY[0..15] OF USINT;
 		RuntimeMs: LINT := 0;
+        // ms per EtherCAT_Task scan: the task's configured interval, read
+        // on the first scan (UpdateRuntimeAndInputEvent), so a bus-cycle
+        // change (set_bus_cycle.py) needs no code change. 1 until read.
         BusPeriod: DINT := 1;
+        BusPeriodUs: DWORD := 0;
+        BpH: __XWORD;                  // RTS_IEC_HANDLE of this task
+        BpR: UDINT;
+        BpP: POINTER TO CmpIecTask.Task_Info2;
         AxisGroupReady: BOOL := FALSE;
 
         AxisGroupManagerFb: AxisGroupManager(

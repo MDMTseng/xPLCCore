@@ -248,7 +248,7 @@ VAR_GLOBAL
 	EcProfReset   : BOOL;
 	EcProfT0      : LTIME;
 	EcProfT1      : LTIME;
-	EcNominalUs   : LREAL := 1000.0;
+	EcNominalUs   : LREAL := 1000.0;    (* set to the EtherCAT_Task interval on the first scan *)
 	EcProfCycles  : UDINT;
 	EcPeriodUsMin : LREAL;
 	EcPeriodUsMax : LREAL;
@@ -318,11 +318,15 @@ VAR_GLOBAL
 	EcTicIdx        : INT;
 	(* The delta drives' own count of cycles without new outputs at SYNC0
 	   (CoE 0x1C32:0B SM-event missed) and 0x1C32:20 sync error, read by
-	   SDO in turn (drive k = station 1002 / 1003 / 1005). -1: not read /
+	   SDO in turn (drive k = station 1003 / 1004 / 1005). -1: not read /
 	   SDO error (EcSdoErr = last eError). *)
 	DrvSmMissed     : ARRAY[0..2] OF DINT := [-1, -1, -1];
 	DrvSyncErr      : ARRAY[0..2] OF DINT := [-1, -1, -1];
 	EcSdoErr        : DINT;
+	(* The drives' sync objects (PRG_EventLog SDO_IDX / SDO_SUB), [drive,
+	   object]; -1 + DrvObjErr = SDO error. *)
+	DrvObj          : ARRAY[0..2, 0..11] OF DINT;
+	DrvObjErr       : ARRAY[0..2, 0..11] OF DINT;
 
 	(* Tape moves that stopped short of their target (the ReelMv block). *)
 	ReelInterruptCount : UDINT;

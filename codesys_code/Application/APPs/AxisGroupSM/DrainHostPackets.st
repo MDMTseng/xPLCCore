@@ -1,6 +1,8 @@
 METHOD DrainHostPackets : BOOL
 VAR
     EcTrStr : STRING(255);    // EC_STATS trl / trh
+    EcObjJ  : INT;
+    EcObjKey : STRING(7);
     EcTrI   : INT;
     // Scratch raw-reads for SCRATCHPAD_WRITE field-presence detection
     // (code review fix #3). -1 sentinel from TryReadINT64 = missing key.
@@ -566,6 +568,17 @@ END_IF;
                 MessagePackerFb.PackKvDint(ADR('se1'), GVL.DrvSyncErr[1]);
                 MessagePackerFb.PackKvDint(ADR('se2'), GVL.DrvSyncErr[2]);
                 MessagePackerFb.PackKvDint(ADR('sdo_err'), GVL.EcSdoErr);
+                MessagePackerFb.PackKvLint(ADR('bus_us'), DWORD_TO_LINT(BusPeriodUs));   // EtherCAT_Task interval as read
+                // o0..o2: drive k's sync objects (DrvObj), "v,v,..." text
+                FOR EcTrI := 0 TO 2 DO
+                    EcTrStr := '';
+                    FOR EcObjJ := 0 TO 11 DO
+                        EcTrStr := CONCAT(EcTrStr, DINT_TO_STRING(GVL.DrvObj[EcTrI, EcObjJ]));
+                        EcTrStr := CONCAT(EcTrStr, ',');
+                    END_FOR;
+                    EcObjKey := CONCAT('o', INT_TO_STRING(EcTrI));
+                    MessagePackerFb.PackKvStr(ADR(EcObjKey), ADR(EcTrStr));
+                END_FOR;
                 // dg0..2 / dd0..2: the same glitch check on the integer
                 // target sent to the drive (diSetPosition): count, max |d2|
                 MessagePackerFb.PackKvLint(ADR('dg0'), UDINT_TO_LINT(GVL.DiGlitchCount[0]));

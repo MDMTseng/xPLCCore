@@ -61,6 +61,16 @@ VAR
     bySdoSub    : BYTE;
     diSdoVal    : DINT;
 END_VAR
+VAR CONSTANT
+    // Drive objects read by SDO: 1C32:01 sync type, :02 cycle time ns,
+    // :03 shift time ns, :04 supported sync types, :05 min cycle ns,
+    // :06 calc+copy ns, :09 delay ns, :0B SM-event missed, :0C cycle too
+    // small, :20 sync error; 60C2:01 interpolation period value, :02 its
+    // index (10^x s).
+    SDO_IDX : ARRAY[0..11] OF WORD := [10(16#1C32), 16#60C2, 16#60C2];
+    SDO_SUB : ARRAY[0..11] OF BYTE := [16#01, 16#02, 16#03, 16#04, 16#05, 16#06, 16#09, 16#0B, 16#0C, 16#20, 16#01, 16#02];
+END_VAR
+
 (* =========== IMPLEMENTATION =========== *)
 // Event timestamp log -- see GVL.EvHead. Runs in EtherCAT_Task after
 // AxisGroupSM, so it sees this scan's outputs as AxisGroupSM left them.
@@ -304,35 +314,40 @@ IF iTicN >= 500 THEN
 END_IF;
 GVL.EcTicHist[LIMIT(0, LREAL_TO_INT(lrTicUs / 100.0 - 0.5), 9)] := GVL.EcTicHist[LIMIT(0, LREAL_TO_INT(lrTicUs / 100.0 - 0.5), 9)] + 1;
 
-// ---- Drives' 0x1C32:0B / :20 by SDO, one after the other ----
-// steps 0..5: drive (step / 2), subindex 0x0B (even) / 0x20 (odd); a
-// pause of 200 cycles between reads.
+// ---- The delta drives' sync objects by SDO (GVL.DrvObj*) ----
+// Step k: drive k / 12 (EAxis0/1/2 = station 1003 / 1004 / 1005; wire
+// order QEC 1006, reel 1002, EAxis0..2, EC0808DN 1001, EasyCAT 1007), object k MOD 12 of
+// SDO_IDX / SDO_SUB; a pause of 50 cycles between reads, ~2 s a sweep.
 IF iSdoWait > 0 THEN
     iSdoWait := iSdoWait - 1;
 ELSE
-    CASE iSdoStep / 2 OF
-        0: uiSdoDev := 1002;
-        1: uiSdoDev := 1003;
+    CASE iSdoStep / 12 OF
+        0: uiSdoDev := 1003;
+        1: uiSdoDev := 1004;
     ELSE
         uiSdoDev := 1005;
     END_CASE;
-    bySdoSub := SEL((iSdoStep MOD 2) = 0, 16#20, 16#0B);
-    fbSdo(xExecute := TRUE, usiCom := 1, uiDevice := uiSdoDev, wIndex := 16#1C32,
-          bySubindex := bySdoSub, udiTimeOut := 500);
+    fbSdo(xExecute := TRUE, usiCom := 1, uiDevice := uiSdoDev, wIndex := SDO_IDX[iSdoStep MOD 12],
+          bySubindex := SDO_SUB[iSdoStep MOD 12], udiTimeOut := 500);
     IF fbSdo.xDone OR fbSdo.xError THEN
         IF fbSdo.xDone THEN
-            diSdoVal := BYTE_TO_DINT(fbSdo.abyData[1]) + BYTE_TO_DINT(fbSdo.abyData[2]) * 256;
+            diSdoVal := BYTE_TO_DINT(fbSdo.abyData[1]) + SHL(BYTE_TO_DINT(fbSdo.abyData[2]), 8)
+                        + SHL(BYTE_TO_DINT(fbSdo.abyData[3]), 16) + SHL(BYTE_TO_DINT(fbSdo.abyData[4]), 24);
+            GVL.DrvObjErr[iSdoStep / 12, iSdoStep MOD 12] := 0;
         ELSE
             diSdoVal := -1;
+            GVL.DrvObjErr[iSdoStep / 12, iSdoStep MOD 12] := TO_DINT(fbSdo.eError);
             GVL.EcSdoErr := TO_DINT(fbSdo.eError);
         END_IF;
-        IF (iSdoStep MOD 2) = 0 THEN
-            GVL.DrvSmMissed[iSdoStep / 2] := diSdoVal;
-        ELSE
-            GVL.DrvSyncErr[iSdoStep / 2] := diSdoVal;
-        END_IF;
+        GVL.DrvObj[iSdoStep / 12, iSdoStep MOD 12] := diSdoVal;
         fbSdo(xExecute := FALSE);
-        iSdoStep := (iSdoStep + 1) MOD 6;
-        iSdoWait := 200;
+        iSdoStep := (iSdoStep + 1) MOD 36;
+        iSdoWait := 50;
     END_IF;
 END_IF;
+GVL.DrvSmMissed[0] := GVL.DrvObj[0, 7];
+GVL.DrvSmMissed[1] := GVL.DrvObj[1, 7];
+GVL.DrvSmMissed[2] := GVL.DrvObj[2, 7];
+GVL.DrvSyncErr[0] := GVL.DrvObj[0, 9];
+GVL.DrvSyncErr[1] := GVL.DrvObj[1, 9];
+GVL.DrvSyncErr[2] := GVL.DrvObj[2, 9];

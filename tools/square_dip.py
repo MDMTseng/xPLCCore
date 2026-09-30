@@ -93,6 +93,10 @@ def main():
                         "/".join(str(e.get("dd%d" % k)) for k in range(3)),
                         e.get("e_stale"), e.get("e_skip"), e.get("e_amin"), e.get("e_amax"),
                         e.get("e_apeak"), e.get("e_late"), e.get("e_late_sum")))
+                    if "o0" in e:
+                        ob = [e["o%d" % k].rstrip(",").split(",") for k in range(3)]
+                        log("       drives 1C32 SM-missed/too-small/sync-err: %s" % "  ".join(
+                            "EAxis%d %s/%s/%s" % (k, ob[k][7], ob[k][8], ob[k][9]) for k in range(3)))
                     if not st["running"] or time.time() - t0 > a.minutes * 60:
                         break
             except KeyboardInterrupt:
