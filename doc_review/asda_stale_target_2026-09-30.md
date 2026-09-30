@@ -317,10 +317,26 @@ Notes on the sweep:
 - SyncOffset 50 gave 4.3 % half an hour earlier (another download). The
   result may depend on the phase each EtherCAT start happens to lock at.
   **Repeat 50 across several restarts.**
-- **SyncOffset >= 60 broke the bus.** After the download at 60, all slaves
-  stayed in BOOT with `xConfigFinished` FALSE, and going back to 50 did not
-  recover it. Like the earlier hang, it needs a PLC power cycle (maybe the
-  drives' too). **Never use >= 60.**
+- **SyncOffset >= 60 broke the bus.** The PLC log (the owner exported it
+  from the IDE, 500 entries back to 23:44) shows what happened:
+  - The SyncOffset 70 download (23:44:28) did reach "All slaves in
+    operational" (23:44:33).
+  - About 10 s later the axes read 0 and power-up failed.
+  - Every download after that (23:46, 23:48, 23:52) and the cold reset /
+    start left **no EtherCAT startup line at all**, not even "Networkadapter
+    opened".
+  - A bus scan at 0:11 got "SysEthernet: packet could not be sent, error
+    code:20", then "no slaves found".
+  - So the PLC's EtherCAT master / NIC layer (I210_2) wedged while running
+    at 70. It is not the drives. Only a PLC restart re-initialises that
+    layer; application downloads and resets do not reach it.
+  - Why 70 wedges it is not in the log. At 70-75 the frame reaches the
+    slaves at or after the next SYNC0 (EasyCAT: up to 1055 us), which
+    probably upsets the DC task sync.
+  - The 60 run is out of the log.
+  - The recurring "vnet1 ... Error Code 39 / different subnet" lines are
+    another interface and predate all this.
+  - **Stay at 50.**
 
 ## 8. Next tests
 
