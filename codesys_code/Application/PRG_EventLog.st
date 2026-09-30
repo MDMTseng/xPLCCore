@@ -55,7 +55,17 @@ VAR
     diDemPrev   : ARRAY[0..2] OF DINT;
     diDemVelPrev : ARRAY[0..2] OF DINT;
     diDemVel    : DINT;
-    diTHist     : ARRAY[0..2, 0..3] OF DINT;    // sent target, this cycle .. 3 cycles before
+    diTHist     : ARRAY[0..2, 0..7] OF DINT;    // sent target, this cycle .. 7 cycles before
+    aRingT      : ARRAY[0..2, 0..31] OF DINT;   // last 32 cycles of sent target / drive demand
+    aRingD      : ARRAY[0..2, 0..31] OF DINT;
+    iRing       : INT;
+    iPost       : ARRAY[0..2] OF INT;           // cycles until a snapshot is taken
+    iPostWhy    : ARRAY[0..2] OF INT;
+    udiPostMs   : ARRAY[0..2] OF UDINT;
+    iSnapJ      : INT;
+    iLagN       : INT;
+    xLate       : BOOL;
+    xGlitchD    : BOOL;
     iLag        : INT;
     iLagHit     : INT;
     lrFe        : LREAL;
@@ -203,12 +213,7 @@ IF GVL.EcProfReset THEN
         GVL.TapEqNow[iProf] := 0;
         GVL.TapEqPrev[iProf] := 0;
         GVL.TapEqNone[iProf] := 0;
-        GVL.DemStale[iProf] := 0;
-        GVL.DemGlitch[iProf] := 0;
-        GVL.DemD2Max[iProf] := 0;
-        FOR iLag := 0 TO 4 DO
-            GVL.DemLag[iProf, iLag] := 0;
-        END_FOR;
+        GVL.DemReset := TRUE;
     END_FOR;
     GVL.EcTicUsMax := 0;
     FOR iFeK := 0 TO 3 DO
@@ -322,26 +327,55 @@ FOR iProf := 0 TO 2 DO
     ELSE
         diDem := GVL.DemandTap2;
     END_CASE;
-    diTHist[iProf, 3] := diTHist[iProf, 2];
-    diTHist[iProf, 2] := diTHist[iProf, 1];
-    diTHist[iProf, 1] := diTHist[iProf, 0];
+    FOR iLag := 7 TO 1 BY -1 DO
+        diTHist[iProf, iLag] := diTHist[iProf, iLag - 1];
+    END_FOR;
     diTHist[iProf, 0] := diTap;
+    aRingT[iProf, iRing] := diTap;
+    aRingD[iProf, iRing] := diDem;
     diDemVel := diDem - diDemPrev[iProf];
+    iLagN := LIMIT(0, GVL.DemLagNominal, 5);
     IF iSetValid[iProf] >= 2 THEN
-        iLagHit := 4;
-        FOR iLag := 3 TO 0 BY -1 DO
+        iLagHit := 7;
+        FOR iLag := 6 TO 0 BY -1 DO
             IF diDem = diTHist[iProf, iLag] THEN
                 iLagHit := iLag;
             END_IF;
         END_FOR;
         GVL.DemLag[iProf, iLagHit] := GVL.DemLag[iProf, iLagHit] + 1;
-        IF (diDemVel = 0) AND (ABS(diTHist[iProf, 1] - diTHist[iProf, 2]) > 50) THEN
+        // Aligned to the drive's delay: the target it should be using moved,
+        // the demand did not (stale), or the demand is one cycle further back.
+        IF (diDemVel = 0) AND (ABS(diTHist[iProf, iLagN] - diTHist[iProf, iLagN + 1]) > 50) THEN
             GVL.DemStale[iProf] := GVL.DemStale[iProf] + 1;
             GVL.DemLastStaleMs[iProf] := udiNow;
         END_IF;
+        xLate := (diDem = diTHist[iProf, iLagN + 1]) AND (diDem <> diTHist[iProf, iLagN]);
+        IF xLate THEN
+            GVL.DemLate[iProf] := GVL.DemLate[iProf] + 1;
+        END_IF;
         GVL.DemD2Max[iProf] := MAX(GVL.DemD2Max[iProf], ABS(diDemVel - diDemVelPrev[iProf]));
-        IF ABS(diDemVel - diDemVelPrev[iProf]) > GVL.DiGlitchThresh THEN
+        xGlitchD := ABS(diDemVel - diDemVelPrev[iProf]) > GVL.DiGlitchThresh;
+        IF xGlitchD THEN
             GVL.DemGlitch[iProf] := GVL.DemGlitch[iProf] + 1;
+        END_IF;
+        // Snapshot: arm on the event, take it 12 cycles later.
+        IF (xLate OR xGlitchD) AND (iPost[iProf] = 0) AND (GVL.DemSnapN < 8) THEN
+            iPost[iProf] := 12;
+            iPostWhy[iProf] := SEL(xLate, 2, 1);
+            udiPostMs[iProf] := udiNow;
+        END_IF;
+    END_IF;
+    IF iPost[iProf] > 0 THEN
+        iPost[iProf] := iPost[iProf] - 1;
+        IF (iPost[iProf] = 0) AND (GVL.DemSnapN < 8) THEN
+            FOR iSnapJ := 0 TO 31 DO
+                GVL.DemSnapT[GVL.DemSnapN, iSnapJ] := aRingT[iProf, (iRing + 1 + iSnapJ) MOD 32];
+                GVL.DemSnapD[GVL.DemSnapN, iSnapJ] := aRingD[iProf, (iRing + 1 + iSnapJ) MOD 32];
+            END_FOR;
+            GVL.DemSnapAxis[GVL.DemSnapN] := iProf;
+            GVL.DemSnapMs[GVL.DemSnapN] := udiPostMs[iProf];
+            GVL.DemSnapWhy[GVL.DemSnapN] := iPostWhy[iProf];
+            GVL.DemSnapN := GVL.DemSnapN + 1;
         END_IF;
     END_IF;
     diDemPrev[iProf] := diDem;
@@ -352,6 +386,21 @@ FOR iProf := 0 TO 2 DO
     diSetPrev[iProf] := pAxG^.diSetPosition;
     diVelPrev[iProf] := diVel;
 END_FOR;
+iRing := (iRing + 1) MOD 32;
+IF GVL.DemReset THEN
+    GVL.DemReset := FALSE;
+    GVL.DemSnapN := 0;
+    FOR iProf := 0 TO 2 DO
+        GVL.DemStale[iProf] := 0;
+        GVL.DemGlitch[iProf] := 0;
+        GVL.DemD2Max[iProf] := 0;
+        GVL.DemLate[iProf] := 0;
+        iPost[iProf] := 0;
+        FOR iLag := 0 TO 7 DO
+            GVL.DemLag[iProf, iLag] := 0;
+        END_FOR;
+    END_FOR;
+END_IF;
 
 // ---- Bus timing probe on the EasyCAT (GVL.Esp*) ----
 GVL.EspSeq := GVL.EspSeq + 1;

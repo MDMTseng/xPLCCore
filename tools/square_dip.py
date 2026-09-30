@@ -123,6 +123,7 @@ def main():
             lap = pkts[1:1 + len(pkts[1:-1]) // a.loops]    # one lap
             laps = int(a.minutes * 60 / 1.0) + 1             # over-provision; stopped on time
             plc({"type": "SYS", "cmd": "EC_STATS", "reset": 1})
+            plc({"type": "SYS", "cmd": "DEM_STATS", "reset": 1})
             rv.push("plc_stream_start", {"pkts": pkts[:1] + lap * laps, "timeoutMs": 30000})
             try:
                 while True:
@@ -147,6 +148,17 @@ def main():
                     log("       target PDO tap: glitch %s  max|d2| %s  =now %s  =prev %s  neither %s" % tuple(
                         "/".join(str(e.get("%s%d" % (f, k))) for k in range(3))
                         for f in ("tg", "td", "tnow", "tprev", "tnone")))
+                    try:
+                        dm = plc({"type": "SYS", "cmd": "DEM_STATS"})
+                        log("       drive demand 0x6062 (lag %s): stale %s  late %s  d2 glitch %s max %s  snaps %s | lag hist %s" % (
+                            dm.get("lagnom"),
+                            "/".join(str(dm.get("ds%d" % k)) for k in range(3)),
+                            "/".join(str(dm.get("dlate%d" % k)) for k in range(3)),
+                            "/".join(str(dm.get("dgl%d" % k)) for k in range(3)),
+                            "/".join(str(dm.get("dmx%d" % k)) for k in range(3)),
+                            dm.get("nsnap"), "  ".join(dm.get("dl%d" % k, "").rstrip(",") for k in range(3))))
+                    except Exception as ex:
+                        log("       drive demand: %s" % ex)
                     if "o0" in e:
                         ob = [e["o%d" % k].rstrip(",").split(",") for k in range(3)]
                         log("       drives 1C32 SM-missed/too-small/sync-err: %s" % "  ".join(

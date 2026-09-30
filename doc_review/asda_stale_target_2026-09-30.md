@@ -274,6 +274,54 @@ the check needs no scope and lives in CODESYS.
 - Inconclusive: fe jumps mix real stumbles with feedback latch jitter. That
   is why the demand readback matters.
 
+## 7c. First real results of the demand readback (2026-09-30, 23:17-23:47, remote, owner OK)
+
+**Normal delay.** The drive's demand 0x6062 equals the target we sent
+**3 cycles** earlier (`GVL.DemLagNominal` 3).
+
+**Stale events.** When a stale target happens, the demand goes one cycle
+further back: lag 4. The increments then show a repeat or 0 step, followed
+by a double step.
+
+1/10 square at 30 %, SyncOffset 50, ~85 s:
+- lag 4 ("late") on ~3 % of the cycles (1972 / 1375 / 1455 per axis);
+- demand |d2| up to 253k-687k while the sent target stayed under 34k.
+
+Snapshot, EAxis0, per-cycle increments:
+
+```
+sent:  41043 43404 44989 45792 45844 45662 45591
+drive: 41043 43404 43404  1585 91636 45662 45662 -71
+```
+
+**Single joint, no planner** (`tools/pulse_test.py`, FSM Powered), SyncOffset 50:
+- 0.1 deg/s, sent increments 144 / 145 (d2 ≤ 2):
+  - lag 4 on 4.3 % of the moving cycles;
+  - demand increments like `0 145 145 -1 145 144 289 289 0 ...`.
+- 5 deg/s: lag 4 on 2.3 %; demand d2 21,671 vs 38 sent.
+
+So the planner, path and kinematics are all ruled out. The drive's pick of the
+new target flips between two frames.
+
+**SyncOffset sweep.** Pulse test at 0.1 deg/s, one download each, no homing:
+
+| SyncOffset | lag-4 (late) | demand d2 max | EasyCAT arrival after SYNC0 |
+|---|---|---|---|
+| 30 | 5.62 % | 434 | 549-700 us |
+| 40 | 3.42 % | 434 | 556-719 us |
+| 50 | **0 %** | 2 | 687-819 us |
+| 60 | **EtherCAT did not start** | | |
+| 70 | (bus already down) | | |
+
+Notes on the sweep:
+- SyncOffset 50 gave 4.3 % half an hour earlier (another download). The
+  result may depend on the phase each EtherCAT start happens to lock at.
+  **Repeat 50 across several restarts.**
+- **SyncOffset >= 60 broke the bus.** After the download at 60, all slaves
+  stayed in BOOT with `xConfigFinished` FALSE, and going back to 50 did not
+  recover it. Like the earlier hang, it needs a PLC power cycle (maybe the
+  drives' too). **Never use >= 60.**
+
 ## 8. Next tests
 
 0. **First look at the demand readback.**

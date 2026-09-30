@@ -1,6 +1,7 @@
 METHOD DrainHostPackets : BOOL
 VAR
     EcTrStr : STRING(255);    // EC_STATS trl / trh
+    EcSnapK : INT;
     EcObjJ  : INT;
     EcObjKey : STRING(7);
     EcTrI   : INT;
@@ -508,6 +509,66 @@ END_IF;
                     MessagePackerFb.PackKvDint(ADR('e1'), TO_DINT(JtErrId[1]));
                     MessagePackerFb.PackKvDint(ADR('e2'), TO_DINT(JtErrId[2]));
                 END_IF;
+            ELSIF (CommandType = 'DEM_STATS') THEN
+                // The drives' position demand (0x6062) vs the targets we sent
+                // (GVL.Dem*, PRG_EventLog). Per drive k: ds{k} stale, dlate{k}
+                // one cycle behind the nominal lag, dgl{k} / dmx{k} d2 glitches /
+                // max, dlt{k} PLC ms of the last stale, dl{k} the lag histogram
+                // as text (lag 0..6, none). nsnap = snapshots taken; snap:i adds
+                // snapshot i (s_axis, s_ms, s_why, s_t0 / s_t1 and s_d0 / s_d1 =
+                // cycles 0-15 / 16-31 of target / demand). reset:1 clears.
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                MessagePackerFb.PackKvDint(ADR('lagnom'), INT_TO_DINT(GVL.DemLagNominal));
+                FOR EcTrI := 0 TO 2 DO
+                    EcObjKey := CONCAT('ds', INT_TO_STRING(EcTrI));
+                    MessagePackerFb.PackKvLint(ADR(EcObjKey), UDINT_TO_LINT(GVL.DemStale[EcTrI]));
+                    EcObjKey := CONCAT('dlate', INT_TO_STRING(EcTrI));
+                    MessagePackerFb.PackKvLint(ADR(EcObjKey), UDINT_TO_LINT(GVL.DemLate[EcTrI]));
+                    EcObjKey := CONCAT('dgl', INT_TO_STRING(EcTrI));
+                    MessagePackerFb.PackKvLint(ADR(EcObjKey), UDINT_TO_LINT(GVL.DemGlitch[EcTrI]));
+                    EcObjKey := CONCAT('dmx', INT_TO_STRING(EcTrI));
+                    MessagePackerFb.PackKvDint(ADR(EcObjKey), GVL.DemD2Max[EcTrI]);
+                    EcObjKey := CONCAT('dlt', INT_TO_STRING(EcTrI));
+                    MessagePackerFb.PackKvLint(ADR(EcObjKey), UDINT_TO_LINT(GVL.DemLastStaleMs[EcTrI]));
+                    EcTrStr := '';
+                    FOR EcObjJ := 0 TO 7 DO
+                        EcTrStr := CONCAT(EcTrStr, UDINT_TO_STRING(GVL.DemLag[EcTrI, EcObjJ]));
+                        EcTrStr := CONCAT(EcTrStr, ',');
+                    END_FOR;
+                    EcObjKey := CONCAT('dl', INT_TO_STRING(EcTrI));
+                    MessagePackerFb.PackKvStr(ADR(EcObjKey), ADR(EcTrStr));
+                END_FOR;
+                MessagePackerFb.PackKvDint(ADR('nsnap'), INT_TO_DINT(GVL.DemSnapN));
+                EcTrI := LINT_TO_INT(MessageUnpackerFb.TryReadINT64('snap', -1));
+                IF (EcTrI >= 0) AND (EcTrI < GVL.DemSnapN) THEN
+                    MessagePackerFb.PackKvDint(ADR('s_axis'), INT_TO_DINT(GVL.DemSnapAxis[EcTrI]));
+                    MessagePackerFb.PackKvLint(ADR('s_ms'), UDINT_TO_LINT(GVL.DemSnapMs[EcTrI]));
+                    MessagePackerFb.PackKvDint(ADR('s_why'), INT_TO_DINT(GVL.DemSnapWhy[EcTrI]));
+                    FOR EcObjJ := 0 TO 3 DO
+                        EcTrStr := '';
+                        FOR EcSnapK := 0 TO 15 DO
+                            IF EcObjJ < 2 THEN
+                                EcTrStr := CONCAT(EcTrStr, DINT_TO_STRING(GVL.DemSnapT[EcTrI, (EcObjJ MOD 2) * 16 + EcSnapK]));
+                            ELSE
+                                EcTrStr := CONCAT(EcTrStr, DINT_TO_STRING(GVL.DemSnapD[EcTrI, (EcObjJ MOD 2) * 16 + EcSnapK]));
+                            END_IF;
+                            EcTrStr := CONCAT(EcTrStr, ',');
+                        END_FOR;
+                        CASE EcObjJ OF
+                            0: EcObjKey := 's_t0';
+                            1: EcObjKey := 's_t1';
+                            2: EcObjKey := 's_d0';
+                        ELSE
+                            EcObjKey := 's_d1';
+                        END_CASE;
+                        MessagePackerFb.PackKvStr(ADR(EcObjKey), ADR(EcTrStr));
+                    END_FOR;
+                END_IF;
+                IF MessageUnpackerFb.TryReadINT64('reset', 0) <> 0 THEN
+                    GVL.DemReset := TRUE;
+                END_IF;
             ELSIF (CommandType = 'EC_STATS') THEN
                 // EtherCAT health: the master's frame statistics (lost /
                 // tx_err / rx_err, updated every 100 cycles) and the task
@@ -597,35 +658,6 @@ END_IF;
                 MessagePackerFb.PackKvReal(ADR('ctask'), LREAL_TO_REAL(GVL.CommTaskUsMax));
                 MessagePackerFb.PackKvReal(ADR('cout'), LREAL_TO_REAL(GVL.CommOutsideUsMax));
                 MessagePackerFb.PackKvLint(ADR('cout500'), UDINT_TO_LINT(GVL.CommOutsideOver500));
-                IF MessageUnpackerFb.TryReadINT64('dem', 0) <> 0 THEN   // drive demand (0x6062) check, on request
-                    MessagePackerFb.PackKvLint(ADR('ds0'), UDINT_TO_LINT(GVL.DemStale[0]));
-                    MessagePackerFb.PackKvLint(ADR('dgl0'), UDINT_TO_LINT(GVL.DemGlitch[0]));
-                    MessagePackerFb.PackKvDint(ADR('dmx0'), GVL.DemD2Max[0]);
-                    MessagePackerFb.PackKvLint(ADR('dlt0'), UDINT_TO_LINT(GVL.DemLastStaleMs[0]));
-                    MessagePackerFb.PackKvLint(ADR('dl0_0'), UDINT_TO_LINT(GVL.DemLag[0, 0]));
-                    MessagePackerFb.PackKvLint(ADR('dl0_1'), UDINT_TO_LINT(GVL.DemLag[0, 1]));
-                    MessagePackerFb.PackKvLint(ADR('dl0_2'), UDINT_TO_LINT(GVL.DemLag[0, 2]));
-                    MessagePackerFb.PackKvLint(ADR('dl0_3'), UDINT_TO_LINT(GVL.DemLag[0, 3]));
-                    MessagePackerFb.PackKvLint(ADR('dl0_4'), UDINT_TO_LINT(GVL.DemLag[0, 4]));
-                    MessagePackerFb.PackKvLint(ADR('ds1'), UDINT_TO_LINT(GVL.DemStale[1]));
-                    MessagePackerFb.PackKvLint(ADR('dgl1'), UDINT_TO_LINT(GVL.DemGlitch[1]));
-                    MessagePackerFb.PackKvDint(ADR('dmx1'), GVL.DemD2Max[1]);
-                    MessagePackerFb.PackKvLint(ADR('dlt1'), UDINT_TO_LINT(GVL.DemLastStaleMs[1]));
-                    MessagePackerFb.PackKvLint(ADR('dl1_0'), UDINT_TO_LINT(GVL.DemLag[1, 0]));
-                    MessagePackerFb.PackKvLint(ADR('dl1_1'), UDINT_TO_LINT(GVL.DemLag[1, 1]));
-                    MessagePackerFb.PackKvLint(ADR('dl1_2'), UDINT_TO_LINT(GVL.DemLag[1, 2]));
-                    MessagePackerFb.PackKvLint(ADR('dl1_3'), UDINT_TO_LINT(GVL.DemLag[1, 3]));
-                    MessagePackerFb.PackKvLint(ADR('dl1_4'), UDINT_TO_LINT(GVL.DemLag[1, 4]));
-                    MessagePackerFb.PackKvLint(ADR('ds2'), UDINT_TO_LINT(GVL.DemStale[2]));
-                    MessagePackerFb.PackKvLint(ADR('dgl2'), UDINT_TO_LINT(GVL.DemGlitch[2]));
-                    MessagePackerFb.PackKvDint(ADR('dmx2'), GVL.DemD2Max[2]);
-                    MessagePackerFb.PackKvLint(ADR('dlt2'), UDINT_TO_LINT(GVL.DemLastStaleMs[2]));
-                    MessagePackerFb.PackKvLint(ADR('dl2_0'), UDINT_TO_LINT(GVL.DemLag[2, 0]));
-                    MessagePackerFb.PackKvLint(ADR('dl2_1'), UDINT_TO_LINT(GVL.DemLag[2, 1]));
-                    MessagePackerFb.PackKvLint(ADR('dl2_2'), UDINT_TO_LINT(GVL.DemLag[2, 2]));
-                    MessagePackerFb.PackKvLint(ADR('dl2_3'), UDINT_TO_LINT(GVL.DemLag[2, 3]));
-                    MessagePackerFb.PackKvLint(ADR('dl2_4'), UDINT_TO_LINT(GVL.DemLag[2, 4]));
-                END_IF;
                 IF MessageUnpackerFb.TryReadINT64('obj', 0) <> 0 THEN  // long text: only on request
                     // o0..o2: drive k's sync objects (DrvObj), "v,v,..." text
                     FOR EcTrI := 0 TO 2 DO

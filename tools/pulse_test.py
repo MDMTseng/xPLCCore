@@ -65,6 +65,9 @@ def stats(label, k):
         "EasyCAT stale %s skip %s | lost %s" % (
             label, e["dg%d" % k], e["dd%d" % k], e["tg%d" % k], e["td%d" % k], e["tnow%d" % k],
             e["tprev%d" % k], e["tnone%d" % k], e["e_stale"], e["e_skip"], e["lost"]))
+    dm = plc({"type": "SYS", "cmd": "DEM_STATS"})
+    log("%-10s drive demand 0x6062: stale %s late %s d2 glitch %s max %s snaps %s | lag hist (0..6,none) %s" % (
+        "", dm["ds%d" % k], dm["dlate%d" % k], dm["dgl%d" % k], dm["dmx%d" % k], dm["nsnap"], dm["dl%d" % k].rstrip(",")))
     return e
 
 
@@ -97,6 +100,7 @@ def main():
     thresh(a.thresh)
     try:
         plc({"type": "SYS", "cmd": "EC_STATS", "reset": 1})
+        plc({"type": "SYS", "cmd": "DEM_STATS", "reset": 1})
         time.sleep(1)
         stats("standstill", a.axis)
         move(a.axis, a.dist, a.vel)

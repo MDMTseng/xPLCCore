@@ -317,7 +317,19 @@ VAR_GLOBAL
 	ActualTap0      AT %ID10 : DINT;    (* EAxis0 drive's Position actual 0x6064, same PDO: a live check *)
 	ActualTap1      AT %ID16 : DINT;
 	ActualTap2      AT %ID22 : DINT;
-	DemLag          : ARRAY[0..2, 0..4] OF UDINT;
+	DemLag          : ARRAY[0..2, 0..7] OF UDINT;   (* [k, n]: demand = target n cycles before (0..6), 7 = none *)
+	DemLagNominal   : INT := 3;      (* the drive's normal delay, measured 2026-09-30 *)
+	DemLate         : ARRAY[0..2] OF UDINT;          (* demand = target DemLagNominal+1 before while that one moved: one cycle behind = a stale target *)
+	DemReset        : BOOL;
+	(* Snapshots of the stale / glitch events: 32 cycles of sent target and
+	   drive demand (oldest first), the event 12 cycles from the end. Up to
+	   8; DEM_STATS reset:1 clears and re-arms. *)
+	DemSnapN        : INT;
+	DemSnapAxis     : ARRAY[0..7] OF INT;
+	DemSnapMs       : ARRAY[0..7] OF UDINT;
+	DemSnapWhy      : ARRAY[0..7] OF INT;            (* 1 late, 2 d2 glitch *)
+	DemSnapT        : ARRAY[0..7, 0..31] OF DINT;
+	DemSnapD        : ARRAY[0..7, 0..31] OF DINT;
 	DemStale        : ARRAY[0..2] OF UDINT;
 	DemGlitch       : ARRAY[0..2] OF UDINT;
 	DemD2Max        : ARRAY[0..2] OF DINT;
