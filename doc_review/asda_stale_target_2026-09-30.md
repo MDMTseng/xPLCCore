@@ -324,6 +324,19 @@ Notes on the sweep:
 
 ## 8. Next tests
 
+00. **After the power cycle** (the bus is down since the SyncOffset-60
+    download, 2026-09-30 23:41):
+    - Check that EtherCAT is up: `xConfigFinished` TRUE, slaves OP,
+      `ActualTap0` non-zero. The project is at SyncOffset 50.
+    - Then `tools/stale_suite.py` (JSON lines with the demand figures):
+      1. `repeat --n 3`: download plus a 1 min single-joint pulse test, three
+         times. Is 0 % at SyncOffset 50 stable, or does it change with each
+         EtherCAT start?
+      2. `long --minutes 5`: single joint, long.
+      3. `group --minutes 5`: home, then the 1/10 square at 30 % through the
+         axis group.
+    - The Intewell shell has no reboot, and its `ethercat` tool (IgH) prints
+      nothing for the CODESYS master. Cold reset did not help.
 0. **First look at the demand readback.**
    - Delta real, homed, then any slow motion (pulse_test).
    - Read EC_STATS with `dem:1`: which lag bin fills (the drive's delay), and
