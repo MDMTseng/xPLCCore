@@ -10,10 +10,11 @@
 # double step -- seen on the ASDA scope 2026-09-30). CODESYS default 20.
 # 20 was not enough: the frame goes out after the IEC code (EtherCAT_Task
 # exec avg 179 us, max 362 us, start jitter +-84 us) -- stale targets in
-# bursts during the heavy motion phases. 50 (500 us) covers it.
+# bursts during the heavy motion phases. 50 (500 us): ~12x fewer, not zero
+# (exec max 344 us, so another delay after the task); 75 tried next.
 
 MASTER = "EtherCAT_Master_SoftMotion"
-WANT = "50"
+WANT = "75"
 
 
 def t(v):
