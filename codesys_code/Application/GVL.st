@@ -280,6 +280,25 @@ VAR_GLOBAL
 	SetGlitchCount  : ARRAY[0..2] OF UDINT;
 	SetGlitchLastMs : ARRAY[0..2] OF UDINT;
 	SetD2Max        : ARRAY[0..2] OF LREAL;
+	(* Where in the DC cycle the EtherCAT task's IEC code ends (the frame
+	   goes out after it): GetCurrentTimeInCycle at the end of
+	   PRG_EventLog, us. SYNC0 sits at SyncOffset % of the cycle; a frame
+	   leaving after it gives the drives last cycle's target. Hist bins of
+	   100 us (0..9, 9 = >= 900). Reset with EcProfReset. *)
+	EcTicUsMax      : LREAL;
+	EcTicHist       : ARRAY[0..9] OF UDINT;
+	(* The same, min / max of each 500 ms, the last 20 (ring, next slot
+	   EcTicIdx): shows a slow walk through the cycle (clock drift). *)
+	EcTicTrMin      : ARRAY[0..19] OF REAL;
+	EcTicTrMax      : ARRAY[0..19] OF REAL;
+	EcTicIdx        : INT;
+	(* The delta drives' own count of cycles without new outputs at SYNC0
+	   (CoE 0x1C32:0B SM-event missed) and 0x1C32:20 sync error, read by
+	   SDO in turn (drive k = station 1002 / 1003 / 1005). -1: not read /
+	   SDO error (EcSdoErr = last eError). *)
+	DrvSmMissed     : ARRAY[0..2] OF DINT := [-1, -1, -1];
+	DrvSyncErr      : ARRAY[0..2] OF DINT := [-1, -1, -1];
+	EcSdoErr        : DINT;
 
 	(* Tape moves that stopped short of their target (the ReelMv block). *)
 	ReelInterruptCount : UDINT;

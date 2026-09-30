@@ -87,6 +87,9 @@ def main():
                         "/".join(str(e.get("g%d" % k, "?")) for k in range(3)),
                         "/".join("%.3f" % e.get("d2m%d" % k, -1) for k in range(3)),
                         ("  ERR " + st["err"]) if st["err"] else ""))
+                    log("       tic_max %.0f us  sm %s  trl %s  trh %s" % (
+                        e.get("tic_max", -1), "/".join(str(e.get("sm%d" % k)) for k in range(3)),
+                        e.get("trl", "").rstrip(","), e.get("trh", "").rstrip(",")))
                     if not st["running"] or time.time() - t0 > a.minutes * 60:
                         break
             except KeyboardInterrupt:

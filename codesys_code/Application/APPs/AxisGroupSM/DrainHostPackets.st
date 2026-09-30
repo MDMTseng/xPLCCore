@@ -1,5 +1,7 @@
 METHOD DrainHostPackets : BOOL
 VAR
+    EcTrStr : STRING(255);    // EC_STATS trl / trh
+    EcTrI   : INT;
     // Scratch raw-reads for SCRATCHPAD_WRITE field-presence detection
     // (code review fix #3). -1 sentinel from TryReadINT64 = missing key.
     // Moved here from PROGRAM AxisGroupSM VAR scope 2026-06-23: only
@@ -542,6 +544,42 @@ END_IF;
                 MessagePackerFb.PackKvReal(ADR('d2m0'), LREAL_TO_REAL(GVL.SetD2Max[0]));
                 MessagePackerFb.PackKvReal(ADR('d2m1'), LREAL_TO_REAL(GVL.SetD2Max[1]));
                 MessagePackerFb.PackKvReal(ADR('d2m2'), LREAL_TO_REAL(GVL.SetD2Max[2]));
+                // tic_max / tic0..9: where the task's IEC code ends in the
+                // DC cycle (us, 100 us bins); sm0..2 / se0..2: the drives'
+                // 0x1C32:0B SM-event missed / :20 sync error (-1 = SDO
+                // failed, sdo_err)
+                MessagePackerFb.PackKvReal(ADR('tic_max'), LREAL_TO_REAL(GVL.EcTicUsMax));
+                MessagePackerFb.PackKvLint(ADR('tic0'), UDINT_TO_LINT(GVL.EcTicHist[0]));
+                MessagePackerFb.PackKvLint(ADR('tic1'), UDINT_TO_LINT(GVL.EcTicHist[1]));
+                MessagePackerFb.PackKvLint(ADR('tic2'), UDINT_TO_LINT(GVL.EcTicHist[2]));
+                MessagePackerFb.PackKvLint(ADR('tic3'), UDINT_TO_LINT(GVL.EcTicHist[3]));
+                MessagePackerFb.PackKvLint(ADR('tic4'), UDINT_TO_LINT(GVL.EcTicHist[4]));
+                MessagePackerFb.PackKvLint(ADR('tic5'), UDINT_TO_LINT(GVL.EcTicHist[5]));
+                MessagePackerFb.PackKvLint(ADR('tic6'), UDINT_TO_LINT(GVL.EcTicHist[6]));
+                MessagePackerFb.PackKvLint(ADR('tic7'), UDINT_TO_LINT(GVL.EcTicHist[7]));
+                MessagePackerFb.PackKvLint(ADR('tic8'), UDINT_TO_LINT(GVL.EcTicHist[8]));
+                MessagePackerFb.PackKvLint(ADR('tic9'), UDINT_TO_LINT(GVL.EcTicHist[9]));
+                MessagePackerFb.PackKvDint(ADR('sm0'), GVL.DrvSmMissed[0]);
+                MessagePackerFb.PackKvDint(ADR('sm1'), GVL.DrvSmMissed[1]);
+                MessagePackerFb.PackKvDint(ADR('sm2'), GVL.DrvSmMissed[2]);
+                MessagePackerFb.PackKvDint(ADR('se0'), GVL.DrvSyncErr[0]);
+                MessagePackerFb.PackKvDint(ADR('se1'), GVL.DrvSyncErr[1]);
+                MessagePackerFb.PackKvDint(ADR('se2'), GVL.DrvSyncErr[2]);
+                MessagePackerFb.PackKvDint(ADR('sdo_err'), GVL.EcSdoErr);
+                // trl / trh: the last 20 x 500 ms min / max of the above,
+                // oldest first ("lo0,..." as text, us)
+                EcTrStr := '';
+                FOR EcTrI := 0 TO 19 DO
+                    EcTrStr := CONCAT(EcTrStr, REAL_TO_STRING(GVL.EcTicTrMin[(GVL.EcTicIdx + EcTrI) MOD 20]));
+                    EcTrStr := CONCAT(EcTrStr, ',');
+                END_FOR;
+                MessagePackerFb.PackKvStr(ADR('trl'), ADR(EcTrStr));
+                EcTrStr := '';
+                FOR EcTrI := 0 TO 19 DO
+                    EcTrStr := CONCAT(EcTrStr, REAL_TO_STRING(GVL.EcTicTrMax[(GVL.EcTicIdx + EcTrI) MOD 20]));
+                    EcTrStr := CONCAT(EcTrStr, ',');
+                END_FOR;
+                MessagePackerFb.PackKvStr(ADR('trh'), ADR(EcTrStr));
                 IF MessageUnpackerFb.TryReadINT64('reset', 0) <> 0 THEN
                     GVL.EcProfReset := TRUE;
                     GVL.EcStatsClear := TRUE;

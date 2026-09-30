@@ -42,6 +42,18 @@ VAR
     lrD2        : LREAL;
     iSetValid   : ARRAY[0..2] OF INT;
     pAxG        : POINTER TO AXIS_REF_SM3;
+    // Cycle position and the drives' SM-event counters (GVL.EcTic*, Drv*).
+    lrTicUs     : LREAL;
+    uliTicRaw   : ULINT;
+    iTicN       : INT;
+    lrTicLo     : LREAL := 1.0E9;
+    lrTicHi     : LREAL;
+    fbSdo       : ETC_CO_SdoRead4;
+    iSdoStep    : INT;
+    iSdoWait    : INT;
+    uiSdoDev    : UINT;
+    bySdoSub    : BYTE;
+    diSdoVal    : DINT;
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
 // Event timestamp log -- see GVL.EvHead. Runs in EtherCAT_Task after
@@ -151,6 +163,10 @@ IF GVL.EcProfReset THEN
         GVL.SetGlitchCount[iProf] := 0;
         GVL.SetD2Max[iProf] := 0;
     END_FOR;
+    GVL.EcTicUsMax := 0;
+    FOR iProf := 0 TO 9 DO
+        GVL.EcTicHist[iProf] := 0;
+    END_FOR;
     xProfPrev := FALSE;
 END_IF;
 lrAgsmUs := ULINT_TO_LREAL(LTIME_TO_ULINT(GVL.EcProfT1 - GVL.EcProfT0)) / 1000.0;
@@ -230,4 +246,55 @@ IF iStatTick >= 100 THEN
         udiLostFrameCount => GVL.EcLostFrames,
         udiTxErrorCount => GVL.EcTxErrors,
         udiRxErrorCount => GVL.EcRxErrors);
+END_IF;
+
+// ---- Cycle position at the end of the task's IEC code (GVL.EcTic*) ----
+// Last thing in EtherCAT_Task; the frame is sent after it.
+IoConfig_Globals.EtherCAT_Master_SoftMotion.GetCurrentTimeInCycle(pusTime := uliTicRaw);
+lrTicUs := ULINT_TO_LREAL(uliTicRaw) / 1000.0;
+GVL.EcTicUsMax := MAX(GVL.EcTicUsMax, lrTicUs);
+lrTicLo := MIN(lrTicLo, lrTicUs);
+lrTicHi := MAX(lrTicHi, lrTicUs);
+iTicN := iTicN + 1;
+IF iTicN >= 500 THEN
+    GVL.EcTicTrMin[GVL.EcTicIdx] := LREAL_TO_REAL(lrTicLo);
+    GVL.EcTicTrMax[GVL.EcTicIdx] := LREAL_TO_REAL(lrTicHi);
+    GVL.EcTicIdx := (GVL.EcTicIdx + 1) MOD 20;
+    iTicN := 0;
+    lrTicLo := 1.0E9;
+    lrTicHi := 0;
+END_IF;
+GVL.EcTicHist[LIMIT(0, LREAL_TO_INT(lrTicUs / 100.0 - 0.5), 9)] := GVL.EcTicHist[LIMIT(0, LREAL_TO_INT(lrTicUs / 100.0 - 0.5), 9)] + 1;
+
+// ---- Drives' 0x1C32:0B / :20 by SDO, one after the other ----
+// steps 0..5: drive (step / 2), subindex 0x0B (even) / 0x20 (odd); a
+// pause of 200 cycles between reads.
+IF iSdoWait > 0 THEN
+    iSdoWait := iSdoWait - 1;
+ELSE
+    CASE iSdoStep / 2 OF
+        0: uiSdoDev := 1002;
+        1: uiSdoDev := 1003;
+    ELSE
+        uiSdoDev := 1005;
+    END_CASE;
+    bySdoSub := SEL((iSdoStep MOD 2) = 0, 16#20, 16#0B);
+    fbSdo(xExecute := TRUE, usiCom := 1, uiDevice := uiSdoDev, wIndex := 16#1C32,
+          bySubindex := bySdoSub, udiTimeOut := 500);
+    IF fbSdo.xDone OR fbSdo.xError THEN
+        IF fbSdo.xDone THEN
+            diSdoVal := BYTE_TO_DINT(fbSdo.abyData[1]) + BYTE_TO_DINT(fbSdo.abyData[2]) * 256;
+        ELSE
+            diSdoVal := -1;
+            GVL.EcSdoErr := TO_DINT(fbSdo.eError);
+        END_IF;
+        IF (iSdoStep MOD 2) = 0 THEN
+            GVL.DrvSmMissed[iSdoStep / 2] := diSdoVal;
+        ELSE
+            GVL.DrvSyncErr[iSdoStep / 2] := diSdoVal;
+        END_IF;
+        fbSdo(xExecute := FALSE);
+        iSdoStep := (iSdoStep + 1) MOD 6;
+        iSdoWait := 200;
+    END_IF;
 END_IF;
