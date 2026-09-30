@@ -83,6 +83,7 @@ The setting is kept at **50** (`jobs/templates/set_ec_sync_offset.py`,
   the first scan.
 - Delta: **virtual** (runtime mask 7), powered off (FSM UnInited). The arm
   was left at about X −50 Y −50 Z 0, held by the gearboxes (no brakes).
+- **Modbus RTU branch disabled** (section 6b).
 - **The group was enabled in virtual mode** (dry runs of pulse_test and the
   batch rounds). Before the real tests, run `rpc.py install --on-site` again
   (delta off), then `joint_bench.py real`, then power up and home. Otherwise
@@ -175,6 +176,40 @@ square path:
   with `plc_send_many_abort` and the delta powered off.
 - **0x1C32:0B on station 1002** (the reel drive) reads 16960. It is not a
   counter and not a delta drive; the delta drives are 1003-1005.
+
+## 6b. Task review (2026-09-30 evening)
+
+Task configuration:
+
+| Task | Priority | Interval | Watchdog | Contents |
+|---|---|---|---|---|
+| EtherCAT_Task | 0 | 1 ms | 2 ms | AxisGroupSM, PRG_EcatEsp, PRG_EcatStepper, PRG_SimIo, PRG_EventLog, plus SoftMotion interpolation and IO |
+| SoftMotion_PlanningTask | 5 | 1 ms | off | Group path planning |
+| Comm | 20 | 1 ms | off | TCP_MSGPAK_Server, PRG_MbProbe, PRG_EcatEspHttp; the Modbus RTU bus cycle (async) |
+
+The priority order is right.
+
+**Comm task.** It sometimes took 3.5-4.8 ms. Its POUs never took more than
+~0.5 ms. The rest, ~1.7 ms about once a second, was outside the POUs:
+- The Modbus feeder link fails: SmartBowlFeeder `RESPONSE_CRC_FAIL`,
+  0 slaves communicating, re-initialising each 1000 ms response timeout.
+- **Modbus disabled** (`jobs/templates/set_modbus_enabled.py`, `ENABLE`) at idle:
+  - time outside the POUs: max 1704 -> 203 us;
+  - scans over 500 us outside the POUs: 32 -> 0;
+  - Comm max: 1727 -> 625 us.
+- Modbus disabled, on the virtual square: Comm max 768 us (was 3500-4800).
+- Profile keys in EC_STATS: `cs0..2` / `cb0..2` / `co0..2` / `cscan` /
+  `ctask` / `cout` / `cout500`.
+- **Open:** fix the feeder link (baud 19200 / parity / stop bits / station /
+  RS-485 wiring) before re-enabling it, if production needs the feeder over
+  Modbus.
+
+**Later clean-up (ask the owner first).**
+- Move non-real-time work out of EtherCAT_Task: host packet parsing, event
+  log, EasyCAT, stepper, SimIo, the diagnostics. Load today: avg 17 %,
+  max 36 % of the cycle.
+- Remove leftovers: PRG_MbProbe, PRG_EcatEspHttp, PRG_EcatStepper,
+  PRG_SimIo if unused, and `biSetPos`.
 
 ## 7. Scope recordings (owner's PC)
 
