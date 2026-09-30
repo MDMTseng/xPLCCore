@@ -17,6 +17,12 @@ MASTER = "EtherCAT_Master_SoftMotion"
 WANT = "50"
 
 
+# >= 60 wedged the PLC's EtherCAT layer (2026-09-30: SyncOffset 70 reached
+# OP, then the master / NIC died; only a PLC restart recovered it).
+if int(WANT) > 50:
+    raise SystemExit("REFUSED: SyncOffset %s > 50 wedges the PLC's EtherCAT layer" % WANT)
+
+
 def t(v):
     try:
         if isinstance(v, unicode):

@@ -1,28 +1,28 @@
-"""Slow square on the real delta through the UI's link (standalone UI with
-XPLC_HARNESS=1): up to Z0, then the corners of a square (+-HALF mm in X
-and Y at Z0), a dip to Z DIP at each corner, back to X0 Y0 Z0. Exact stops
-(Cor 0), one G1 at a time, waiting for the motion to stop.
+"""Square (or line) paths for the delta through the UI's link (standalone UI
+with XPLC_HARNESS=1): up to Z0, then the corners of a square (+-HALF mm in X
+and Y at Z0) with a dip to Z DIP at each corner, back to X0 Y0 Z0.
 
-    python tools/square_dip.py [--half 50] [--dip -15] [--f 30] [--acc A] [--jerk J]
+    python tools/square_dip.py [--half 50] [--dip -15] [--f 30] [--acc A] [--jerk J] [--owner-ok]
+    python tools/square_dip.py --continuous [--minutes N] [--batch 8] [--path line] [--cor 14] ...
+
+Modes:
+- Default: one G1 at a time, exact stops.
+- --continuous: the whole path queued and blended.
+- --minutes: a background stream (plc_stream_*), with EC_STATS / DEM_STATS
+  logged every 10 s.
+- --batch N: production-like rounds of N G1s, each run to a stop.
+
+A real delta needs --owner-ok (machine.py).
 """
 
 import argparse
-import os
-import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "sim"))
-sys.argv, _argv = sys.argv[:1], sys.argv
-import run_virtual as rv  # noqa: E402
-sys.argv = _argv
+import machine as mc
+from machine import log
 
-
-def log(*a):
-    print(time.strftime("%H:%M:%S"), *a, flush=True)
-
-
-def plc(pkt, timeout_ms=5000):
-    return rv.push("plc_send", {"pkt": pkt, "timeoutMs": timeout_ms}, timeout=timeout_ms / 1000 + 5)
+rv = mc          # rv.push(...) below goes through machine.push
+plc = mc.plc
 
 
 def main():
@@ -47,7 +47,10 @@ def main():
     ap.add_argument("--loops", type=int, default=1, help="laps of the square before going home")
     ap.add_argument("--acc", type=float, help="mm/s^2 (default F*10)")
     ap.add_argument("--jerk", type=float, help="mm/s^3 (default ACC*10)")
+    ap.add_argument("--owner-ok", action="store_true", help="the owner OK'd moving the real delta")
     a = ap.parse_args()
+    if not mc.is_delta_virtual():
+        mc.require_owner_ok(a.owner_ok)
     st = plc({"type": "SYS", "cmd": "GA_EV", "ev": 0})["st_str"]
     if st != "Ready":
         raise SystemExit("FSM %s, not Ready" % st)

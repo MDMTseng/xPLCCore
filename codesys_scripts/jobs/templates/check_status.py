@@ -1,3 +1,11 @@
+# -*- coding: ascii -*-
+# Log in to the application and print a few TCP server / FSM status
+# variables. Logs in with OnlineChangeOption.Try: run it only when the
+# project matches what the PLC runs (plc_guard), or the login may online-
+# change the PLC.
+#
+#   rpc.py exec --file jobs/templates/check_status.py
+
 proj = projects.primary
 app = proj.active_application
 oapp = online.create_online_application(app)
