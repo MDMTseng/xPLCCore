@@ -75,6 +75,7 @@ A-only G1) saves about 0.08 s at 8 turns/s.
 | `tools/a_axis_test.py` | A moves, positions, peaks against the limits |
 | `tools/a_speed_compare.py` | motion time per part, with / without A rotations (`--held-only` for a group without A) |
 | `tools/a_blend_stress.py` | queued blended G1s with A, many rounds: FSM, A end position, task times |
+| `tools/intewell_watch.py` | logs the PLC's RTOS task table / cpuuse over telnet, for post-mortem of a hang |
 | `tools/limit_test.py` | back-and-forth strokes at absurd dynamics: limits hold? |
 | `tools/reel_real_test.py` | the reel: cell count, odometer, fault mid move |
 | `tools/ec_stress.py` | EtherCAT / task timing under load (`--rounds N`) |
@@ -165,10 +166,35 @@ The sim does not reproduce it: `tools/a_blend_stress.py --rounds 200`
 the RTOS (Intewell, fixed task stacks), the real A drive path
 (GenericDSP402 in the EtherCAT task; the sim's A is virtual).
 
-After the power cycle the PLC boots this build. Options: rerun the hang
-sequence while watching the Intewell shell (`task`, `cpuuse`), or roll
-back with snapshot `jobs/snapshots/20260929-225357_sm3_420.project` (SM3
-4.18, Kin_CAxis, /10) and the previous PLC sources (git d62b891^).
+Reproduced 2026-09-30 08:32 after the owner's power cycle. The PLC
+booted the 4.20 build: FSM UnInited, EtherCAT OK, task times normal
+(EtherCAT avg 85 / max 305 us). `a_axis_test.py` was rerun with
+`tools/intewell_watch.py` logging the RTOS task table every ~1 s and
+`cpuuse` every 5 s over telnet. It hung at the same step:
+- All single moves were exact again: A only, X + A in one G1, sticky A.
+  These are Cor 0 moves, no blending.
+- Then the 5 queued Cor 45 G1s were sent (08:32:38). The msgpack
+  connection closed. The shell answered until 08:32:36 and was gone by
+  08:32:40.
+- The last blocks (08:32:33-36) show nothing unusual: all tasks in their
+  normal state, idle 95-98 %. The crash took the whole OS (shell,
+  tcp/ip) within ~2 s of the first blended G1; a 1 s log cannot show more.
+- The per-task tick counts are lumpy (a task gets ~1 s of ticks in one
+  block, then 0), so they cannot pin down which task ran away.
+
+So: deterministic on the machine (2 of 2), at the first blended
+(BlendingNext) movement with A as additional axis on SM3 4.20; not on the
+sim (Windows, 200 rounds). Production blends every G1 (Cor 45), so this
+build cannot run production. The 4.18 build blended for months; its one
+earlier hang is not known to be the same trigger.
+
+Next (each hang costs a power cycle), to split the cause:
+1. 4.20 build, queued Cor 45 G1s without A: blending in 4.20 itself?
+2. 4.20 build, queued Cor 0 G1s with A: queueing with A, no blend?
+Or roll back to the 4.18 build (snapshot
+`jobs/snapshots/20260929-225357_sm3_420.project`, sources at git
+d62b891^) and keep Kin_CAxis with /10: the same speed (see the A/B
+table).
 
 ## Shorter A rotations in the cycle (2026-09-29, sim)
 
