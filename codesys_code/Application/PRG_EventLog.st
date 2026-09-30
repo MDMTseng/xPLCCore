@@ -51,6 +51,19 @@ VAR
     diTapVelPrev : ARRAY[0..2] OF DINT;
     diTapVel    : DINT;
     diTapD2     : DINT;
+    diDem       : DINT;
+    diDemPrev   : ARRAY[0..2] OF DINT;
+    diDemVelPrev : ARRAY[0..2] OF DINT;
+    diDemVel    : DINT;
+    diTHist     : ARRAY[0..2, 0..3] OF DINT;    // sent target, this cycle .. 3 cycles before
+    iLag        : INT;
+    iLagHit     : INT;
+    lrFe        : LREAL;
+    lrFePrev    : ARRAY[0..3] OF LREAL;
+    iFeValid    : ARRAY[0..3] OF INT;
+    iFeK        : INT;
+    pAxFe       : POINTER TO AXIS_REF_SM3;
+    lrFeJ       : LREAL;
     uiEspLatePrevMs : UINT;
     udiEspSecPrev   : UDINT;
     // Cycle position and the drives' SM-event counters (GVL.EcTic*, Drv*).
@@ -190,8 +203,18 @@ IF GVL.EcProfReset THEN
         GVL.TapEqNow[iProf] := 0;
         GVL.TapEqPrev[iProf] := 0;
         GVL.TapEqNone[iProf] := 0;
+        GVL.DemStale[iProf] := 0;
+        GVL.DemGlitch[iProf] := 0;
+        GVL.DemD2Max[iProf] := 0;
+        FOR iLag := 0 TO 4 DO
+            GVL.DemLag[iProf, iLag] := 0;
+        END_FOR;
     END_FOR;
     GVL.EcTicUsMax := 0;
+    FOR iFeK := 0 TO 3 DO
+        GVL.FeJumpMax[iFeK] := 0;
+        GVL.FeJumpCount[iFeK] := 0;
+    END_FOR;
     GVL.EspArrMaxPeak := 0;
     GVL.EspLateSum := 0;
     GVL.EspStale0 := GVL.EspStale;
@@ -292,6 +315,37 @@ FOR iProf := 0 TO 2 DO
             GVL.TapEqNone[iProf] := GVL.TapEqNone[iProf] + 1;
         END_IF;
     END_IF;
+    // The drive's own demand (0x6062) against the targets we sent.
+    CASE iProf OF
+        0: diDem := GVL.DemandTap0;
+        1: diDem := GVL.DemandTap1;
+    ELSE
+        diDem := GVL.DemandTap2;
+    END_CASE;
+    diTHist[iProf, 3] := diTHist[iProf, 2];
+    diTHist[iProf, 2] := diTHist[iProf, 1];
+    diTHist[iProf, 1] := diTHist[iProf, 0];
+    diTHist[iProf, 0] := diTap;
+    diDemVel := diDem - diDemPrev[iProf];
+    IF iSetValid[iProf] >= 2 THEN
+        iLagHit := 4;
+        FOR iLag := 3 TO 0 BY -1 DO
+            IF diDem = diTHist[iProf, iLag] THEN
+                iLagHit := iLag;
+            END_IF;
+        END_FOR;
+        GVL.DemLag[iProf, iLagHit] := GVL.DemLag[iProf, iLagHit] + 1;
+        IF (diDemVel = 0) AND (ABS(diTHist[iProf, 1] - diTHist[iProf, 2]) > 50) THEN
+            GVL.DemStale[iProf] := GVL.DemStale[iProf] + 1;
+            GVL.DemLastStaleMs[iProf] := udiNow;
+        END_IF;
+        GVL.DemD2Max[iProf] := MAX(GVL.DemD2Max[iProf], ABS(diDemVel - diDemVelPrev[iProf]));
+        IF ABS(diDemVel - diDemVelPrev[iProf]) > GVL.DiGlitchThresh THEN
+            GVL.DemGlitch[iProf] := GVL.DemGlitch[iProf] + 1;
+        END_IF;
+    END_IF;
+    diDemPrev[iProf] := diDem;
+    diDemVelPrev[iProf] := diDemVel;
     diTapPrev[iProf] := diTap;
     diTapVelPrev[iProf] := diTapVel;
     lrVelPrev[iProf] := lrV;
@@ -323,6 +377,39 @@ IF udiNow - udiEspSecPrev >= 1000 THEN
     udiEspSecPrev := udiNow;
     GVL.EspLateSum := GVL.EspLateSum + GVL.EspLate;
 END_IF;
+
+// ---- Feedback check: following-error jumps (GVL.FeJump*) ----
+FOR iFeK := 0 TO 3 DO
+    CASE iFeK OF
+        0: pAxFe := ADR(IoConfig_Globals.EAxis0);
+        1: pAxFe := ADR(IoConfig_Globals.EAxis1);
+        2: pAxFe := ADR(IoConfig_Globals.EAxis2);
+    ELSE
+        pAxFe := ADR(IoConfig_Globals.reelpullmotor);
+    END_CASE;
+    lrFe := pAxFe^.fSetPosition - pAxFe^.fActPosition;
+    IF pAxFe^.bVirtual OR pAxFe^.nAxisState = SMC_AXIS_STATE.power_off
+       OR pAxFe^.nAxisState = SMC_AXIS_STATE.errorstop THEN
+        iFeValid[iFeK] := 0;
+    ELSIF iFeValid[iFeK] < 2 THEN
+        iFeValid[iFeK] := iFeValid[iFeK] + 1;
+    ELSE
+        // Modulo axes (the reel, 200 mm): set and actual wrap in different
+        // cycles, so fe steps by one period there -- take it out.
+        lrFeJ := lrFe - lrFePrev[iFeK];
+        IF (pAxFe^.fPositionPeriod > 0) AND (lrFeJ > pAxFe^.fPositionPeriod / 2) THEN
+            lrFeJ := lrFeJ - pAxFe^.fPositionPeriod;
+        ELSIF (pAxFe^.fPositionPeriod > 0) AND (lrFeJ < -pAxFe^.fPositionPeriod / 2) THEN
+            lrFeJ := lrFeJ + pAxFe^.fPositionPeriod;
+        END_IF;
+        GVL.FeJumpMax[iFeK] := MAX(GVL.FeJumpMax[iFeK], ABS(lrFeJ));
+        IF ABS(lrFeJ) > GVL.FeJumpThresh[iFeK] THEN
+            GVL.FeJumpCount[iFeK] := GVL.FeJumpCount[iFeK] + 1;
+            GVL.FeLastJumpMs[iFeK] := udiNow;
+        END_IF;
+    END_IF;
+    lrFePrev[iFeK] := lrFe;
+END_FOR;
 
 // ---- EtherCAT master frame statistics (GVL.EcLostFrames etc.) ----
 IF GVL.EcStatsClear THEN

@@ -231,8 +231,58 @@ Location: `C:\Users\PC\Desktop\新增資料夾 (2)\`, EAxis0, 8 kHz.
 Counts are from `tools/asda_scope.py` (1 ms: `--cycle-ms 1`; 2 ms runs:
 `--cycle-ms 2`).
 
+## 7b. New on-PLC check: the drive's own position demand (2026-09-30 night)
+
+The owner's idea: the ASDA can send back the command it actually uses, so
+the check needs no scope and lives in CODESYS.
+
+**Mapping change.** 0x6062 Position demand value is PDO-mappable on the B3-E
+(ESI: PdoMapping T), and the TxPDOs are not fixed.
+- `jobs/templates/set_drive_demand_pdo.py` puts 0x6062 into TxPDO 0x1A01 (the
+  one assigned to SM3) in place of 0x60BA, the touch probe position. Both are
+  32 bit and 0x60BA is unused here.
+- The job edits the entry's struct field (`prm[0].value`); assigning the whole
+  struct is refused.
+- `RESTORE = True` undoes it.
+- Downloaded 2026-09-30 23:07: all slaves reached OP with the new mapping.
+- The IEC channel keeps its name "Touch Probe Pos1 Pos Value".
+
+**PLC side** (read-only AT taps, `GVL.st`):
+- `DemandTap0/1/2 AT %ID13/19/25`: the drive's 0x6062.
+- `ActualTap0/1/2 AT %ID10/16/22`: 0x6064, a live check. It read the arm's
+  real joint angles (−1.86 / −32.6 / −43.3 deg) while the demand read 0 with
+  the drives off.
+
+**Comparison** (`PRG_EventLog`, EC_STATS with `dem:1`), per cycle, per drive:
+- `dl{k}_{n}`: cycles where the demand equals the target we sent n = 0..3
+  cycles before; `_4` is none of them. This shows the drive's normal delay.
+- `ds{k}`: cycles where our target moved but the demand did not, i.e. stale.
+  `dlt{k}` is the PLC ms of the last one.
+- `dgl{k}` / `dmx{k}`: |d2(demand)| over `DiGlitchThresh` / its max.
+
+**Open.**
+- Is 0x6062 in CSP the received target, or an interpolated point? The lag
+  histogram tells on the first real run.
+- If it is interpolated or offset, adapt the comparison; `ds` (no motion of
+  the demand while the target moves) should hold either way.
+
+**Also tonight.**
+- Following-error jump monitor (`fj`/`fm`/`fl` 0..3; 3 = reel,
+  modulo-corrected).
+- On the reel (vendor 0xA79, not Delta) at 400 mm/s, fe jumps went up to
+  0.44-0.48 mm, about one cycle's travel.
+- Inconclusive: fe jumps mix real stumbles with feedback latch jitter. That
+  is why the demand readback matters.
+
 ## 8. Next tests
 
+0. **First look at the demand readback.**
+   - Delta real, homed, then any slow motion (pulse_test).
+   - Read EC_STATS with `dem:1`: which lag bin fills (the drive's delay), and
+     whether `ds` counts.
+   - With the ASDA scope recording at the same time, match `dlt` to the scope's
+     stale events.
+   - If they match, the scope is no longer needed.
 1. **Constant-pulse single joint (first, with the owner at the machine
    recording EAxis0).**
    - Command: `python tools/joint_bench.py real`, home to Ready, then

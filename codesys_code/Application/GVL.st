@@ -303,6 +303,37 @@ VAR_GLOBAL
 	TapEqNow        : ARRAY[0..2] OF UDINT;
 	TapEqPrev       : ARRAY[0..2] OF UDINT;
 	TapEqNone       : ARRAY[0..2] OF UDINT;
+	(* The drives' own position demand (0x6062, mapped into TxPDO 0x1A01 in
+	   place of the touch probe position; jobs/templates/set_drive_demand_pdo.py):
+	   what each ASDA's control loop actually uses, read back every cycle.
+	   Compared with the target we sent (TapTarget): DemLag[k, n] counts
+	   cycles where the demand equals the target of n cycles before
+	   (n = 0..3), DemLag[k, 4] none of them; DemStale = cycles where the
+	   target moved but the demand did not; DemGlitch = |d2(demand)| >
+	   DiGlitchThresh. Reset with EcProfReset. *)
+	DemandTap0      AT %ID13 : DINT;
+	DemandTap1      AT %ID19 : DINT;
+	DemandTap2      AT %ID25 : DINT;
+	ActualTap0      AT %ID10 : DINT;    (* EAxis0 drive's Position actual 0x6064, same PDO: a live check *)
+	ActualTap1      AT %ID16 : DINT;
+	ActualTap2      AT %ID22 : DINT;
+	DemLag          : ARRAY[0..2, 0..4] OF UDINT;
+	DemStale        : ARRAY[0..2] OF UDINT;
+	DemGlitch       : ARRAY[0..2] OF UDINT;
+	DemD2Max        : ARRAY[0..2] OF DINT;
+	DemLastStaleMs  : ARRAY[0..2] OF UDINT;
+	(* Feedback check, the owner's way of seeing the skips (a CODESYS trace
+	   of the drive's actual position shows a stumble): per cycle, the
+	   following error fe = fSetPosition - fActPosition of EAxis0/1/2 (0..2)
+	   and the reel (3). The set values are smooth, so a jump of fe from
+	   one cycle to the next means the drive's position did not follow
+	   (a stale target inside the drive). FeJumpMax = max |fe - fe_prev|
+	   (axis units: deg / mm), FeJumpCount = cycles over FeJumpThresh.
+	   Reset with EcProfReset. *)
+	FeJumpThresh    : ARRAY[0..3] OF LREAL := [0.05, 0.05, 0.05, 0.1];
+	FeJumpMax       : ARRAY[0..3] OF LREAL;
+	FeJumpCount     : ARRAY[0..3] OF UDINT;
+	FeLastJumpMs    : ARRAY[0..3] OF UDINT;
 	(* Bus timing probe on the EasyCAT (last slave on the wire, DC-synced
 	   like the drives; firmware/easycat_esp32): the PLC writes a cycle
 	   counter to its outputs 8-11 each EtherCAT cycle; the ESP32 reads it

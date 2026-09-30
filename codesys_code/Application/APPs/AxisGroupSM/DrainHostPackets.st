@@ -581,9 +581,51 @@ END_IF;
                 MessagePackerFb.PackKvLint(ADR('cb2'), UDINT_TO_LINT(GVL.CommSegBusCyc[2]));
                 MessagePackerFb.PackKvLint(ADR('co2'), UDINT_TO_LINT(GVL.CommSegOver1ms[2]));
                 MessagePackerFb.PackKvReal(ADR('cscan'), LREAL_TO_REAL(GVL.CommScanUsMax));
+                // fj0..3 / fm0..3 / fl0..3: following-error jumps (EAxis0..2, reel): count, max, PLC ms of the last
+                MessagePackerFb.PackKvLint(ADR('fj0'), UDINT_TO_LINT(GVL.FeJumpCount[0]));
+                MessagePackerFb.PackKvReal(ADR('fm0'), LREAL_TO_REAL(GVL.FeJumpMax[0]));
+                MessagePackerFb.PackKvLint(ADR('fl0'), UDINT_TO_LINT(GVL.FeLastJumpMs[0]));
+                MessagePackerFb.PackKvLint(ADR('fj1'), UDINT_TO_LINT(GVL.FeJumpCount[1]));
+                MessagePackerFb.PackKvReal(ADR('fm1'), LREAL_TO_REAL(GVL.FeJumpMax[1]));
+                MessagePackerFb.PackKvLint(ADR('fl1'), UDINT_TO_LINT(GVL.FeLastJumpMs[1]));
+                MessagePackerFb.PackKvLint(ADR('fj2'), UDINT_TO_LINT(GVL.FeJumpCount[2]));
+                MessagePackerFb.PackKvReal(ADR('fm2'), LREAL_TO_REAL(GVL.FeJumpMax[2]));
+                MessagePackerFb.PackKvLint(ADR('fl2'), UDINT_TO_LINT(GVL.FeLastJumpMs[2]));
+                MessagePackerFb.PackKvLint(ADR('fj3'), UDINT_TO_LINT(GVL.FeJumpCount[3]));
+                MessagePackerFb.PackKvReal(ADR('fm3'), LREAL_TO_REAL(GVL.FeJumpMax[3]));
+                MessagePackerFb.PackKvLint(ADR('fl3'), UDINT_TO_LINT(GVL.FeLastJumpMs[3]));
                 MessagePackerFb.PackKvReal(ADR('ctask'), LREAL_TO_REAL(GVL.CommTaskUsMax));
                 MessagePackerFb.PackKvReal(ADR('cout'), LREAL_TO_REAL(GVL.CommOutsideUsMax));
                 MessagePackerFb.PackKvLint(ADR('cout500'), UDINT_TO_LINT(GVL.CommOutsideOver500));
+                IF MessageUnpackerFb.TryReadINT64('dem', 0) <> 0 THEN   // drive demand (0x6062) check, on request
+                    MessagePackerFb.PackKvLint(ADR('ds0'), UDINT_TO_LINT(GVL.DemStale[0]));
+                    MessagePackerFb.PackKvLint(ADR('dgl0'), UDINT_TO_LINT(GVL.DemGlitch[0]));
+                    MessagePackerFb.PackKvDint(ADR('dmx0'), GVL.DemD2Max[0]);
+                    MessagePackerFb.PackKvLint(ADR('dlt0'), UDINT_TO_LINT(GVL.DemLastStaleMs[0]));
+                    MessagePackerFb.PackKvLint(ADR('dl0_0'), UDINT_TO_LINT(GVL.DemLag[0, 0]));
+                    MessagePackerFb.PackKvLint(ADR('dl0_1'), UDINT_TO_LINT(GVL.DemLag[0, 1]));
+                    MessagePackerFb.PackKvLint(ADR('dl0_2'), UDINT_TO_LINT(GVL.DemLag[0, 2]));
+                    MessagePackerFb.PackKvLint(ADR('dl0_3'), UDINT_TO_LINT(GVL.DemLag[0, 3]));
+                    MessagePackerFb.PackKvLint(ADR('dl0_4'), UDINT_TO_LINT(GVL.DemLag[0, 4]));
+                    MessagePackerFb.PackKvLint(ADR('ds1'), UDINT_TO_LINT(GVL.DemStale[1]));
+                    MessagePackerFb.PackKvLint(ADR('dgl1'), UDINT_TO_LINT(GVL.DemGlitch[1]));
+                    MessagePackerFb.PackKvDint(ADR('dmx1'), GVL.DemD2Max[1]);
+                    MessagePackerFb.PackKvLint(ADR('dlt1'), UDINT_TO_LINT(GVL.DemLastStaleMs[1]));
+                    MessagePackerFb.PackKvLint(ADR('dl1_0'), UDINT_TO_LINT(GVL.DemLag[1, 0]));
+                    MessagePackerFb.PackKvLint(ADR('dl1_1'), UDINT_TO_LINT(GVL.DemLag[1, 1]));
+                    MessagePackerFb.PackKvLint(ADR('dl1_2'), UDINT_TO_LINT(GVL.DemLag[1, 2]));
+                    MessagePackerFb.PackKvLint(ADR('dl1_3'), UDINT_TO_LINT(GVL.DemLag[1, 3]));
+                    MessagePackerFb.PackKvLint(ADR('dl1_4'), UDINT_TO_LINT(GVL.DemLag[1, 4]));
+                    MessagePackerFb.PackKvLint(ADR('ds2'), UDINT_TO_LINT(GVL.DemStale[2]));
+                    MessagePackerFb.PackKvLint(ADR('dgl2'), UDINT_TO_LINT(GVL.DemGlitch[2]));
+                    MessagePackerFb.PackKvDint(ADR('dmx2'), GVL.DemD2Max[2]);
+                    MessagePackerFb.PackKvLint(ADR('dlt2'), UDINT_TO_LINT(GVL.DemLastStaleMs[2]));
+                    MessagePackerFb.PackKvLint(ADR('dl2_0'), UDINT_TO_LINT(GVL.DemLag[2, 0]));
+                    MessagePackerFb.PackKvLint(ADR('dl2_1'), UDINT_TO_LINT(GVL.DemLag[2, 1]));
+                    MessagePackerFb.PackKvLint(ADR('dl2_2'), UDINT_TO_LINT(GVL.DemLag[2, 2]));
+                    MessagePackerFb.PackKvLint(ADR('dl2_3'), UDINT_TO_LINT(GVL.DemLag[2, 3]));
+                    MessagePackerFb.PackKvLint(ADR('dl2_4'), UDINT_TO_LINT(GVL.DemLag[2, 4]));
+                END_IF;
                 IF MessageUnpackerFb.TryReadINT64('obj', 0) <> 0 THEN  // long text: only on request
                     // o0..o2: drive k's sync objects (DrvObj), "v,v,..." text
                     FOR EcTrI := 0 TO 2 DO
