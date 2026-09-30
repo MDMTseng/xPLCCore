@@ -467,3 +467,13 @@ Proposed for production: x1.5 (4320 deg/s, 97 200 deg/s^2, 2.9e6
 deg/s^3; `set_axis_limits.py` 432 / 9720 / 291 600 u). Its acceleration,
 i.e. the torque needed, is 56 % of the limit's; the rest is margin for
 heat and supply.
+
+**Set 2026-09-30:** A at x1.5, `set_axis_limits.py` 432 / 9720 / 291 600 u,
+downloaded to the machine. Motors page at x1 (= the new limits): 180 deg
+in 0.126 s per move (was 0.190), peaks v 66 % a 92 %. Not yet re-run:
+the production flow at the new A limits.
+
+Seen on the way: after the 48.8 s download the standalone UI did not
+reconnect by itself (`tcpConnected` stayed false, the PLC accepted other
+clients); `disconnect_tcp` + `connect_tcp` through the harness brought it
+back. The UI's auto-reconnect after a long outage needs a look.

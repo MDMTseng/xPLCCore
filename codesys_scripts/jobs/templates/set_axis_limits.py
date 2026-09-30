@@ -9,8 +9,12 @@
 #     no joint reached them. So: 1160 deg/s (the ASDA-B3's ~6000 rpm), 100
 #     000 deg/s^2, 1e7 deg/s^3 -- the same motion time as before (was 100
 #     000 / 800 000 / 1e7: no limit).
-#   group A (1 u = 10 deg, the /10 wrap trick in the scaling): production
-#     reached 92-97 % of 288 u/s, 4320 u/s^2 -- kept.
+#   group A (1 u = 10 deg, the /10 wrap trick in the scaling): x1.5 (time
+#     scale: v x 1.5, a x 2.25, j x 3.375) of the former 288 u/s, 4320
+#     u/s^2, 86 400 u/s^3 -> 432 / 9720 / 291 600 u = 4320 deg/s (720
+#     rpm), 97 200 deg/s^2. The owner found x2 to be where A starts losing
+#     steps (Motors page, driver current 0.62 A by its hardware switch,
+#     2026-09-30); x1.5 needs 56 % of that torque.
 #   reel (mm): the production move TAPE.REEL_MOVE, 5000 mm/s, 100 000
 #     mm/s^2, 1e5 mm/s^3.
 #
@@ -20,7 +24,7 @@ LIMITS = {
     "EAxis0": {"fSWMaxVelocity": "1160", "fSWMaxAcceleration": "100000", "fSWMaxDeceleration": "100000", "fSWMaxJerk": "10000000"},
     "EAxis1": {"fSWMaxVelocity": "1160", "fSWMaxAcceleration": "100000", "fSWMaxDeceleration": "100000", "fSWMaxJerk": "10000000"},
     "EAxis2": {"fSWMaxVelocity": "1160", "fSWMaxAcceleration": "100000", "fSWMaxDeceleration": "100000", "fSWMaxJerk": "10000000"},
-    "SM_Drive_GenericDSP402": {"fSWMaxVelocity": "288", "fSWMaxAcceleration": "4320", "fSWMaxDeceleration": "4320", "fSWMaxJerk": "86400"},
+    "SM_Drive_GenericDSP402": {"fSWMaxVelocity": "432", "fSWMaxAcceleration": "9720", "fSWMaxDeceleration": "9720", "fSWMaxJerk": "291600"},
     "reelpullmotor": {"fSWMaxVelocity": "5000", "fSWMaxAcceleration": "100000", "fSWMaxDeceleration": "100000", "fSWMaxJerk": "100000"},
 }
 
