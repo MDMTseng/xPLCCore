@@ -411,6 +411,8 @@ VAR_GLOBAL
 	FlyEventDefaultTtlMs : DINT := 10000;
 	(* SYS FLUSH commands handled (fly events, waits, TAPE sequence). *)
 	FlushCmdCount : UDINT := 0;
+	(* SYS SET_AXIS_LIMITS accepted (run-time limits, motor limit test). *)
+	AxisLimitSetCount : UDINT := 0;
 
 	(* SCRATCHPAD_WRITE partial-write rejection. The §4(2) wire contract
 	   requires the host to send ALL 5 fields per write (plan_id,

@@ -410,3 +410,43 @@ Checked on the machine:
 
 The group keeps its transform through UnInited: the readback stays at 60
 while the FSM is reset.
+
+## Motors page: settings and the A limit test (2026-09-30)
+
+A new UI tab "Motors" (`components/MotorTestPage.tsx`, logic in
+`lib/motors.ts`).
+
+- **Settings table**, for every axis (PLC SYS `AXIS_INFO`): mode, state,
+  position, units per motor turn, limits in force and as downloaded
+  (yellow when they differ), motor rpm at the velocity limit, and peaks
+  since reset. A is shown in degrees (1 u = 10 deg).
+- **A limit test**: set v / a / j in degrees, swing and cycles; "Run
+  test" sets the limits (SYS `SET_AXIS_LIMITS`), brings the FSM to
+  Ready, and turns A back and forth from and back to 0. Only A moves;
+  the first G1 goes to the arm's actual TCP. The result table shows
+  time per move and peaks against the limits.
+- **Ladder**: factors (e.g. 1, 1.25, 1.5, 2), in time scale (v x f,
+  a x f^2, j x f^3) or all x f. After each step the page asks whether A
+  is back on its 0 mark (a mark on the nozzle: an open-loop stepper's
+  lost steps are invisible to the PLC). It stops at the first "no" and
+  restores the downloaded limits at the end.
+- Limits set here are run-time only; a download or restart brings back
+  `set_axis_limits.py`'s values. They are set in UnInited: the group
+  planner takes an axis' limits when the group is enabled. Writing them
+  under an enabled group stopped it with GroupErrorStop; set while
+  disabled, the next enable used them (100 u/s -> peak 100.0, 288 ->
+  288.0).
+
+Machine check (`run_virtual.py --plc 192.168.1.70 --motors-test`, via
+the UI harness, real A, delta virtual): all six axes read (delta
+1160 deg/s / 1e5 / 1e7, sf 1 444 704.75 = 2^24 x 31 / 360; A 288 u/s /
+4320 / 86 400, sf 177.78 = 6400 / 36; reel 5000 / 1e5 / 1e5, sf -256).
+A test, 180 deg x 10 moves:
+
+| A limits | s / move | peak v | peak a |
+|---|---|---|---|
+| x1 (2880 deg/s, 43 200, 864 000) | 0.190 (computed 0.188) | 66 % | 94 % |
+| x1.5 time scale (4320, 97 200, 2 916 000) | 0.131 | 66 % | 92 % |
+
+Then restored: 288 / 4320 / 86 400. Whether A kept its steps at x1.5 is
+the operator's check at the mark (not done here).

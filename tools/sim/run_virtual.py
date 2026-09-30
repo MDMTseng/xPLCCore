@@ -470,6 +470,26 @@ class TaskSampler:
                 task, mx[len(mx) // 2], mx[int(len(mx) * 0.9)], mx[-1], over(1000), over(5000), over(10000), sum(av) / len(av)))
 
 
+def motors_test():
+    """The Motors page through the harness: every axis' settings, then the A
+    test at the downloaded limits and at 1.5x (time scale), then restore."""
+    push("set_tab", {"tab": "Motors"}, timeout=10)
+    infos = push("motors_info", timeout=30)
+    names = ["EAxis0", "EAxis1", "EAxis2", "A", "EAXIS_A", "reel"]
+    for k, i in enumerate(infos):
+        if i:
+            log("  %-8s %-7s lim v %8.1f a %9.1f j %11.1f  (downloaded %8.1f %9.1f %11.1f)  sf %.3f" % (
+                names[k], "virtual" if i["virt"] else "real", i["lv"], i["la"], i["lj"], i["cv"], i["ca"], i["cj"], i["sf"]))
+    for label, lim in (("x1", (2880, 43200, 864000)), ("x1.5 time", (4320, 97200, 2916000))):
+        r = push("motors_a_test", {"v": lim[0], "a": lim[1], "j": lim[2], "amplitude": 180, "cycles": 5}, timeout=180)
+        log("  A test %-9s limits(u) v %.0f a %.0f j %.0f: %d moves %.3f s each, peak v %.0f%% a %.0f%%" % (
+            label, r["limits"]["v"], r["limits"]["a"], r["limits"]["j"], r["moves"], r["perMoveS"],
+            r["peakPct"]["v"], r["peakPct"]["a"]))
+    log("  restored:", push("motors_restore", timeout=60))
+    i = push("motors_info", timeout=30)[3]
+    log("  A limits now v %.1f a %.1f j %.1f (downloaded %.1f %.1f %.1f)" % (i["lv"], i["la"], i["lj"], i["cv"], i["ca"], i["cj"]))
+
+
 def override_check():
     """Same square (4 stop-to-stop moves of ~42 mm, and a blended 24-gon)
     at 100 % and 30 %: how do the peaks scale?"""
@@ -820,6 +840,8 @@ def main():
     ap.add_argument("--glitch-at", type=float, default=0,
                     help="N s into the run, glitch the protrusion sensor for --glitch-ms; expect a hold, then resume")
     ap.add_argument("--glitch-ms", type=int, default=3)
+    ap.add_argument("--motors-test", action="store_true",
+                    help="the Motors page: axis settings, A test at x1 and x1.5, restore (A turns; delta must be virtual)")
     ap.add_argument("--jog-test", action="store_true",
                     help="instead of production: compare the jog streamer with the old jog pad")
     ap.add_argument("--di-test", action="store_true",
@@ -904,6 +926,9 @@ def main():
             return
         if a.jog_test:
             jog_test()
+            return
+        if a.motors_test:
+            motors_test()
             return
         if a.override_check:
             override_check()

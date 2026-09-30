@@ -578,6 +578,17 @@ export const cmd = {
    *  ops -> TRIGGER_ERR 101), pending waits and the TAPE sequence (NAK
    *  'flushed'). The FSM is untouched. Ordered with motion packets. */
   Flush: () => env<AckReply & { fly_flushed: number }>({ type: 'SYS', cmd: 'FLUSH' }),
+  /** One axis for the motor limit test: 0-2 delta joints, 3 A, 4 EAXIS_A,
+   *  5 reel. Limits in force (lv/la/ld/lj), as downloaded (cv/ca/cd/cj),
+   *  peaks since reset (pv/pa/pj), increments per unit (sf), the arm's TCP. */
+  AxisInfo: (axis: number, reset_peaks = false) =>
+    env<AckReply & Record<string, any>>({ type: 'SYS', cmd: 'AXIS_INFO', axis, ...(reset_peaks ? { reset_peaks: 1 } : {}) }),
+  /** Run-time axis limits (axis units; not saved). Only in UnInited; the
+   *  group takes them when it is enabled. restore = the downloaded ones. */
+  SetAxisLimits: (axis: number, lim: { v?: number; a?: number; d?: number; j?: number } | 'restore') =>
+    env<AckReply & { lv: number; la: number; ld: number; lj: number }>(
+      lim === 'restore' ? { type: 'SYS', cmd: 'SET_AXIS_LIMITS', axis, restore: 1 }
+        : { type: 'SYS', cmd: 'SET_AXIS_LIMITS', axis, ...compact(lim) }),
   /** TTL (ms) of M4s sent without ttl_ms; negative = never. Reply: in force. */
   SetFlyTtl: (ttl_ms: number) => env<AckReply & { ttl_ms: number }>({ type: 'SYS', cmd: 'SET_FLY_TTL', ttl_ms }),
   // Host timestamp mark in the PLC event log (GVL.EvHead, GET /e on :8126).

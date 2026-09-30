@@ -465,6 +465,14 @@ PROGRAM AxisGroupSM
     // this scan (cleared after them).
     FlushRequested : BOOL;
     UiStaleLatched : BOOL;    // W1 A3 counted for this silent spell
+    // Motor limit test (SYS AXIS_INFO / SET_AXIS_LIMITS), axes as in
+    // PeakAxis: 0-2 EAxis0-2, 3 A (SM_Drive_GenericDSP402), 4 EAXIS_A,
+    // 5 reel. The limits the download configured, captured on the first
+    // scan, so a test can restore them.
+    AxCfgV, AxCfgA, AxCfgD, AxCfgJ : ARRAY[0..5] OF LREAL;
+    AxCfgCaptured : BOOL;
+    AxInfoIdx     : INT;
+    pAx           : POINTER TO AXIS_REF_SM3;
     FlushDropped   : INT;
     // Phase 3: G1 `frame` field. 0=coord0 (default/legacy, MoveLinearAbsolute
     // CoordSystem := WCS), 1=coord1 (Phase 4 step 2: CoordSystem := PCS_1;
@@ -927,6 +935,15 @@ GVL.EcProfT0 := LTIME();
     PeakAxis[3] := ADR(SM_Drive_GenericDSP402);
     PeakAxis[4] := ADR(EAXIS_A);
     PeakAxis[5] := ADR(reelpullmotor);
+    IF NOT AxCfgCaptured THEN
+        FOR PeakIdx := 0 TO 5 DO
+            AxCfgV[PeakIdx] := PeakAxis[PeakIdx]^.fSWMaxVelocity;
+            AxCfgA[PeakIdx] := PeakAxis[PeakIdx]^.fSWMaxAcceleration;
+            AxCfgD[PeakIdx] := PeakAxis[PeakIdx]^.fSWMaxDeceleration;
+            AxCfgJ[PeakIdx] := PeakAxis[PeakIdx]^.fSWMaxJerk;
+        END_FOR;
+        AxCfgCaptured := TRUE;
+    END_IF;
     IF GVL.MotionPeakReset THEN
         FOR PeakIdx := 0 TO 5 DO
             GVL.MotionPeakVel[PeakIdx] := 0;

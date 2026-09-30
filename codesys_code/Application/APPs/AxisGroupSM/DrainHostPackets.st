@@ -433,6 +433,94 @@ END_IF;
                 ResponsePacketPointer^.ele_count := 0;
                 GVL.OverrideFactor := LIMIT(0.01, TO_LREAL(MessageUnpackerFb.TryReadREAL('factor', TO_REAL(GVL.OverrideFactor))), 1.0);
                 MessagePackerFb.PackKvReal(ADR('factor'), TO_REAL(GVL.OverrideFactor));
+            ELSIF (CommandType = 'AXIS_INFO') THEN
+                // One axis (motor limit test page): `axis` 0-5 as PeakAxis
+                // (0-2 delta joints, 3 A, 4 EAXIS_A, 5 reel). Axis units.
+                // lv/la/ld/lj: limits in force; cv/ca/cd/cj: as downloaded;
+                // pv/pa/pj: peaks of the set values since the last reset
+                // (reset_peaks:1 resets all axes, from the next scan); sf:
+                // increments per unit. Order-free SYS ring.
+                ShouldReturn := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                AxInfoIdx := TO_INT(MessageUnpackerFb.TryReadINT64('axis', -1));
+                IF MessageUnpackerFb.TryReadINT64('reset_peaks', 0) <> 0 THEN
+                    GVL.MotionPeakReset := TRUE;
+                END_IF;
+                IF (AxInfoIdx < 0) OR (AxInfoIdx > 5) OR (PeakAxis[0] = 0) THEN
+                    CommandAck := FALSE;
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('bad_axis'));
+                ELSE
+                    CommandAck := TRUE;
+                    pAx := PeakAxis[AxInfoIdx];
+                    MessagePackerFb.PackKvDint(ADR('axis'), AxInfoIdx);
+                    MessagePackerFb.PackKvBool(ADR('virt'), pAx^.bVirtual);
+                    MessagePackerFb.PackKvDint(ADR('st'), TO_DINT(pAx^.nAxisState));
+                    MessagePackerFb.PackKvBool(ADR('err_flag'), pAx^.bError);
+                    MessagePackerFb.PackKvReal(ADR('pos'), LREAL_TO_REAL(pAx^.fSetPosition));
+                    MessagePackerFb.PackKvReal(ADR('act'), LREAL_TO_REAL(pAx^.fActPosition));
+                    MessagePackerFb.PackKvReal(ADR('vel'), LREAL_TO_REAL(pAx^.fSetVelocity));
+                    MessagePackerFb.PackKvReal(ADR('lv'), LREAL_TO_REAL(pAx^.fSWMaxVelocity));
+                    MessagePackerFb.PackKvReal(ADR('la'), LREAL_TO_REAL(pAx^.fSWMaxAcceleration));
+                    MessagePackerFb.PackKvReal(ADR('ld'), LREAL_TO_REAL(pAx^.fSWMaxDeceleration));
+                    MessagePackerFb.PackKvReal(ADR('lj'), LREAL_TO_REAL(pAx^.fSWMaxJerk));
+                    MessagePackerFb.PackKvReal(ADR('cv'), LREAL_TO_REAL(AxCfgV[AxInfoIdx]));
+                    MessagePackerFb.PackKvReal(ADR('ca'), LREAL_TO_REAL(AxCfgA[AxInfoIdx]));
+                    MessagePackerFb.PackKvReal(ADR('cd'), LREAL_TO_REAL(AxCfgD[AxInfoIdx]));
+                    MessagePackerFb.PackKvReal(ADR('cj'), LREAL_TO_REAL(AxCfgJ[AxInfoIdx]));
+                    MessagePackerFb.PackKvReal(ADR('sf'), LREAL_TO_REAL(pAx^.fScalefactor));
+                    MessagePackerFb.PackKvReal(ADR('pv'), LREAL_TO_REAL(GVL.MotionPeakVel[AxInfoIdx]));
+                    MessagePackerFb.PackKvReal(ADR('pa'), LREAL_TO_REAL(GVL.MotionPeakAcc[AxInfoIdx]));
+                    MessagePackerFb.PackKvReal(ADR('pj'), LREAL_TO_REAL(GVL.MotionPeakJerk[AxInfoIdx]));
+                    // The arm's actual TCP in the G1 frame (WCS): a test that
+                    // turns only A starts with a G1 to where the arm is.
+                    MessagePackerFb.PackKvBool(ADR('arm_ok'), ArmPositionValid);
+                    MessagePackerFb.PackKvReal(ADR('arm_x'), LREAL_TO_REAL(ReadPosition.c.X));
+                    MessagePackerFb.PackKvReal(ADR('arm_y'), LREAL_TO_REAL(ReadPosition.c.Y));
+                    MessagePackerFb.PackKvReal(ADR('arm_z'), LREAL_TO_REAL(ReadPosition.c.Z));
+                END_IF;
+            ELSIF (CommandType = 'SET_AXIS_LIMITS') THEN
+                // Motor limit test: set an axis' dynamic limits at run
+                // time (not saved; a download or restart brings back the
+                // configured ones). Only in UnInited: the group planner
+                // reads the limits when the group is enabled, and a change
+                // under an enabled group stops it (GroupErrorStop, seen
+                // 2026-09-30). `axis` 0-5; v / a / d / j > 0, each
+                // optional (kept); restore:1 = the downloaded values.
+                // Reply: the limits in force.
+                ShouldReturn := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                AxInfoIdx := TO_INT(MessageUnpackerFb.TryReadINT64('axis', -1));
+                CommandAck := FALSE;
+                IF (AxInfoIdx < 0) OR (AxInfoIdx > 5) OR (PeakAxis[0] = 0) THEN
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('bad_axis'));
+                ELSIF AxisGroupManagerFb._eState <> E_RobotState.UnInited THEN
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('not_uninited'));
+                ELSE
+                    pAx := PeakAxis[AxInfoIdx];
+                    IF MessageUnpackerFb.TryReadINT64('restore', 0) <> 0 THEN
+                        pAx^.fSWMaxVelocity := AxCfgV[AxInfoIdx];
+                        pAx^.fSWMaxAcceleration := AxCfgA[AxInfoIdx];
+                        pAx^.fSWMaxDeceleration := AxCfgD[AxInfoIdx];
+                        pAx^.fSWMaxJerk := AxCfgJ[AxInfoIdx];
+                        CommandAck := TRUE;
+                    ELSIF (MessageUnpackerFb.TryReadREAL('v', 1) <= 0) OR (MessageUnpackerFb.TryReadREAL('a', 1) <= 0)
+                          OR (MessageUnpackerFb.TryReadREAL('d', 1) <= 0) OR (MessageUnpackerFb.TryReadREAL('j', 1) <= 0) THEN
+                        MessagePackerFb.PackKvStr(ADR('err'), ADR('bad_value'));
+                    ELSE
+                        pAx^.fSWMaxVelocity := MessageUnpackerFb.TryReadREAL('v', LREAL_TO_REAL(pAx^.fSWMaxVelocity));
+                        pAx^.fSWMaxAcceleration := MessageUnpackerFb.TryReadREAL('a', LREAL_TO_REAL(pAx^.fSWMaxAcceleration));
+                        pAx^.fSWMaxDeceleration := MessageUnpackerFb.TryReadREAL('d', LREAL_TO_REAL(pAx^.fSWMaxDeceleration));
+                        pAx^.fSWMaxJerk := MessageUnpackerFb.TryReadREAL('j', LREAL_TO_REAL(pAx^.fSWMaxJerk));
+                        CommandAck := TRUE;
+                    END_IF;
+                    IF CommandAck THEN
+                        GVL.AxisLimitSetCount := GVL.AxisLimitSetCount + 1;
+                        MessagePackerFb.PackKvReal(ADR('lv'), LREAL_TO_REAL(pAx^.fSWMaxVelocity));
+                        MessagePackerFb.PackKvReal(ADR('la'), LREAL_TO_REAL(pAx^.fSWMaxAcceleration));
+                        MessagePackerFb.PackKvReal(ADR('ld'), LREAL_TO_REAL(pAx^.fSWMaxDeceleration));
+                        MessagePackerFb.PackKvReal(ADR('lj'), LREAL_TO_REAL(pAx^.fSWMaxJerk));
+                    END_IF;
+                END_IF;
             ELSIF (CommandType = 'FLUSH') THEN
                 // Drop what an ended host sequence left behind, without
                 // touching the FSM: fly events (a pin operation not fired

@@ -5,6 +5,7 @@ import { MiscControlsPage } from './MiscControlsPage';
 import { OperationPage } from './OperationPage';
 import { RecoveryDemoPage } from './RecoveryDemoPage';
 import { BindingTestPage } from './BindingTestPage';
+import { MotorTestPage } from './MotorTestPage';
 import { t, type UILang } from '../i18n';
 import { useHarnessAction } from '../harness/registry';
 
@@ -22,7 +23,7 @@ export const ControlPage: React.FC<{
   uiLang,
 }) => {
 
-  const [tab, setTab] = useState<"Welcome" | "Calib" | "Operation" | "Recovery" | "Binding">("Welcome");
+  const [tab, setTab] = useState<"Welcome" | "Calib" | "Operation" | "Recovery" | "Binding" | "Motors">("Welcome");
   const [plcReady, setPlcReady] = useState(false);
   const [lastReconcile, setLastReconcile] = useState<{reason: string; at: number; snapshot: any} | null>(null);
 
@@ -57,6 +58,8 @@ export const ControlPage: React.FC<{
       // Binding bench test drives its own FSM climb, so it must stay
       // usable outside Ready (same rationale as Recovery).
       Binding: false,
+      // Motor limit test: brings the FSM up and down itself.
+      Motors: false,
     };
     const reconcile = (source: string, payload: any, hasCoord: boolean) => {
       if (!payload) return;
@@ -96,13 +99,13 @@ export const ControlPage: React.FC<{
   useHarnessAction('get_tab', () => ({ tab, plcReady, allCoreLinksConnected: true, lastReconcile }), [tab, plcReady, lastReconcile]);
   useHarnessAction('set_tab', (payload: any) => {
     const target = String(payload?.tab ?? '');
-    if (target !== 'Welcome' && target !== 'Calib' && target !== 'Operation' && target !== 'Recovery' && target !== 'Binding') {
+    if (target !== 'Welcome' && target !== 'Calib' && target !== 'Operation' && target !== 'Recovery' && target !== 'Binding' && target !== 'Motors') {
       throw new Error(`set_tab: unknown tab '${target}'`);
     }
     setTab(target);
     return { tab: target };
   }, []);
-  const tabs: Array<{ id: "Welcome" | "Calib" | "Operation" | "Recovery" | "Binding"; label: string; subtitle: string; requiresReady: boolean }> = [
+  const tabs: Array<{ id: "Welcome" | "Calib" | "Operation" | "Recovery" | "Binding" | "Motors"; label: string; subtitle: string; requiresReady: boolean }> = [
     {
       id: 'Welcome',
       label: t(uiLang, 'tabWelcome'),
@@ -136,6 +139,13 @@ export const ControlPage: React.FC<{
       id: 'Binding',
       label: 'Binding test',
       subtitle: 'reel pull + heat press bench',
+      requiresReady: false,
+    },
+    {
+      // Motor settings and the A limit test; drives the FSM itself.
+      id: 'Motors',
+      label: 'Motors',
+      subtitle: 'settings / limit test',
       requiresReady: false,
     },
   ] as const;
@@ -229,6 +239,9 @@ export const ControlPage: React.FC<{
           </div>
           <div style={{ display: tab === "Recovery" ? "block" : "none" }}>
             <RecoveryDemoPage COMCtrlObj={COMCtrlObj} />
+          </div>
+          <div style={{ display: tab === "Motors" ? "block" : "none" }}>
+            <MotorTestPage COMCtrlObj={COMCtrlObj} />
           </div>
           <div style={{ display: tab === "Binding" ? "block" : "none" }}>
             <BindingTestPage COMCtrlObj={COMCtrlObj} />
