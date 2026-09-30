@@ -83,6 +83,10 @@ The setting is kept at **50** (`jobs/templates/set_ec_sync_offset.py`,
   the first scan.
 - Delta: **virtual** (runtime mask 7), powered off (FSM UnInited). The arm
   was left at about X −50 Y −50 Z 0, held by the gearboxes (no brakes).
+- **The group was enabled in virtual mode** (dry runs of pulse_test and the
+  batch rounds). Before the real tests, run `rpc.py install --on-site` again
+  (delta off), then `joint_bench.py real`, then power up and home. Otherwise
+  GroupEnabling fails with 11000 (section 6).
 - EAxis0 P3.009 = 0x5055 (the owner set it back).
 - EasyCAT firmware: bus timing and position-stream probe (commit 6bdea6a).
 - Bus order (auto-increment addresses), wire order:
@@ -203,20 +207,32 @@ Counts are from `tools/asda_scope.py` (1 ms: `--cycle-ms 1`; 2 ms runs:
    - **Clean:** raise the speed step by step (the `--vel` limit is 20 deg/s)
      to find where it starts; a speed or acceleration dependence would point
      at drive-internal filtering or feedforward.
-2. **Other drives.** Record EAxis1 and EAxis2 the same way: is it all three,
+2. **Production-like rounds** (owner's idea, 2026-09-30 evening).
+   - Command: `python tools/square_dip.py --continuous --batch 8 --minutes 5
+     --cor 14 --f 1000 --acc 100000 --jerk 400000`.
+   - Each round is 8 G1s: the square-with-dips points in turn, blended
+     inside the round, the last one an exact stop.
+   - After each round the script waits for the motion to stop (~1-2 s at
+     rest), then sends the next, like production (UI `MAX_IN_FLIGHT` 8,
+     stops between placements).
+   - Record EAxis0 and compare the stale rate with the continuous runs.
+   - **Few or none:** it builds up in long continuous motion.
+   - **Same rate:** it does not depend on how the motion is fed.
+   - Dry-run on virtual axes OK: 26 rounds per minute, ~2.3 s per round.
+3. **Other drives.** Record EAxis1 and EAxis2 the same way: is it all three,
    or one unit?
-3. **ASDA-Soft load.** One run without ASDA-Soft connected, judging by feel
+4. **ASDA-Soft load.** One run without ASDA-Soft connected, judging by feel
    and sound. Unlikely to matter: the vibration was felt before the scope
    was used.
-4. **Mitigation while waiting for Delta.** The same position-command
+5. **Mitigation while waiting for Delta.** The same position-command
    smoothing filter on all three drives (moving average 2-3 ms; check the
    B3-E manual for the parameter). Costs a few ms of lag.
-5. **Report to Delta.** Contents:
-   - sections 1-3 and 7, and the result of test 1;
+6. **Report to Delta.** Contents:
+   - sections 1-3 and 7, and the results of tests 1-2;
    - firmware B3-E-Ver22106;
    - CSP, DC SYNC0 1 ms and 2 ms, 0x1C32 / 0x60C2 values;
    - the EasyCAT control on the same frame.
-6. **Clean-up after the investigation.**
+7. **Clean-up after the investigation.**
    - Keep or remove the EasyCAT probes and the EC_STATS extras.
    - Remove the `biSetPos` mapping (ask first).
    - Fix the `square_dip.py` lap budget for the line path.
