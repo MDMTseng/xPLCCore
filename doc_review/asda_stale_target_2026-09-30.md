@@ -337,6 +337,14 @@ Notes on the sweep:
   - The recurring "vnet1 ... Error Code 39 / different subnet" lines are
     another interface and predate all this.
   - **Stay at 50.**
+- **Reading the PLC log remotely** (2026-10-01):
+  - Run `PYTHONIOENCODING=utf-8 rpc.py exec --readonly --file
+    jobs/templates/read_plc_log.py` (device-level connection, no login). It
+    writes `jobs/plc_log_PlcLog.txt`, oldest first.
+  - The job uses the IDE's logger service (IOnlineDevice3.
+    CreateLoggerServiceHandler) and pumps the IDE message loop while it waits.
+    A plain End*() deadlocked the daemon.
+  - The log keeps 500 entries: read it before retrying.
 
 ## 8. Next tests
 
