@@ -8,6 +8,10 @@ import { cmd } from '../protocol';
 export const IO_PINS = {
   /** Digital inputs (bit index in GET_DIGITAL_INPUT state). */
   I: {
+    /** Delta arm home switches, one per joint (EAxisN -> input N). */
+    Home_EAxis0: 0,
+    Home_EAxis1: 1,
+    Home_EAxis2: 2,
     ReelLacking: 8,
     ReelTapeHTension: 9,
     ReelPressRollerInPlace: 10,
