@@ -461,6 +461,10 @@ PROGRAM AxisGroupSM
     // The group's actual MCS->WCS transform equals CoordTransform
     // (ReadMcsTransformFb, every scan in ProcessFlyEventsAndIo).
     CoordFrameOk : BOOL;
+    // SYS FLUSH: the pending waits and the TAPE sequence end with 'flushed'
+    // this scan (cleared after them).
+    FlushRequested : BOOL;
+    FlushDropped   : INT;
     // Phase 3: G1 `frame` field. 0=coord0 (default/legacy, MoveLinearAbsolute
     // CoordSystem := WCS), 1=coord1 (Phase 4 step 2: CoordSystem := PCS_1;
     // MC_TrackConveyorBelt keeps PCS_1 synced to the belt). Tag is also
@@ -1104,6 +1108,10 @@ GVL.EcProfT0 := LTIME();
     // FSM leaves Ready is NAK'd group_not_ready instead of left hanging.
     // Host gone: dropped without a reply (nobody to answer; the next
     // client must not get it). Reply ring full: retried next scan.
+    // SYS FLUSH (DrainHostPackets, earlier this scan; its reply is out).
+    IF FlushRequested THEN
+        FlushFlyEvents(notify := TCP_MSGPAK_Server.fbMyServer.CLIENT.xActive, reason := 'flushed');
+    END_IF;
     FOR WaitIdx := 0 TO 2 DO
         IF WaitActive[WaitIdx] THEN
             WaitDone := FALSE;
@@ -1114,6 +1122,9 @@ GVL.EcProfT0 := LTIME();
             ELSIF NOT AxisGroupReady THEN
                 WaitDone := TRUE;
                 WaitErr := 'group_not_ready';
+            ELSIF FlushRequested THEN
+                WaitDone := TRUE;
+                WaitErr := 'flushed';
             ELSE
                 IF (WaitIdx = WAIT_KIND_MOTION) THEN
                     WaitAck := (GroupReadPositionFb.MovementId = 0);
@@ -1269,6 +1280,9 @@ GVL.EcProfT0 := LTIME();
         ELSIF NOT AxisGroupReady THEN
             TapeDone := TRUE;
             TapeErr := 'group_not_ready';
+        ELSIF FlushRequested THEN
+            TapeDone := TRUE;
+            TapeErr := 'flushed';
         ELSIF (RuntimeMs - TapeStartMs) > TapeTimeoutMs THEN
             TapeDone := TRUE;
             TapeErr := 'tape_timeout';
@@ -1383,6 +1397,9 @@ GVL.EcProfT0 := LTIME();
             END_IF;
         END_IF;
     END_IF;
+
+    // SYS FLUSH reached the waits and the TAPE sequence above.
+    FlushRequested := FALSE;
 
     // NAK an overlength packet the Comm task had to drop (see GVL).
     IF GVL.OverlenNakPending THEN

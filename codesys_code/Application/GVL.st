@@ -399,6 +399,13 @@ VAR_GLOBAL
 	(* Host packets dropped unprocessed because the host disconnected
 	   (UpdateRuntimeAndInputEvent); accepted motion runs to its end. *)
 	HostGonePacketDropCount : UDINT := 0;
+	(* TTL (ms) of an M4 sent without ttl_ms: an event whose movement never
+	   comes (the host's sequence stopped) expires instead of firing at a
+	   later, unrelated move. SYS SET_FLY_TTL sets it (the UI's
+	   FLY_EVENT.DEFAULT_TTL_MS); -1 = never expire. *)
+	FlyEventDefaultTtlMs : DINT := 10000;
+	(* SYS FLUSH commands handled (fly events, waits, TAPE sequence). *)
+	FlushCmdCount : UDINT := 0;
 
 	(* SCRATCHPAD_WRITE partial-write rejection. The §4(2) wire contract
 	   requires the host to send ALL 5 fields per write (plan_id,

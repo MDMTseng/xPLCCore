@@ -7,7 +7,7 @@ import { delay } from '../utils/async';
 import { t, type UILang } from '../i18n';
 import { useHarnessAction } from '../harness/registry';
 import { cmd, reelOdoMm } from '../lib/protocol';
-import { GEOMETRY, TAPE, INSPECTION, NOZZLE, FEEDER, VISION, WATCHDOG, MOTION, feedConfig } from '../lib/production/params';
+import { GEOMETRY, TAPE, INSPECTION, NOZZLE, FEEDER, VISION, WATCHDOG, MOTION, FLY_EVENT, feedConfig } from '../lib/production/params';
 import { applyAdvance, cellsDone, nextCycleAction, remainingPlan } from '../lib/production/plan';
 import { VISION_CHECK } from '../lib/production/io';
 import type { Machine } from '../lib/production/machine';
@@ -203,6 +203,9 @@ export const CalibPage: React.FC<{
     setSpeedPercent(p);
     try {
       const rep: any = await COMCtrlObj.sendTcpMsgPack(cmd.SetOverride(p / 100));
+      // Slower motion: the fly events' default TTL stretches with it.
+      try { await COMCtrlObj.sendTcpMsgPack(cmd.SetFlyTtl(Math.round(FLY_EVENT.DEFAULT_TTL_MS * 100 / p))); }
+      catch (e: any) { console.warn('fly TTL update failed', e?.message ?? e); }
       return { percent: p, plc: rep?.factor };
     } catch (e: any) {
       console.warn('speed override failed', e?.message ?? e);
@@ -883,6 +886,8 @@ export const CalibPage: React.FC<{
     const {send, sendNoWait, machine}=makeMachine();
     // The PLC keeps its override while it runs; make it match the slider.
     try{ await send(cmd.SetOverride(_this.speedOverride ?? 1)); }catch(e:any){ console.warn("speed override sync failed",e?.message??e); }
+    // Default TTL of the fly events (M4 without ttl_ms), stretched by the override.
+    try{ await send(cmd.SetFlyTtl(Math.round(FLY_EVENT.DEFAULT_TTL_MS/(_this.speedOverride ?? 1)))); }catch(e:any){ console.warn("fly TTL sync failed",e?.message??e); }
 
     // After a fault (servo / bus / E-stop) the tape may sit between two
     // cells: finish that move first (lib/production/recovery.ts), so the

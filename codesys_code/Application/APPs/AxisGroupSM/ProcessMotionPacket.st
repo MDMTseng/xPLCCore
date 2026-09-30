@@ -408,8 +408,11 @@
 					// API alive by expanding to pin_op_seq client-side, so TS call
 					// sites don't change; python tests use tests/_raw_plc.m4_pulse_seq.
 
-					FlyEventTtlRaw := MessageUnpackerFb.TryReadINT64('ttl_ms', -1);
-					IF (FlyEventTtlRaw < 0) OR (FlyEventTtlRaw > 2147483647) THEN
+					// ttl_ms absent (-2): GVL.FlyEventDefaultTtlMs; negative: never expire.
+					FlyEventTtlRaw := MessageUnpackerFb.TryReadINT64('ttl_ms', -2);
+					IF (FlyEventTtlRaw = -2) THEN
+						FlyEventTempData.TimeToLiveMs := GVL.FlyEventDefaultTtlMs;
+					ELSIF (FlyEventTtlRaw < 0) OR (FlyEventTtlRaw > 2147483647) THEN
 						FlyEventTempData.TimeToLiveMs := -1;
 					ELSE
 						FlyEventTempData.TimeToLiveMs := TO_DINT(FlyEventTtlRaw);
@@ -629,8 +632,11 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
 
 
                     FlyEventTempData.EventId := TO_DINT(MessageUnpackerFb.TryReadINT64('event_id', 0));
-                    FlyEventTtlRaw := MessageUnpackerFb.TryReadINT64('ttl_ms', -1);
-                    IF (FlyEventTtlRaw < 0) OR (FlyEventTtlRaw > 2147483647) THEN
+                    // ttl_ms absent (-2): GVL.FlyEventDefaultTtlMs; negative: never expire.
+                    FlyEventTtlRaw := MessageUnpackerFb.TryReadINT64('ttl_ms', -2);
+                    IF (FlyEventTtlRaw = -2) THEN
+                    	FlyEventTempData.TimeToLiveMs := GVL.FlyEventDefaultTtlMs;
+                    ELSIF (FlyEventTtlRaw < 0) OR (FlyEventTtlRaw > 2147483647) THEN
                         FlyEventTempData.TimeToLiveMs := -1;
                     ELSE
                         FlyEventTempData.TimeToLiveMs := TO_DINT(FlyEventTtlRaw);

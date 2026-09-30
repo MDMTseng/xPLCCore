@@ -106,12 +106,26 @@ export async function runCycles(ctx: CycleContext): Promise<CycleResult> {
   clearFeederFault();
   const s: CycleState = { nextAdvance: 0, placedUncounted: 0, packed: 0, parts: [], armAtSafeZ: false,
     emptyRefills: 0, tossesInARow: 0, ngPicksInARow: 0 };
+  // Nothing a previous run left on the PLC (fly events waiting for a move
+  // that never came, a wait, a TAPE sequence) may act in this one.
+  await flushPlc(ctx.m, 'start');
   try {
     return await runCyclesIn(ctx, s);
   } finally {
     // A refill still in flight (vibration, light, strobe): let it finish
     // before the page's clean-up turns the feeder off, not after it.
     if (s.pendingFeeder) await s.pendingFeeder.catch(() => {});
+    await flushPlc(ctx.m, 'end');
+  }
+}
+
+/** SYS FLUSH; a failure (no link, an older PLC build) is only logged. */
+async function flushPlc(m: Machine, when: string) {
+  try {
+    const r = await m.send(cmd.Flush());
+    if (r?.fly_flushed) console.log(`[FLUSH] run ${when}: ${r.fly_flushed} fly event(s) left over`);
+  } catch (e: any) {
+    console.warn(`[FLUSH] run ${when} failed`, e?.message ?? e);
   }
 }
 

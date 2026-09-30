@@ -174,3 +174,27 @@ describe('runCycles stops instead of repeating a failure forever', () => {
     expect(f.log.filter((l) => l.startsWith('ngpick')).length).toBe(NOZZLE.MAX_NG_PICKS_IN_A_ROW + 1);
   });
 });
+
+describe('runCycles and the PLC leftovers', () => {
+  it('flushes the PLC when the run starts and when it ends', async () => {
+    const f = fakeCell();
+    const cmds: string[] = [];
+    const send = f.m.send;
+    f.m.send = async (pkt: any, ...rest: any[]) => { cmds.push(pkt.cmd); return (send as any)(pkt, ...rest); };
+    const r = await runCycles(context(f.m, [2]));
+    expect(r.ended).toBe('plan_done');
+    expect(cmds[0]).toBe('FLUSH');
+    expect(cmds[cmds.length - 1]).toBe('FLUSH');
+  });
+
+  it('still runs when the PLC does not know FLUSH', async () => {
+    const f = fakeCell();
+    const send = f.m.send;
+    f.m.send = async (pkt: any, ...rest: any[]) => {
+      if (pkt.cmd === 'FLUSH') throw new Error('nak (unknown command)');
+      return (send as any)(pkt, ...rest);
+    };
+    const r = await runCycles(context(f.m, [2]));
+    expect(r.ended).toBe('plan_done');
+  });
+});

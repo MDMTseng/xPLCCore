@@ -183,6 +183,14 @@ export const VISION = {
   TIMEOUT_STOP_COUNT: 1,
 };
 
+export const FLY_EVENT = {
+  /** TTL of a PLC fly event (M4) sent without ttl_ms: one whose movement
+   *  never comes (the run stopped first) expires after this instead of
+   *  firing at a later, unrelated move. Set on the PLC at every run start
+   *  (SYS SET_FLY_TTL), stretched by the speed override's time scale. */
+  DEFAULT_TTL_MS: 10000,
+};
+
 export const WATCHDOG = {
   /** Input watchdog poll period (ms). */
   POLL_MS: 400,

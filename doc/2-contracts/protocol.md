@@ -72,6 +72,7 @@ Three shapes:
 |---|---|
 | `group_not_ready` | Motion command sent while FSM ≠ Ready. |
 | `coord_not_configured` | `G1` while no coordinate system is set since the last UnInited / Error entry. The PLC applies the machine frame (SetCoord1's) itself on Ready entry, so this means that apply failed or a `SetCoord` was refused. |
+| `flushed` | A wait, a pending trigger wait or a TAPE_CYCLE ended by SYS `FLUSH` (the host's run ended). |
 | `coord_mismatch` | `G1` while the group's actual MCS transform (read back every scan) differs from the one set and none is being applied. A G1 sent while the frame is being applied waits for it instead. |
 | `block_timeout` | A `BLOCK_FOR_*` / `WAIT_FOR_*` wait exceeded its `timeout_ms`. |
 | `wait_busy` | A wait of the same kind (motion / reel / input) is already pending. |
@@ -124,6 +125,8 @@ parameters.
 | `PLAN_SET` / `PLAN_GET` | see `lib/protocol.ts` | | The production plan kept by the PLC (retained): the whole plan and the tape cells advanced. `PLAN_GET` also reports an open tape move: `reel_open`, `reel_moving`, `reel_pos_lost`, `reel_rest_mm`, `reel_cells`, `reel_counted`, `reel_interrupts`, and the reel odometer `reel_odo_counts` / `reel_odo_jumps` / `reel_counts_per_mm` / `reel_counts_per_turn` (see `GET_MACHINE_STATE`) ([estop_recovery](../../doc_review/estop_recovery_2026-09-25.md)). |
 | `REEL_RESUME` | `F, ACC, DEA, JERK` (reel move dynamics) | `{ack:true, rest_mm}` | Finish a tape move a fault stopped short: moves the rest of the way, counting cells as they pass. Poll `PLAN_GET` until `reel_open` is false. NAK `reel_position_lost` (PLC restarted while open), `tape_busy`, `group_not_ready`, `reel_busy`. While a move is open, `TAPE_CYCLE` NAKs `reel_interrupted`. |
 | `REEL_CLEAR` | `count` | `{ack:true, cells_done}` | Close an interrupted tape move without moving (tape aligned by hand), counting `count` more of its cells. |
+| `FLUSH` | -- | `{ack:true, fly_flushed}` | Drop what an ended host sequence left: fly events (unfired pin op -> `TRIGGER_ERR` 101 with its `event_id`; pending trigger wait -> NAK `flushed`), pending waits and the TAPE sequence (NAK `flushed`). FSM untouched. Ordered with the motion packets: drops only what was sent before it. The UI sends it at every run start and end. |
+| `SET_FLY_TTL` | `ttl_ms` (100..3 600 000; negative = never) | `{ack:true, ttl_ms}` | TTL of an M4 sent without `ttl_ms` (`GVL.FlyEventDefaultTtlMs`, 10 000 at start). The UI sets `FLY_EVENT.DEFAULT_TTL_MS` / speed override at run start and speed changes. |
 
 ## Push events (PLC → UI, no `id`)
 

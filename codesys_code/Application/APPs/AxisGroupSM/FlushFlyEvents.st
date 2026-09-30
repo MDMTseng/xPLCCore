@@ -1,6 +1,7 @@
-METHOD FlushFlyEvents : BOOL
+METHOD FlushFlyEvents : INT    // fly events dropped
 VAR_INPUT
     notify : BOOL;    // the host is still connected: tell it what was dropped
+    reason : STRING(31) := 'group_not_ready';   // NAK of a pending trigger wait
 END_VAR
 VAR
     i : INT;
@@ -8,6 +9,7 @@ VAR
     p : POINTER TO FlyEventData;
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
+FlushFlyEvents := 0;
 // Drop every fly event: they belong to the run (or the session) that just
 // ended -- the FSM left Ready, or the host disconnected. Outside Ready they
 // are not processed (their TTLs stop), so a stale trigger could otherwise
@@ -27,10 +29,11 @@ FOR i := 0 TO TO_INT(FlyEventBufferSize) - 1 DO
     p := ADR(FlyEventBuffer[i]);
     IF (p^.TriggerType <> FlyEventTriggerType.NOP)
        AND (p^.TriggerType <> FlyEventTriggerType.Reserved) THEN
+        FlushFlyEvents := FlushFlyEvents + 1;
         CASE p^.ActionType OF
             FlyEventActType.ACK_SRC_ID:
                 IF notify AND TryAcquireReplySlot(ADR(GVL.ReMpDropCount_Reply)) THEN
-                    MessagePackerFb.PackKvStr(ADR('err'), ADR('group_not_ready'));
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR(reason));
                     MessagePackerFb.PackKvLint(ADR('event_id'), TO_LINT(p^.EventId));
                     CommitReplySlotAck(p^.SourceCommandId, FALSE);
                 END_IF;

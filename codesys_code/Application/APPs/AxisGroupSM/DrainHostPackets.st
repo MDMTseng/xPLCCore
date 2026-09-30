@@ -433,6 +433,46 @@ END_IF;
                 ResponsePacketPointer^.ele_count := 0;
                 GVL.OverrideFactor := LIMIT(0.01, TO_LREAL(MessageUnpackerFb.TryReadREAL('factor', TO_REAL(GVL.OverrideFactor))), 1.0);
                 MessagePackerFb.PackKvReal(ADR('factor'), TO_REAL(GVL.OverrideFactor));
+            ELSIF (CommandType = 'FLUSH') THEN
+                // Drop what an ended host sequence left behind, without
+                // touching the FSM: fly events (a pin operation not fired
+                // yet -> TRIGGER_ERR 101 with its event_id; a pending
+                // trigger wait -> NAK 'flushed'), the pending waits and the
+                // TAPE sequence (NAK 'flushed'). Ordered with the motion
+                // packets (not in RouteToSys), so it only drops what was
+                // sent before it. The UI sends it when a run starts and
+                // ends. Reply: fly_flushed.
+                // The flush itself runs after this reply is committed (the
+                // waits block in AxisGroupSM): its TRIGGER_ERR events take
+                // reply slots of their own, which must not interleave with
+                // this reply's packing.
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                FlushDropped := 0;
+                FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
+                    IF (FlyEventBuffer[Index].TriggerType <> FlyEventTriggerType.NOP)
+                       AND (FlyEventBuffer[Index].TriggerType <> FlyEventTriggerType.Reserved) THEN
+                        FlushDropped := FlushDropped + 1;
+                    END_IF;
+                END_FOR;
+                FlushRequested := TRUE;
+                GVL.FlushCmdCount := GVL.FlushCmdCount + 1;
+                MessagePackerFb.PackKvDint(ADR('fly_flushed'), FlushDropped);
+            ELSIF (CommandType = 'SET_FLY_TTL') THEN
+                // Default TTL of an M4 sent without ttl_ms
+                // (GVL.FlyEventDefaultTtlMs): ttl_ms 100..3 600 000, or
+                // negative for never. Reply: the value in force.
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                FlyEventTtlRaw := MessageUnpackerFb.TryReadINT64('ttl_ms', GVL.FlyEventDefaultTtlMs);
+                IF FlyEventTtlRaw < 0 THEN
+                    GVL.FlyEventDefaultTtlMs := -1;
+                ELSE
+                    GVL.FlyEventDefaultTtlMs := TO_DINT(LIMIT(100, FlyEventTtlRaw, 3600000));
+                END_IF;
+                MessagePackerFb.PackKvDint(ADR('ttl_ms'), GVL.FlyEventDefaultTtlMs);
             ELSIF (CommandType = 'TASK_STATS') THEN
                 // The runtime's task statistics -- what the IDE's Task
                 // Configuration > Monitor shows -- for every task of the

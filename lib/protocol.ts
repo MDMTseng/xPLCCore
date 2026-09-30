@@ -574,6 +574,12 @@ export const cmd = {
   TaskStats: (reset = false) => env<AckReply & { n: number; [k: string]: unknown }>({ type: 'SYS', cmd: 'TASK_STATS', reset: reset ? 1 : 0 }),
   ReelClear: (count: number) => env<AckReply & { cells_done: number }>({ type: 'SYS', cmd: 'REEL_CLEAR', count }),
   SetOverride: (factor: number) => env<AckReply & { factor: number }>({ type: 'SYS', cmd: 'SET_OVERRIDE', factor }),
+  /** Drop what an ended sequence left on the PLC: fly events (unfired pin
+   *  ops -> TRIGGER_ERR 101), pending waits and the TAPE sequence (NAK
+   *  'flushed'). The FSM is untouched. Ordered with motion packets. */
+  Flush: () => env<AckReply & { fly_flushed: number }>({ type: 'SYS', cmd: 'FLUSH' }),
+  /** TTL (ms) of M4s sent without ttl_ms; negative = never. Reply: in force. */
+  SetFlyTtl: (ttl_ms: number) => env<AckReply & { ttl_ms: number }>({ type: 'SYS', cmd: 'SET_FLY_TTL', ttl_ms }),
   // Host timestamp mark in the PLC event log (GVL.EvHead, GET /e on :8126).
   // Send without tracking (no id): the PLC then sends no reply. Codes:
   // tools/sim/event_log.py MARKS.
