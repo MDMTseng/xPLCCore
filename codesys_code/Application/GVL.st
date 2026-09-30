@@ -362,16 +362,21 @@ VAR_GLOBAL
 	PingMaxGapMs       : UDINT := 0;
 	PrevPingRuntimeMs  : LINT  := 0;
 
-	(* Supervisor threshold: once the UI has pinged at least once, if no
-	   further PING arrives within UI_HEARTBEAT_TIMEOUT_MS while the FSM is
-	   Ready, the AxisGroupSM supervisor latches an error and drives the FSM
-	   to Error (recoverable via EV_RESET -> UnInited). Zero would disable
-	   the watchdog; keep > HEARTBEAT_STALE_MS in PluginHello.tsx (currently
-	   3500ms) so the UI flags stale first, giving it a chance to reconnect
-	   before the PLC halts motion. Tightened 2026-04-28 from 10000 -> 5000
-	   so PLC halts ~1.5s after the UI flags stale, instead of 6.5s. *)
+	(* Host silent for UI_HEARTBEAT_TIMEOUT_MS (no packet of any kind) while
+	   motion is queued: counted in UiHeartbeatStaleCount, once per silent
+	   spell. Since 2026-09-30 this no longer stops the motion (the owner's
+	   rule: a lost host's accepted motion runs to its end; the queue is at
+	   most 12 moves). The lost host itself is found by the socket's idle
+	   watchdog (HostIdleTimeoutMs), which resets the connection and so
+	   runs the disconnect cleanup. *)
 	UI_HEARTBEAT_TIMEOUT_MS : LINT := 5000;
 	UiHeartbeatStaleCount   : UDINT := 0;
+	(* No byte from the host for this long: the connection is reset
+	   (FB_TcpMsgPakServer idle watchdog, GVL.IdleResetCount) and the
+	   disconnect cleanup runs (fly events, waits, TAPE, unprocessed
+	   packets; motion already accepted runs on). The UI pings every 1 s.
+	   Clamped to >= 2000 ms. Was a constant 7 s. *)
+	HostIdleTimeoutMs       : DINT := 5000;
 
 	(* SoftMotion kinematic-group ErrorStop supervisor trips. Bumps each
 	   time the AxisGroupSM supervisor sees GroupReadStatusFb.GroupErrorStop
@@ -476,7 +481,7 @@ VAR_GLOBAL
 
 	(* TCP server stability counters (FB_TcpMsgPakServer).
 	   IdleResetCount: connection forced to reset because no bytes arrived
-	   for IDLE_TIMEOUT while CLIENT.xActive=TRUE -- catches half-open
+	   for HostIdleTimeoutMs while CLIENT.xActive=TRUE -- catches half-open
 	   sockets after host crash / cable yank where the peer never sends
 	   FIN/RST. Without the reset, the single-connection slot stays
 	   occupied and the next host can't reconnect.

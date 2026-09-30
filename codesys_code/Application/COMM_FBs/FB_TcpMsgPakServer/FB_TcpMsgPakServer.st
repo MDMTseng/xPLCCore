@@ -37,7 +37,6 @@ END_VAR
 
 VAR CONSTANT
     MAX_BUFFER_SIZE         : UDINT := 2048;
-    IDLE_TIMEOUT            : TIME  := T#7S;   // Reset connection if no bytes received for this duration (handles cable unplug / silent crash). Sized > AxisGroupSM A3 supervisor (5s) so the FSM trips Error first; just after, this reclaims the socket so a new host can reconnect without waiting for a TCP keepalive.
     NO_CLIENT_TIMEOUT       : TIME  := T#30S;  // Fires ServerLongIdleCount once per active-no-client window. Diagnostic for config-drift detection (bind IP wrong, firewall block); see GVL.ServerLongIdleCount comment.
 END_VAR
 
@@ -137,9 +136,11 @@ END_IF
 // without RST, frozen renderer). The timer is fed whenever bytes arrive.
 // If IDLE_TIMEOUT elapses with the socket still reporting xActive=TRUE,
 // force a reset so the single-connection slot is released for the next host.
-// AxisGroupSM's A3 heartbeat supervisor trips Error before this fires (5s
-// vs 7s) so the FSM is already safely halted by the time the socket churns.
-fbIdleWatchdog(IN := CLIENT.xActive AND NOT xResetConnection, PT := IDLE_TIMEOUT);
+// The timeout is GVL.HostIdleTimeoutMs (>= 2 s; the UI pings every 1 s).
+// The reset drops CLIENT.xActive, which runs AxisGroupSM's disconnect
+// cleanup; motion already accepted runs to its end.
+fbIdleWatchdog(IN := CLIENT.xActive AND NOT xResetConnection,
+               PT := DINT_TO_TIME(MAX(GVL.HostIdleTimeoutMs, 2000)));
 IF fbIdleWatchdog.Q AND NOT xResetConnection THEN
     xResetConnection := TRUE;
     GVL.IdleResetCount := GVL.IdleResetCount + 1;

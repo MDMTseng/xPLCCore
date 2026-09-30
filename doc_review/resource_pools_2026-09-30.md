@@ -26,9 +26,13 @@
    the event stays and fires at some later, unrelated movement (a jog):
    a wrong shot or nozzle switch. Repeated, it fills the 32 slots.
 3. **A host that vanishes silently** (cable pulled, UI killed without
-   FIN): the PLC notices only when a send fails. With nothing to send,
-   `CLIENT.xActive` can stay TRUE, so none of the disconnect cleanup
-   runs and a new client may not get in.
+   FIN). First read as unhandled; it was not: the socket's idle watchdog
+   reset the link after 7 s without a byte, which runs the disconnect
+   cleanup. But the heartbeat supervisor (W1 A3) put the FSM in Error
+   after 5 s of silence with motion queued, stopping the motion: against
+   the owner's rule that a lost host's motion runs to its end (and it hit
+   clean disconnects too, when more than 5 s of motion was left). See
+   fix 3.
 
 ## Ways to reset today
 
@@ -81,3 +85,29 @@ drops two (default TTL and `ttl_ms -1`): `fly_flushed 2`, both
 `flushed`. FSM Ready throughout: PASS. Production flow
 (`run_virtual.py --plc 192.168.1.70 --cycles 20`, virtual arms): no
 error, place to next place median 1164 ms.
+
+### 3. A lost host: the motion runs on, the link is reset (done)
+
+- W1 A3 (`AxisGroupSM`, host silent `UI_HEARTBEAT_TIMEOUT_MS` with motion
+  queued) now only counts `GVL.UiHeartbeatStaleCount`, once per silent
+  spell. It no longer raises the FSM error. The queue holds at most 12
+  moves, so the motion ends by itself.
+- The idle watchdog of `FB_TcpMsgPakServer` is the host-loss detector:
+  `GVL.HostIdleTimeoutMs` (5000, >= 2000; was a constant 7 s) without a
+  byte from the host -> link reset (`GVL.IdleResetCount`) -> the
+  disconnect cleanup (fix 1, and the fly events / waits / TAPE). The UI
+  pings every 1 s from a worker, so a healthy UI never trips it.
+
+`tools/host_gone_test.py --silent` (machine): 12 slow G1s queued, then
+the host silent with the socket open. The link reset came before 6.6 s
+(`IdleResetCount` +1, `UiHeartbeatStaleCount` +1). The motion ran on: 8
+moves still queued at 6.6 s, done at 13.2 s. FSM Ready throughout: PASS.
+The clean-disconnect test again: 13 run + 7 dropped = 20, PASS.
+
+## Status
+
+| gap | fix | machine test |
+|---|---|---|
+| 1 unprocessed packets after disconnect | dropped on the disconnect edge | `host_gone_test.py` PASS |
+| 2 M4 without TTL | default TTL 10 s (`SET_FLY_TTL`), SYS `FLUSH` at run start / end | `fly_leftover_test.py` PASS |
+| 3 lost host | idle reset `HostIdleTimeoutMs` 5 s; A3 counts only, motion runs on | `host_gone_test.py --silent` PASS |

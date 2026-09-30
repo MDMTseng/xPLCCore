@@ -464,6 +464,7 @@ PROGRAM AxisGroupSM
     // SYS FLUSH: the pending waits and the TAPE sequence end with 'flushed'
     // this scan (cleared after them).
     FlushRequested : BOOL;
+    UiStaleLatched : BOOL;    // W1 A3 counted for this silent spell
     FlushDropped   : INT;
     // Phase 3: G1 `frame` field. 0=coord0 (default/legacy, MoveLinearAbsolute
     // CoordSystem := WCS), 1=coord1 (Phase 4 step 2: CoordSystem := PCS_1;
@@ -876,25 +877,22 @@ GVL.EcProfT0 := LTIME();
             GVL.LastErrorSource := 'Supervisor:GroupReadPosition';
             GVL.LastErrorID := TO_DWORD(GroupReadPositionFb.ErrorID);
             AxisGroupManagerFb.Transition(E_RobotEvent.EV_ERROR);
-        ELSIF (AxisGroupManagerFb._eState = E_RobotState.Ready
-               AND MotionBufferSize > 0
-               AND GVL.LastUiPingMs > 0
-               AND (RuntimeMs - GVL.LastUiPingMs) > GVL.UI_HEARTBEAT_TIMEOUT_MS) THEN
-            // W1 A3 (PLC supervisor): UI went silent WHILE motion is in flight.
-            // Pre-fix the trigger was just (Ready AND age > timeout), which
-            // fired on idle Ready when the UI was simply backgrounded
-            // (Electron throttles its tick loop) -- causing spurious Error
-            // transitions on a perfectly healthy system. The unsafe scenario
-            // is "client died with motion still queued"; the safe scenario
-            // is "client is quiet because the operator went to lunch".
-            // Gate on MotionBufferSize > 0 to distinguish them. Combined with
-            // the drain-loop LastUiPingMs refresh above, a steady G1 stream
-            // self-keepalives -- the watchdog only fires when the client
-            // really has gone silent during in-flight motion.
-            GVL.LastErrorSource := 'Supervisor:UiHeartbeatStale';
-            GVL.LastErrorID := TO_DWORD(RuntimeMs - GVL.LastUiPingMs);
-            GVL.UiHeartbeatStaleCount := GVL.UiHeartbeatStaleCount + 1;
-            AxisGroupManagerFb.Transition(E_RobotEvent.EV_ERROR);
+        END_IF;
+        // W1 A3: the host went silent while motion is queued. Counted once
+        // per silent spell, no longer an error (2026-09-30, owner's rule: a
+        // lost host's accepted motion runs to its end; at most 12 moves).
+        // The socket's idle watchdog (GVL.HostIdleTimeoutMs) resets the
+        // link and the disconnect cleanup drops the rest.
+        IF (AxisGroupManagerFb._eState = E_RobotState.Ready
+            AND MotionBufferSize > 0
+            AND GVL.LastUiPingMs > 0
+            AND (RuntimeMs - GVL.LastUiPingMs) > GVL.UI_HEARTBEAT_TIMEOUT_MS) THEN
+            IF NOT UiStaleLatched THEN
+                GVL.UiHeartbeatStaleCount := GVL.UiHeartbeatStaleCount + 1;
+                UiStaleLatched := TRUE;
+            END_IF;
+        ELSE
+            UiStaleLatched := FALSE;
         END_IF;
     END_IF;
 
