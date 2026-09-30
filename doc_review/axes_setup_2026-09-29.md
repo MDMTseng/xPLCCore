@@ -477,3 +477,25 @@ Seen on the way: after the 48.8 s download the standalone UI did not
 reconnect by itself (`tcpConnected` stayed false, the PLC accepted other
 clients); `disconnect_tcp` + `connect_tcp` through the harness brought it
 back. The UI's auto-reconnect after a long outage needs a look.
+
+## Delta arms: layout, direction, home switches (2026-09-30, machine)
+
+Seen from above (owner's sketch): **EAxis0 points to the front** (the
+operator's side, over the tape track and tray), **EAxis1 to the back
+left**, **EAxis2 to the right**, 120 deg apart. The kinematic model's
+arm 0 lies 60 deg off, hence the machine frame's XY rotation
+(`COORD1_FRAME_A` = 60; A decoupled from it, see above).
+
+- **Positive joint direction = arm up** on all three (JOINT_MOVE +2 deg,
+  owner watching, one joint at a time).
+- **Home switches**: a slot light barrier on each motor housing with a
+  sector flag on the hub. It turns on when the arm is raised into it.
+  Wired to the IO slave, input N for EAxisN (terminal CH1); on = at the
+  switch.
+- Absolute positions read with the drives off after switching to real:
+  EAxis0 -6.613, EAxis1 -5.832, EAxis2 -21.257 deg. On servo-on EAxis2
+  dropped 0.3 deg (-21.554), then held.
+- Bench test path: `tools/joint_bench.py` (real / powered / move / seek
+  / stop) through the UI; the Motors page shows the joints live with a
+  STOP. Real is set at run time only (a PLC restart makes the delta
+  virtual again).
