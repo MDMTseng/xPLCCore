@@ -196,6 +196,8 @@ IF GVL.EcProfReset THEN
     GVL.EspLateSum := 0;
     GVL.EspStale0 := GVL.EspStale;
     GVL.EspSkip0 := GVL.EspSkip;
+    GVL.EspPosGlitch0 := GVL.EspPosGlitch;
+    GVL.EspPosD2Peak := 0;
     FOR iProf := 0 TO 9 DO
         GVL.EcTicHist[iProf] := 0;
     END_FOR;
@@ -308,6 +310,13 @@ GVL.EspSkip := TO_UINT(ecat_esp_in24) + TO_UINT(ecat_esp_in25) * 256;
 GVL.EspArrMinUs := TO_UINT(ecat_esp_in26) + TO_UINT(ecat_esp_in27) * 256;
 GVL.EspArrMaxUs := TO_UINT(ecat_esp_in28) + TO_UINT(ecat_esp_in29) * 256;
 GVL.EspLate := TO_UINT(ecat_esp_in30) + TO_UINT(ecat_esp_in31) * 256;
+ecat_esp_out12 := TO_USINT(GVL.TapTarget0 AND 16#FF);
+ecat_esp_out13 := TO_USINT(SHR(GVL.TapTarget0, 8) AND 16#FF);
+ecat_esp_out14 := TO_USINT(SHR(GVL.TapTarget0, 16) AND 16#FF);
+ecat_esp_out15 := TO_USINT(SHR(GVL.TapTarget0, 24) AND 16#FF);
+GVL.EspPosGlitch := TO_UINT(ecat_esp_in11) + TO_UINT(ecat_esp_in12) * 256;
+GVL.EspPosD2Max := (TO_UDINT(ecat_esp_in13) + TO_UDINT(ecat_esp_in14) * 256) * 16;
+GVL.EspPosD2Peak := MAX(GVL.EspPosD2Peak, GVL.EspPosD2Max);
 GVL.EspArrMaxPeak := MAX(GVL.EspArrMaxPeak, GVL.EspArrMaxUs);
 // The ESP32 publishes a new min / max / late once a second; sum late per second.
 IF udiNow - udiEspSecPrev >= 1000 THEN

@@ -16,8 +16,9 @@
 //            on the ESP32, starts at the power-up angle (not retained)
 //     9      I2C read error counter (wraps)
 //     10     AGC (automatic gain; mid-range = good magnet distance)
-//     11-12  max interval between cycles over the last second, us (UINT)
-//     13-14  min interval, us (UINT) -- both 0 in ASYNC fallback
+//     11-12  position probe: glitches in BufferOut 12-15 (UINT, wraps)
+//     13-14  position probe: max |d2| over the last second / 16 (UINT)
+//            (the SYNC0 interval max / min moved to the serial line only)
 //     15     1 = cycles driven by the SYNC0 interrupt, 0 = polling fallback
 //   BufferOut (PLC -> slave)
 //     0      bit 0 drives the on-board LED
@@ -31,6 +32,10 @@
 //   Bus timing probe (the delta drives saw stale targets, 2026-09-30):
 //   BufferOut
 //     8-11   PLC cycle counter, +1 per EtherCAT task cycle (UDINT)
+//     12-15  a copy of EAxis0's Target Position PDO (DINT): the same
+//            position stream the drive gets, checked here at SYNC0 like
+//            the ASDA scope recordings -- second difference per cycle,
+//            |d2| > POS_GLITCH_THRESH counts as a glitch
 //   BufferIn
 //     22-23  stale: SYNC0 cycles that read the same counter as the last one
 //            (the frame had not arrived yet) -- the drives' symptom (UINT, wraps)
@@ -99,6 +104,12 @@ static bool seqValid = false;
 static uint16_t staleCount = 0, skipCount = 0;
 static uint16_t arrMinUs = 0, arrMaxUs = 0, lateCount = 0;   // last full second
 static uint32_t arrMinAcc = 0xFFFFFFFF, arrMaxAcc = 0, lateAcc = 0;
+// Position probe (inputs 11-14).
+static const int32_t POS_GLITCH_THRESH = 150000;
+static int32_t posPrev = 0, velPrev = 0;
+static int posValid = 0;
+static uint16_t posGlitch = 0, posD2Max16 = 0;
+static uint32_t posD2MaxAcc = 0;
 // First poll after MainTask (the probe's floor: a frame already in by then
 // reads as arriving at the first poll) and how often that happened; serial only.
 static uint32_t poll0MinAcc = 0xFFFFFFFF, poll0MaxAcc = 0, earlyAcc = 0;
@@ -358,10 +369,10 @@ static void ecatCycle() {
   in[8] = (position >> 24) & 0xFF;
   in[9] = errCount;
   in[10] = agc;
-  in[11] = intervalMax & 0xFF;
-  in[12] = intervalMax >> 8;
-  in[13] = intervalMin & 0xFF;
-  in[14] = intervalMin >> 8;
+  in[11] = posGlitch & 0xFF;
+  in[12] = posGlitch >> 8;
+  in[13] = posD2Max16 & 0xFF;
+  in[14] = posD2Max16 >> 8;
   in[15] = synced ? 1 : 0;
   int32_t sp = stepper::position();
   in[16] = sp & 0xFF;
@@ -401,6 +412,25 @@ static void ecatCycle() {
     seqValid = false;
   }
   seqPrev = seq;
+
+  // Position probe: the drive's target stream, as received at this SYNC0.
+  int32_t pos = (int32_t)((uint32_t)out[12] | ((uint32_t)out[13] << 8) |
+                          ((uint32_t)out[14] << 16) | ((uint32_t)out[15] << 24));
+  if (synced && (escState & 0x0F) == 0x08) {
+    int32_t v = pos - posPrev;
+    int32_t d2 = v - velPrev;
+    if (posValid >= 2) {
+      uint32_t a = d2 < 0 ? (uint32_t)(-(int64_t)d2) : (uint32_t)d2;
+      if (a > posD2MaxAcc) posD2MaxAcc = a;
+      if (a > (uint32_t)POS_GLITCH_THRESH) posGlitch++;
+    } else {
+      posValid++;
+    }
+    velPrev = v;
+  } else {
+    posValid = 0;
+  }
+  posPrev = pos;
   int32_t target = (int32_t)((uint32_t)out[4] | ((uint32_t)out[5] << 8) |
                              ((uint32_t)out[6] << 16) | ((uint32_t)out[7] << 24));
   bool inOp = synced && (escState & 0x0F) == 0x08;
@@ -435,6 +465,8 @@ static void ecatTaskFn(void *) {
       arrMaxUs = arrMaxAcc > 65535 ? 65535 : arrMaxAcc;
       lateCount = lateAcc > 65535 ? 65535 : lateAcc;
       arrMinAcc = 0xFFFFFFFF; arrMaxAcc = 0; lateAcc = 0;
+      posD2Max16 = posD2MaxAcc / 16 > 65535 ? 65535 : posD2MaxAcc / 16;
+      posD2MaxAcc = 0;
       poll0Min = poll0MinAcc == 0xFFFFFFFF ? 0 : poll0MinAcc;
       poll0Max = poll0MaxAcc > 65535 ? 65535 : poll0MaxAcc;
       earlyCount = earlyAcc > 65535 ? 65535 : earlyAcc;
@@ -492,13 +524,14 @@ void loop() {
     Serial.printf("{\"esc\":\"%s\",\"sync\":%d,\"irq\":%lu,\"int_min\":%u,\"int_max\":%u,"
                   "\"angle\":%u,\"pos\":%ld,\"status\":%u,\"agc\":%u,\"err\":%u,"
                   "\"step\":%ld,\"st_cmd\":%ld,\"st_status\":%u,\"st_fault\":%u,\"work_max_us\":%lu,"
-                  "\"enc_max_us\":%lu,\"stale\":%u,\"skip\":%u,\"arr_min\":%u,\"arr_max\":%u,\"late\":%u,\"poll0_min\":%u,\"poll0_max\":%u,\"early\":%u}\n",
+                  "\"enc_max_us\":%lu,\"stale\":%u,\"skip\":%u,\"arr_min\":%u,\"arr_max\":%u,\"late\":%u,\"poll0_min\":%u,\"poll0_max\":%u,\"early\":%u,\"pos_glitch\":%u,\"pos_d2max\":%lu}\n",
                   escName(escState), synced ? 1 : 0, (unsigned long)irqCount,
                   intervalMin, intervalMax, rawAngle, (long)position,
                   sensorStatus, agc, errCount,
                   (long)stepper::position(), (long)stepper::cmdPos, stepper::status(),
                   stepper::fault, (unsigned long)workMaxUs, (unsigned long)encWorkMaxUs,
-                  staleCount, skipCount, arrMinUs, arrMaxUs, lateCount, poll0Min, poll0Max, earlyCount);
+                  staleCount, skipCount, arrMinUs, arrMaxUs, lateCount, poll0Min, poll0Max, earlyCount,
+                  posGlitch, (unsigned long)posD2Max16 * 16);
   }
   delay(2);
 }

@@ -59,8 +59,13 @@ for _i in range(16, 22):
     MAP[("Input", "Byte%d" % _i)] = "ecat_esp_in%d" % _i
 # Bus timing probe (firmware main.cpp): outputs 8-11 the PLC cycle
 # counter; inputs 22-31 stale / skipped / arrival min / max / late.
-for _i in range(8, 12):
+for _i in range(8, 16):
     MAP[("Output", "Byte%d" % _i)] = "ecat_esp_out%d" % _i
+# Position-stream probe: outputs 12-15 a copy of EAxis0's Target Position
+# PDO; inputs 11-14 its glitch count / max |d2| (replacing the interval
+# report, still on the serial line).
+for _i in range(11, 15):
+    MAP[("Input", "Byte%d" % _i)] = "ecat_esp_in%d" % _i
 for _i in range(22, 32):
     MAP[("Input", "Byte%d" % _i)] = "ecat_esp_in%d" % _i
 

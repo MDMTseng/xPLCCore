@@ -320,6 +320,14 @@ VAR_GLOBAL
 	EspLateSum      : UDINT;     (* EspLate summed per second since EcProfReset *)
 	EspStale0       : UINT;      (* EspStale at EcProfReset *)
 	EspSkip0        : UINT;
+	(* Position-stream probe: EasyCAT outputs 12-15 carry a copy of
+	   TapTarget0 (EAxis0's Target Position PDO, same frame); the ESP32
+	   checks its second difference at SYNC0 like the ASDA scope analysis:
+	   glitches (|d2| > 150000) and max |d2| over the last second. *)
+	EspPosGlitch    : UINT;
+	EspPosGlitch0   : UINT;      (* at EcProfReset *)
+	EspPosD2Max     : UDINT;
+	EspPosD2Peak    : UDINT;     (* max since EcProfReset *)
 	(* Where in the DC cycle the EtherCAT task's IEC code ends (the frame
 	   goes out after it): GetCurrentTimeInCycle at the end of
 	   PRG_EventLog, us. SYNC0 sits at SyncOffset % of the cycle; a frame

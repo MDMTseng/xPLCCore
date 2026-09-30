@@ -616,6 +616,10 @@ END_IF;
                 MessagePackerFb.PackKvDint(ADR('e_apeak'), UINT_TO_DINT(GVL.EspArrMaxPeak));
                 MessagePackerFb.PackKvDint(ADR('e_late'), UINT_TO_DINT(GVL.EspLate));
                 MessagePackerFb.PackKvLint(ADR('e_late_sum'), UDINT_TO_LINT(GVL.EspLateSum));
+                // e_pg / e_pd2 / e_pd2peak: EAxis0's target stream checked on the ESP32
+                MessagePackerFb.PackKvDint(ADR('e_pg'), UINT_TO_DINT(GVL.EspPosGlitch - GVL.EspPosGlitch0));
+                MessagePackerFb.PackKvLint(ADR('e_pd2'), UDINT_TO_LINT(GVL.EspPosD2Max));
+                MessagePackerFb.PackKvLint(ADR('e_pd2peak'), UDINT_TO_LINT(GVL.EspPosD2Peak));
                 IF MessageUnpackerFb.TryReadINT64('tr', 0) <> 0 THEN   // long text: only on request
                     // trl / trh: the last 20 x 500 ms min / max of the above,
                     // oldest first ("lo0,..." as text, us)

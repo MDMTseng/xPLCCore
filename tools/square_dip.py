@@ -100,6 +100,8 @@ def main():
                         "/".join(str(e.get("dd%d" % k)) for k in range(3)),
                         e.get("e_stale"), e.get("e_skip"), e.get("e_amin"), e.get("e_amax"),
                         e.get("e_apeak"), e.get("e_late"), e.get("e_late_sum")))
+                    log("       EasyCAT got EAxis0 target: glitch %s  max|d2| last s %s  peak %s" % (
+                        e.get("e_pg"), e.get("e_pd2"), e.get("e_pd2peak")))
                     log("       target PDO tap: glitch %s  max|d2| %s  =now %s  =prev %s  neither %s" % tuple(
                         "/".join(str(e.get("%s%d" % (f, k))) for k in range(3))
                         for f in ("tg", "td", "tnow", "tprev", "tnone")))
