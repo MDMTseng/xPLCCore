@@ -29,7 +29,7 @@ def scan(o):
                     continue
                 for prm in prms:
                     pn = t(prm.name)
-                    if ("Position" in pn or "Touch Probe Pos1" in pn or "Status Word" in pn) and getattr(prm, "is_mappable_io", False):
+                    if ("Position" in pn or "Touch Probe Pos1" in pn or "Status Word" in pn or "Control Word" in pn) and getattr(prm, "is_mappable_io", False):
                         addr = "?"
                         for attr in ("manual_iec_address",):
                             try:
