@@ -565,6 +565,32 @@ host packets 10x slower, and polling DEM_STATS during a stream timed out).
 **The machine is left at 10 ms** until the owner decides. Return with
 CYCLE_US 1000, then `tools/safe_install.py`.
 
+## 7h. 2026-10-01 15:25: 5 ms EtherCAT cycle
+
+`set_bus_cycle.py` CYCLE_US 5000. The drives showed 1C32:02 = 5,000,000 ns
+and 0x60C2 = 5 x 10^-3 s. The test was the same continuous Z stream as the
+10 ms long run (G1 + G4 1 ms, no polling): 318 s, about 63,000 moving
+cycles per drive.
+
+| Drive | Late | Stale | Burst events | Bursts |
+|---|---|---|---|---|
+| EAxis0 | 462 (0.73 %) | 5 | 16 | 11 |
+| EAxis1 | 473 (0.75 %) | 18 | 27 | 8 |
+| EAxis2 | 504 (0.80 %) | 18 | 33 | 9 |
+
+- **Not clean, but far rarer in time.** There is a burst (or a pair 0.3-0.7 s
+  apart) about every 30-60 s, against 2.4-3.6 s at 1 ms. At 10 ms there
+  were none in 5 min.
+- **All three drives show the same shrinking interval sequence:**
+  - EAxis1: 62.2, 51.4, 43.9, 38.3, 33.4, 29.3 s;
+  - EAxis2: 61.4, 51.3, 44.2, 38.3, 33.0, 29.6 s;
+  - EAxis0: 60.5, 51.3, 43.7, 37.5, 33.5, 29.6 s.
+- EAxis1 and EAxis2 burst together (7 of 8 within 500 ms). EAxis0 is on
+  the same rhythm but shifted in time (0 of 11 within 500 ms).
+- This fits a common, slowly varying phase drift that all drives see
+  (master / DC side), crossing each drive's pick-up window. EAxis0's new
+  firmware has a different window position.
+
 ## 8. Next tests
 
 00. **After the power cycle** (the bus is down since the SyncOffset-60
