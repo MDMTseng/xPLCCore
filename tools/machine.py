@@ -107,11 +107,33 @@ def restart_daemon():
 
 def rpc(*args, timeout=600):
     """Run codesys_scripts/rpc.py (the CODESYS daemon); returns output lines.
-    A retired daemon is restarted once and the call retried."""
+
+    The daemon retires itself after its time / job budget (config
+    session_max_seconds, default 4 h; session_max_jobs, 150): it answers the
+    job, then saves, logs out and exits. The call after that used to hit the
+    exiting daemon (ConnectionResetError; 2026-10-01 an install failed that
+    way). Now:
+    - "[budget] session retiring" in the reply: wait for the exit, restart
+      the daemon before returning;
+    - not reachable / connection reset / empty reply: restart it and retry
+      the call once -- except an install, which is reported, not repeated
+      (never risk a second download over a half-done one)."""
     lines = _rpc(*args, timeout=timeout)
-    if any("daemon not reachable" in l or "start it with: rpc.py daemon-start" in l for l in lines):
+    dead = any(s in l for l in lines for s in (
+        "daemon not reachable", "start it with: rpc.py daemon-start",
+        "ConnectionResetError", "empty reply from daemon"))
+    if dead:
         restart_daemon()
-        lines = _rpc(*args, timeout=timeout)
+        if args and args[0] == "install":
+            return lines + ["daemon restarted after a lost connection; install NOT retried"]
+        return _rpc(*args, timeout=timeout)
+    if any("[budget] session retiring" in l for l in lines):
+        log("CODESYS daemon retiring (budget): waiting for it to exit, then restarting it")
+        for _ in range(30):
+            if any("not reachable" in l for l in _rpc("ping", timeout=60)):
+                break
+            time.sleep(2)
+        restart_daemon()
     return lines
 
 

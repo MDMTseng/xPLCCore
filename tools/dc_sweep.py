@@ -3,6 +3,9 @@
 Settings:
 - syncoffset: the master's SyncOffset in % (jobs/templates/set_ec_sync_offset.py,
   WANT; refused above machine.SYNC_OFFSET_MAX = 50: 60+ wedged the PLC);
+- cycle: the EtherCAT cycle in us (jobs/templates/set_bus_cycle.py,
+  CYCLE_US; task, master and every slave's SYNC0; the drives' 0x60C2
+  follows);
 - shift: the ASDA drives' "DC sync0 shift time" (jobs/templates/
   set_drive_sync_shift.py, SHIFT; the unit seems to be ns -- 100..400 had
   no effect on 2026-10-01).
@@ -31,6 +34,7 @@ from sync_shift_sweep import run_z, virtual
 JOBS = {
     "syncoffset": ("set_ec_sync_offset.py", "WANT", "50"),
     "shift": ("set_drive_sync_shift.py", "SHIFT", "0"),
+    "cycle": ("set_bus_cycle.py", "CYCLE_US", "1000"),
 }
 
 
@@ -40,8 +44,10 @@ def apply(kind, value):
         raise SystemExit("REFUSED: SyncOffset %s > %d" % (value, mc.SYNC_OFFSET_MAX))
     src = open(os.path.join(mc.REPO, "codesys_scripts", "jobs", "templates", job), encoding="ascii").read()
     tmp = os.path.join(mc.REPO, "codesys_scripts", "jobs", "_tmp_dc_sweep.py")
-    open(tmp, "w", encoding="ascii").write(
-        re.sub(r'^%s = ".*"$' % var, '%s = "%s"' % (var, value), src, count=1, flags=re.M))
+    m = re.search(r'^%s = (.*)$' % var, src, flags=re.M)
+    quoted = m.group(1).strip().startswith('"')
+    new = '%s = "%s"' % (var, value) if quoted else '%s = %d' % (var, int(value))
+    open(tmp, "w", encoding="ascii").write(src[:m.start()] + new + src[m.end():])
     try:
         out = mc.rpc("exec", "--file", tmp, timeout=300)
     finally:
@@ -90,6 +96,10 @@ def main():
             mc.drives_off()
             apply(a.kind, v)
             mc.reconnect()
+            if a.kind == "cycle":
+                from sync_shift_sweep import sdo_read
+                log("  60C2 (sub1, sub2) per drive:", [(sdo_read(st, 0x60C2, 1, 1), sdo_read(st, 0x60C2, 2, 1))
+                                                       for st in (1003, 1004, 1005)])
             mc.set_delta(real=True)
             mc.fsm_to("Ready", timeout=180)
             r = run_z(a.seconds)
