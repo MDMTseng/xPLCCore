@@ -24,6 +24,7 @@ Regenerate this file with `python tools/gen_script_index.py`.
 | `a_blend_stress.py` | moves axes | Queued, blended G1s that turn A, over and over: the move pattern the real PLC hung on right after SM3 4.20 was installed (2026-09-29, 5 queued G1s at Cor 45 with a different A each). |
 | `a_limit_step.py` | moves axes | One step of the A limit ladder on the machine (the Motors page's test from the command line, for a session where the operator reports the mark). |
 | `a_speed_compare.py` | moves axes | Motion time per part with and without A rotations, on the machine. |
+| `arrival_phases.py` | moves axes | Does motion change the frame timing? |
 | `asda_scope.py` | read-only | Find stale-target events in ASDA-Soft scope recordings (B3-E, 8 kHz). |
 | `comm_profile.py` | read-only | Comm task profile: where the Comm task's time goes (EC_STATS cs/cb/co/ cscan/ctask/cout/cout500 from TCP_MSGPAK_Server / PRG_EcatEspHttp stamps) next to TASK_STATS for all tasks. |
 | `dc_sweep.py` | moves axes, downloads | Sweep a DC timing setting and measure the ASDA stale-target rate per level. |

@@ -88,6 +88,14 @@ def main():
     a = ap.parse_args()
     mc.require_owner_ok(a.owner_ok)
     restore = a.restore or JOBS[a.kind][2]
+    # A stop file cancels the levels of a queued sweep and keeps only the
+    # restore (so a chained sweep can be cut short without killing it
+    # mid-motion or mid-download).
+    stop = os.path.join(mc.REPO, "codesys_scripts", "jobs", "dc_sweep.stop")
+    if os.path.exists(stop):
+        os.remove(stop)
+        log("stop file found: skipping %s, only restoring %s" % (" ".join(a.values), restore))
+        a.values = []
     mc.reconnect()
     results = []
     try:
