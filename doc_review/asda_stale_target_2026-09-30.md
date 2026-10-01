@@ -554,6 +554,14 @@ At 1 ms the same test gave 13-15 bursts per drive per minute. So at a 10 ms
 cycle the drives always take the right target, in line with a timing
 window: 10 ms leaves the frame far from the drive's pick-up point.
 
+Long run (15:14-15:19): continuous Z 0 <-> -5 mm stream, F 5, each G1
+followed by G4 1 ms, no polling during the run (at 10 ms the PLC answers
+host packets 10x slower, and polling DEM_STATS during a stream timed out).
+- 313 s, 31,232 moving cycles on each drive.
+- Histogram `163 2 4 31232 0 0 0 0` (EAxis2 `163 1 6 31231 ...`).
+- **0 late, 0 stale, 0 burst events on all three drives.**
+- At 1 ms the same 5 min would have given about 100 bursts per drive.
+
 **The machine is left at 10 ms** until the owner decides. Return with
 CYCLE_US 1000, then `tools/safe_install.py`.
 
