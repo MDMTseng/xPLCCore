@@ -54,3 +54,4 @@ Regenerate this file with `python tools/gen_script_index.py`.
 | `stale_suite.py` | moves axes, downloads | After-recovery test suite for the ASDA stale-target investigation (doc_review/asda_stale_target_2026-09-30.md, sections 7c and 8). |
 | `sync_offset_sweep.py` | moves axes, downloads | SyncOffset sweep with the drive-demand metric (ASDA stale-target investigation, doc_review/asda_stale_target_2026-09-30.md section 7c). |
 | `sync_shift_sweep.py` | moves axes, downloads | Sweep the ASDA drives' "DC sync0 shift time" and measure the stale-target rate at each level (the drives' SYNC0 fires this much later than the other slaves'; the frame then has more time before the drives' SYNC0). |
+| `trace_stops.py` | moves axes | Position traces around a stop, per drive parameter set, plotted together. |

@@ -91,6 +91,14 @@ VAR
     arStZ       : ARRAY[0..299] OF REAL;
     lrStD       : LREAL;
     udiStAt     : UDINT;
+    // Stop trace (GVL.Tr*): ring of the last 128 cycles, staged trace.
+    fbStSet     : SM3_Robotics.SMC_GroupReadSetPosition;
+    arRgC       : ARRAY[0..127, 0..2] OF REAL;
+    arRgA       : ARRAY[0..127, 0..2] OF REAL;
+    iRg         : INT;
+    arTgC       : ARRAY[0..399, 0..2] OF REAL;
+    arTgA       : ARRAY[0..399, 0..2] OF REAL;
+    iTrK        : INT;
     iSyncMin    : INT := 32767;
     iSyncMax    : INT := -32768;
     udiSyncBucket : UDINT;
@@ -829,9 +837,27 @@ xStMoving := ABS(IoConfig_Globals.EAxis0.fSetPosition - lrStSetPrev[0]) > 1.0E-6
 lrStSetPrev[0] := IoConfig_Globals.EAxis0.fSetPosition;
 lrStSetPrev[1] := IoConfig_Globals.EAxis1.fSetPosition;
 lrStSetPrev[2] := IoConfig_Globals.EAxis2.fSetPosition;
+// Stop trace: commanded and actual TCP every cycle into a 128-cycle ring.
+fbStSet(AxisGroup := AxisGroupSM.AxisGroupManagerFb._agAxisGroup, Enable := TRUE,
+        CoordSystem := SMC_COORD_SYSTEM.WCS);
+arRgC[iRg, 0] := LREAL_TO_REAL(fbStSet.Position.c.X);
+arRgC[iRg, 1] := LREAL_TO_REAL(fbStSet.Position.c.Y);
+arRgC[iRg, 2] := LREAL_TO_REAL(fbStSet.Position.c.Z);
+arRgA[iRg, 0] := LREAL_TO_REAL(AxisGroupSM.GroupActualPositionFb.Position.c.X);
+arRgA[iRg, 1] := LREAL_TO_REAL(AxisGroupSM.GroupActualPositionFb.Position.c.Y);
+arRgA[iRg, 2] := LREAL_TO_REAL(AxisGroupSM.GroupActualPositionFb.Position.c.Z);
 IF xStMovPrev AND NOT xStMoving AND (iStCap < 0) AND AxisGroupSM.ArmPositionValid THEN
     iStCap := 0;
     udiStAt := udiNow;
+    // the 100 cycles before the stop (this cycle is sample 100)
+    FOR iTrK := 0 TO 99 DO
+        arTgC[iTrK, 0] := arRgC[(iRg + 28 + iTrK) MOD 128, 0];
+        arTgC[iTrK, 1] := arRgC[(iRg + 28 + iTrK) MOD 128, 1];
+        arTgC[iTrK, 2] := arRgC[(iRg + 28 + iTrK) MOD 128, 2];
+        arTgA[iTrK, 0] := arRgA[(iRg + 28 + iTrK) MOD 128, 0];
+        arTgA[iTrK, 1] := arRgA[(iRg + 28 + iTrK) MOD 128, 1];
+        arTgA[iTrK, 2] := arRgA[(iRg + 28 + iTrK) MOD 128, 2];
+    END_FOR;
 END_IF;
 xStMovPrev := xStMoving;
 IF iStCap >= 0 THEN
@@ -841,6 +867,12 @@ IF iStCap >= 0 THEN
         arStX[iStCap] := LREAL_TO_REAL(AxisGroupSM.GroupActualPositionFb.Position.c.X);
         arStY[iStCap] := LREAL_TO_REAL(AxisGroupSM.GroupActualPositionFb.Position.c.Y);
         arStZ[iStCap] := LREAL_TO_REAL(AxisGroupSM.GroupActualPositionFb.Position.c.Z);
+        arTgC[100 + iStCap, 0] := arRgC[iRg, 0];
+        arTgC[100 + iStCap, 1] := arRgC[iRg, 1];
+        arTgC[100 + iStCap, 2] := arRgC[iRg, 2];
+        arTgA[100 + iStCap, 0] := arStX[iStCap];
+        arTgA[100 + iStCap, 1] := arStY[iStCap];
+        arTgA[100 + iStCap, 2] := arStZ[iStCap];
         iStCap := iStCap + 1;
         IF iStCap >= 300 THEN
             iStLast := 0;
@@ -859,7 +891,18 @@ IF iStCap >= 0 THEN
             GVL.SettleErrUm[GVL.SettleN MOD 256] := LREAL_TO_UDINT(lrStD * 1000.0);
             GVL.SettleAtMs[GVL.SettleN MOD 256] := udiStAt;
             GVL.SettleN := GVL.SettleN + 1;
+            FOR iTrK := 0 TO 399 DO
+                GVL.TrCX[iTrK] := arTgC[iTrK, 0];
+                GVL.TrCY[iTrK] := arTgC[iTrK, 1];
+                GVL.TrCZ[iTrK] := arTgC[iTrK, 2];
+                GVL.TrAX[iTrK] := arTgA[iTrK, 0];
+                GVL.TrAY[iTrK] := arTgA[iTrK, 1];
+                GVL.TrAZ[iTrK] := arTgA[iTrK, 2];
+            END_FOR;
+            GVL.TrAtMs := udiStAt;
+            GVL.TrSeq := GVL.TrSeq + 1;
             iStCap := -1;
         END_IF;
     END_IF;
 END_IF;
+iRg := (iRg + 1) MOD 128;

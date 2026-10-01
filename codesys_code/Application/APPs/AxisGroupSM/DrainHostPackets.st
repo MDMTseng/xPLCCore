@@ -576,6 +576,32 @@ END_IF;
                 MessagePackerFb.PackKvDint(ADR('actual'), GVL.ActualTap0);
                 MessagePackerFb.PackKvDint(ADR('sw'), WORD_TO_DINT(GVL.StatusTap0));
                 MessagePackerFb.PackKvDint(ADR('cw'), WORD_TO_DINT(GVL.CtlTap0));
+            ELSIF (CommandType = 'SETTLE_TRACE') THEN
+                // The last stop trace (GVL.Tr*): seq, at (PLC ms of the stop),
+                // ev = up to 4 samples from index from:i (0..399, 100 = the
+                // stop) as cx:cy:cz:ax:ay:az (mm), comma separated.
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                EcTrI := LIMIT(0, LINT_TO_INT(MessageUnpackerFb.TryReadINT64('from', 0)), 399);
+                MessagePackerFb.PackKvLint(ADR('seq'), UDINT_TO_LINT(GVL.TrSeq));
+                MessagePackerFb.PackKvLint(ADR('at'), UDINT_TO_LINT(GVL.TrAtMs));
+                EcTrStr := '';
+                FOR EcObjJ := EcTrI TO MIN(EcTrI + 3, 399) DO
+                    EcTrStr := CONCAT(EcTrStr, REAL_TO_STRING(GVL.TrCX[EcObjJ]));
+                    EcTrStr := CONCAT(EcTrStr, ':');
+                    EcTrStr := CONCAT(EcTrStr, REAL_TO_STRING(GVL.TrCY[EcObjJ]));
+                    EcTrStr := CONCAT(EcTrStr, ':');
+                    EcTrStr := CONCAT(EcTrStr, REAL_TO_STRING(GVL.TrCZ[EcObjJ]));
+                    EcTrStr := CONCAT(EcTrStr, ':');
+                    EcTrStr := CONCAT(EcTrStr, REAL_TO_STRING(GVL.TrAX[EcObjJ]));
+                    EcTrStr := CONCAT(EcTrStr, ':');
+                    EcTrStr := CONCAT(EcTrStr, REAL_TO_STRING(GVL.TrAY[EcObjJ]));
+                    EcTrStr := CONCAT(EcTrStr, ':');
+                    EcTrStr := CONCAT(EcTrStr, REAL_TO_STRING(GVL.TrAZ[EcObjJ]));
+                    EcTrStr := CONCAT(EcTrStr, ',');
+                END_FOR;
+                MessagePackerFb.PackKvStr(ADR('ev'), ADR(EcTrStr));
             ELSIF (CommandType = 'SETTLE') THEN
                 // Settling-time log (GVL.Settle*): n = stops so far, tol =
                 // tolerance mm, ev = up to 20 stops from index from:i as

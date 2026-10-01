@@ -350,6 +350,18 @@ VAR_GLOBAL
 	SettleErrUm     : ARRAY[0..255] OF UDINT;
 	SettleAtMs      : ARRAY[0..255] OF UDINT;
 	SettleN         : UDINT;
+	(* Trace of the last completed stop: 100 cycles before the set positions
+	   stopped and the 300 after, commanded TCP (MC_GroupReadSetPosition)
+	   and actual TCP (MC_GroupReadActualPosition), WCS mm. TrSeq counts
+	   the traces; SYS SETTLE_TRACE reads them. Sample 100 = the stop. *)
+	TrCX            : ARRAY[0..399] OF REAL;
+	TrCY            : ARRAY[0..399] OF REAL;
+	TrCZ            : ARRAY[0..399] OF REAL;
+	TrAX            : ARRAY[0..399] OF REAL;
+	TrAY            : ARRAY[0..399] OF REAL;
+	TrAZ            : ARRAY[0..399] OF REAL;
+	TrSeq           : UDINT;
+	TrAtMs          : UDINT;
 	(* Direct drive test without SoftMotion (SYS DIRECT; PRG_EventLog):
 	   EAxis0's controlword 0x6040 and target 0x607A written by IEC code
 	   while EAxis0 is virtual in SoftMotion and the FSM is UnInited.
