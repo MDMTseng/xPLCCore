@@ -68,6 +68,9 @@ VAR
     xEarly      : BOOL;
     uiOddPrev   : UINT;
     xOddValid   : BOOL;
+    uiArrMin    : UINT := 16#FFFF;
+    uiArrMax    : UINT;
+    udiArrBucket : UDINT;
     xLatePrev   : ARRAY[0..2] OF BOOL;
     xEarlyPrev  : ARRAY[0..2] OF BOOL;
     xGlitchD    : BOOL;
@@ -438,6 +441,7 @@ IF GVL.DemReset THEN
         GVL.DemLate[iProf] := 0;
         GVL.DemEvtN[iProf] := 0;
         GVL.OddLogN := 0;
+        GVL.ArrLogN := 0;
         GVL.SyncOffCount[iProf] := 0;
         GVL.SyncOffAndLate[iProf] := 0;
         iPost[iProf] := 0;
@@ -459,7 +463,23 @@ GVL.EspSkip := TO_UINT(ecat_esp_in24) + TO_UINT(ecat_esp_in25) * 256;
 // 2026-10-01 firmware (were the arrival min / max); logged per event
 // (GVL.OddLog*).
 GVL.EspOddCount := TO_UINT(ecat_esp_in26) + TO_UINT(ecat_esp_in27) * 256;
-GVL.EspOddDev := UINT_TO_INT(TO_UINT(ecat_esp_in28) + TO_UINT(ecat_esp_in29) * 256);
+GVL.EspOddDev := 0;
+GVL.EspArrUs := TO_UINT(ecat_esp_in28) + TO_UINT(ecat_esp_in29) * 256;
+IF GVL.EspArrUs <> 16#FFFF THEN
+    uiArrMin := MIN(uiArrMin, GVL.EspArrUs);
+    uiArrMax := MAX(uiArrMax, GVL.EspArrUs);
+END_IF;
+IF udiNow - udiArrBucket >= 100 THEN
+    IF uiArrMax >= uiArrMin THEN
+        GVL.ArrLogMs[GVL.ArrLogN MOD 4096] := udiArrBucket;
+        GVL.ArrLogMin[GVL.ArrLogN MOD 4096] := uiArrMin;
+        GVL.ArrLogMax[GVL.ArrLogN MOD 4096] := uiArrMax;
+        GVL.ArrLogN := GVL.ArrLogN + 1;
+    END_IF;
+    udiArrBucket := udiNow;
+    uiArrMin := 16#FFFF;
+    uiArrMax := 0;
+END_IF;
 GVL.EspArrMinUs := 0;
 GVL.EspArrMaxUs := 0;
 IF xOddValid AND (GVL.EspOddCount <> uiOddPrev) THEN

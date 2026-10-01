@@ -399,6 +399,15 @@ class EasyCAT
       return v;
     }
 
+    // Added (xPLCCore): write an ESC core register, e.g. the AL event mask
+    // 0x0204 (SYNC0 + SM0 event on INT for the frame-arrival timing).
+    void WriteEsc(unsigned short Address, unsigned long Data, unsigned char Len)
+    {
+      SPI.beginTransaction(SPISettings(SpiSpeed, MSBFIRST, SPI_MODE0));
+      SPIWriteRegisterIndirect(Data, Address, Len);
+      SPI.endTransaction();
+    }
+
     // Added (xPLCCore): read the whole output process RAM (as MainTask
     // does -- the full SM2 area, so the ESC hands over its newest buffer)
     // into dst, without touching BufferOut. For the frame-arrival probe.

@@ -42,13 +42,15 @@
 //     24-25  skipped: counter steps > 1 (UINT, wraps)
 //     26-27  odd SYNC0 intervals: SYNC0-to-SYNC0 (micros() in the ISR) off
 //            the SYNC0 cycle (ESC 0x09A0) by more than ODD_US (UINT, wraps)
-//     28-29  deviation of the last odd interval, us (INT16)
+//     28-29  frame arrival: the last frame's SM0 event after its SYNC0, us
+//            (UINT, 0xFFFF = no frame in that cycle)
 //     30-31  late: cycles whose frame had not arrived by the next SYNC0,
 //            last second (UINT)
-//   Arrival = the first poll after MainTask that reads a new counter
-//   (the whole output area re-read, ~50 us per poll: the resolution);
-//   SYNC0 time = micros() in the interrupt. (Polling SM2 status 0x0815
-//   bit0 instead never saw it set.)
+//   Arrival: INT carries SYNC0 and the output SyncManager (SM0) event (AL
+//   event mask 0x0104). The ISR takes micros(); the task reads AL event
+//   request 0x0220: bit 8 set = a frame wrote the outputs (the buffer is
+//   then read once, which clears the event and drops INT), else SYNC0.
+//   Resolution: the ESP32's interrupt latency, a few us.
 //
 // Synchronisation: DC_SYNC. The master runs distributed clocks on this
 // slave like on the servo drives (DC_Sync opmode, AssignActivate #x300,
@@ -103,7 +105,9 @@ static volatile uint32_t irqUs = 0;                 // micros() at the last SYNC
 static uint32_t seqPrev = 0;
 static bool seqValid = false;
 static uint16_t staleCount = 0, skipCount = 0;
-static uint16_t arrMinUs = 0, arrMaxUs = 0, lateCount = 0;   // last full second
+static uint16_t arrMinUs = 0, arrMaxUs = 0, lateCount = 0;   // last full second, serial
+static uint16_t arrLast = 0xFFFF;                   // inputs 28-29
+static uint32_t frameIrqs = 0, syncIrqs = 0;        // serial
 // Odd SYNC0 intervals (inputs 26-29): a shift of the DC system time moves
 // every slave's SYNC0 at once.
 static const int32_t ODD_US = 3;
@@ -327,6 +331,10 @@ void setup() {
     delay(1000);
   }
   Serial.println("EasyCAT Init OK");
+  // INT: SYNC0 (bit 2) and the output SyncManager event (bit 8), for the
+  // frame-arrival timing (the library set SYNC0 only).
+  EASYCAT.WriteEsc(0x0204, 0x00000104UL, 4);
+  Serial.printf("AL event mask 0x0204 = %08lX\n", EASYCAT.ReadEsc(0x0204, 4));
   dumpEscConfig();
   stepper::begin();
 
@@ -397,8 +405,8 @@ static void ecatCycle() {
   in[25] = skipCount >> 8;
   in[26] = oddCount & 0xFF;
   in[27] = oddCount >> 8;
-  in[28] = (uint16_t)oddLastDev & 0xFF;
-  in[29] = (uint16_t)oddLastDev >> 8;
+  in[28] = arrLast & 0xFF;
+  in[29] = arrLast >> 8;
   in[30] = lateCount & 0xFF;
   in[31] = lateCount >> 8;
 
@@ -447,6 +455,9 @@ static void ecatCycle() {
   stepper::newSetpoint(out[2], target, inOp);
 }
 
+static bool frameSinceSync = false;
+static uint32_t lastSyncIrq = 0;
+
 static void ecatTaskFn(void *) {
   uint32_t last = 0, winStart = micros();
   uint32_t mx = 0, mn = 0xFFFFFFFF, wmx = 0;
@@ -460,6 +471,33 @@ static void ecatTaskFn(void *) {
       ecatCycle();
       continue;
     }
+    uint32_t tIrq = irqUs;
+    // A frame interrupt whose event MainTask already consumed (it read the
+    // outputs first) shows no bit 8: anything well before the next SYNC0 is
+    // a frame too.
+    bool early = synced && nomUs && (tIrq - lastSyncIrq) < nomUs * 3 / 4;
+    if (synced && (early || (EASYCAT.ReadEsc(0x0220, 4) & 0x100))) {
+      // A frame wrote the outputs: time it, read the buffer (clears the
+      // SM0 event, INT drops so the next SYNC0 gives an edge), wait for SYNC0.
+      static uint8_t clr[64];
+      EASYCAT.PeekOutputs(clr);
+      frameIrqs++;
+      if (!frameSinceSync) {
+        uint32_t arr = tIrq - lastSyncIrq;
+        if (arr < arrMinAcc) arrMinAcc = arr;
+        if (arr > arrMaxAcc) arrMaxAcc = arr;
+        arrLast = arr > 65534 ? 65534 : (uint16_t)arr;
+        frameSinceSync = true;
+      }
+      continue;
+    }
+    syncIrqs++;
+    if (synced && !frameSinceSync) {
+      lateAcc++;
+      arrLast = 0xFFFF;
+    }
+    frameSinceSync = false;
+    lastSyncIrq = tIrq;
     uint32_t now = micros();
     if (synced) {
       uint32_t d = now - last;
@@ -484,8 +522,7 @@ static void ecatTaskFn(void *) {
       earlyCount = earlyAcc > 65535 ? 65535 : earlyAcc;
       poll0MinAcc = 0xFFFFFFFF; poll0MaxAcc = 0; earlyAcc = 0;
     }
-    uint32_t tSync = irqUs;
-    uint32_t seen = irqCount;
+    uint32_t tSync = tIrq;
     // SYNC0 interval from the ISR timestamps (no task wake-up jitter).
     if (nomUs == 0) {
       uint32_t c = EASYCAT.ReadEsc(0x09A0, 4);
@@ -508,37 +545,6 @@ static void ecatTaskFn(void *) {
     uint32_t w = micros() - now;
     if (w > wmx) wmx = w;
 
-    // Frame arrival: MainTask read the outputs (clearing SM2 status bit0);
-    // poll until the next frame writes them, or the next SYNC0 comes.
-    if ((escState & 0x0F) == 0x08) {
-      bool got = false;
-      uint32_t arr = 0;
-      static uint8_t peek[64];
-      bool first = true;
-      while (irqCount == seen) {
-        if (first) {
-          uint32_t p0 = micros() - tSync;
-          if (p0 < poll0MinAcc) poll0MinAcc = p0;
-          if (p0 > poll0MaxAcc) poll0MaxAcc = p0;
-        }
-        EASYCAT.PeekOutputs(peek);
-        uint32_t q = (uint32_t)peek[8] | ((uint32_t)peek[9] << 8) |
-                     ((uint32_t)peek[10] << 16) | ((uint32_t)peek[11] << 24);
-        if (q != seqPrev) {                  // the next frame's counter is in
-          arr = micros() - tSync;
-          got = true;
-          if (first) earlyAcc++;
-          break;
-        }
-        first = false;
-      }
-      if (got) {
-        if (arr < arrMinAcc) arrMinAcc = arr;
-        if (arr > arrMaxAcc) arrMaxAcc = arr;
-      } else {
-        lateAcc++;
-      }
-    }
   }
 }
 
@@ -552,13 +558,14 @@ void loop() {
     Serial.printf("{\"esc\":\"%s\",\"sync\":%d,\"irq\":%lu,\"int_min\":%u,\"int_max\":%u,"
                   "\"angle\":%u,\"pos\":%ld,\"status\":%u,\"agc\":%u,\"err\":%u,"
                   "\"step\":%ld,\"st_cmd\":%ld,\"st_status\":%u,\"st_fault\":%u,\"work_max_us\":%lu,"
-                  "\"enc_max_us\":%lu,\"stale\":%u,\"skip\":%u,\"odd\":%u,\"odd_dev\":%d,\"odd_hist\":[%lu,%lu,%lu,%lu,%lu,%lu,%lu],\"arr_min\":%u,\"arr_max\":%u,\"late\":%u,\"poll0_min\":%u,\"poll0_max\":%u,\"early\":%u,\"pos_glitch\":%u,\"pos_d2max\":%lu}\n",
+                  "\"enc_max_us\":%lu,\"stale\":%u,\"skip\":%u,\"odd\":%u,\"odd_dev\":%d,\"arr_last\":%u,\"frame_irqs\":%lu,\"sync_irqs\":%lu,\"odd_hist\":[%lu,%lu,%lu,%lu,%lu,%lu,%lu],\"arr_min\":%u,\"arr_max\":%u,\"late\":%u,\"poll0_min\":%u,\"poll0_max\":%u,\"early\":%u,\"pos_glitch\":%u,\"pos_d2max\":%lu}\n",
                   escName(escState), synced ? 1 : 0, (unsigned long)irqCount,
                   intervalMin, intervalMax, rawAngle, (long)position,
                   sensorStatus, agc, errCount,
                   (long)stepper::position(), (long)stepper::cmdPos, stepper::status(),
                   stepper::fault, (unsigned long)workMaxUs, (unsigned long)encWorkMaxUs,
-                  staleCount, skipCount, oddCount, (int)oddLastDev,
+                  staleCount, skipCount, oddCount, (int)oddLastDev, arrLast,
+                  (unsigned long)frameIrqs, (unsigned long)syncIrqs,
                   (unsigned long)oddHist[0], (unsigned long)oddHist[1], (unsigned long)oddHist[2], (unsigned long)oddHist[3],
                   (unsigned long)oddHist[4], (unsigned long)oddHist[5], (unsigned long)oddHist[6],
                   arrMinUs, arrMaxUs, lateCount, poll0Min, poll0Max, earlyCount,

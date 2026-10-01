@@ -576,6 +576,28 @@ END_IF;
                 MessagePackerFb.PackKvDint(ADR('actual'), GVL.ActualTap0);
                 MessagePackerFb.PackKvDint(ADR('sw'), WORD_TO_DINT(GVL.StatusTap0));
                 MessagePackerFb.PackKvDint(ADR('cw'), WORD_TO_DINT(GVL.CtlTap0));
+            ELSIF (CommandType = 'ESP_ARR') THEN
+                // The EasyCAT frame-arrival log (GVL.ArrLog*): n = buckets so
+                // far, now = the last arrival (us), ev = up to 12 buckets from
+                // index from:i as ms:min:max (us), comma separated.
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                EcEvtFrom := LINT_TO_UDINT(MessageUnpackerFb.TryReadINT64('from', 0));
+                MessagePackerFb.PackKvLint(ADR('n'), UDINT_TO_LINT(GVL.ArrLogN));
+                MessagePackerFb.PackKvDint(ADR('now'), UINT_TO_DINT(GVL.EspArrUs));
+                EcTrStr := '';
+                EcEvtI := EcEvtFrom;
+                WHILE (EcEvtI < GVL.ArrLogN) AND (EcEvtI < EcEvtFrom + 12) DO
+                    EcTrStr := CONCAT(EcTrStr, UDINT_TO_STRING(GVL.ArrLogMs[EcEvtI MOD 4096]));
+                    EcTrStr := CONCAT(EcTrStr, ':');
+                    EcTrStr := CONCAT(EcTrStr, UINT_TO_STRING(GVL.ArrLogMin[EcEvtI MOD 4096]));
+                    EcTrStr := CONCAT(EcTrStr, ':');
+                    EcTrStr := CONCAT(EcTrStr, UINT_TO_STRING(GVL.ArrLogMax[EcEvtI MOD 4096]));
+                    EcTrStr := CONCAT(EcTrStr, ',');
+                    EcEvtI := EcEvtI + 1;
+                END_WHILE;
+                MessagePackerFb.PackKvStr(ADR('ev'), ADR(EcTrStr));
             ELSIF (CommandType = 'ESP_ODD') THEN
                 // Odd SYNC0 intervals at the EasyCAT (GVL.OddLog*): n = events
                 // so far, cnt = the ESP32's counter, ev = up to 20 events

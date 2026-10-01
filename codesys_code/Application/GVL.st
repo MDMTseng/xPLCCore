@@ -387,6 +387,17 @@ VAR_GLOBAL
 	OddLogMs        : ARRAY[0..1023] OF UDINT;
 	OddLogDev       : ARRAY[0..1023] OF INT;
 	OddLogN         : UDINT;
+	(* Frame arrival at the EasyCAT (end of the line): the output SM event
+	   after its SYNC0, us, timed by the ESP32's interrupts (firmware inputs
+	   28-29; 16#FFFF = no frame in that cycle). Logged as min / max per
+	   100 ms (ArrLogMs = PLC ms of the bucket start), ring of 4096
+	   (~6.8 min), ArrLogN counts all. SYS ESP_ARR reads it; DEM_STATS
+	   reset:1 clears it. *)
+	EspArrUs        : UINT;
+	ArrLogMs        : ARRAY[0..4095] OF UDINT;
+	ArrLogMin       : ARRAY[0..4095] OF UINT;
+	ArrLogMax       : ARRAY[0..4095] OF UINT;
+	ArrLogN         : UDINT;
 	DemEvtN         : ARRAY[0..2] OF UDINT;
 	(* Snapshots of the stale / glitch events: 32 cycles of sent target and
 	   drive demand (oldest first), the event 12 cycles from the end. Up to

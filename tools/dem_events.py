@@ -18,7 +18,12 @@ consecutive cycles is one late timestamp (ESP32 interrupt latency); a
 single one is a real shift of SYNC0 (DC system time). For every drive
 burst it prints the nearest single shift.
 
-    python tools/dem_events.py [--gap 300] [--json FILE]
+And the EasyCAT's frame-arrival log (SYS ESP_ARR: the output SM event
+after its SYNC0, min / max per 100 ms): for every drive burst, the
+arrival range in the 100 ms buckets around it, against the whole run.
+--plot FILE draws arrival over time with the bursts marked.
+
+    python tools/dem_events.py [--gap 300] [--json FILE] [--plot FILE.png]
 
 Run any real-delta motion first (e.g. square_dip.py) after DEM_STATS reset.
 Only cycles where the target moves can show a lag, so stops hide bursts.
@@ -70,6 +75,20 @@ def read_odd():
     return out, singles, pairs
 
 
+def read_arr():
+    n = mc.sys_cmd("ESP_ARR", **{"from": 0})["n"]
+    out = []
+    i = max(0, n - 4096)
+    while i < n:
+        ev = mc.sys_cmd("ESP_ARR", **{"from": i})["ev"].rstrip(",")
+        vals = [tuple(int(x) for x in e.split(":")) for e in ev.split(",") if e]
+        if not vals:
+            break
+        out += vals
+        i += len(vals)
+    return out                                     # (ms, min us, max us)
+
+
 def bursts(events, gap):
     b = []
     for ms, code in events:
@@ -86,6 +105,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--gap", type=int, default=300, help="ms between events of one burst")
     ap.add_argument("--json", help="save the raw events here")
+    ap.add_argument("--plot", help="PNG: frame arrival over time with the bursts")
     a = ap.parse_args()
     mc.reconnect()
     ev, bs = {}, {}
@@ -96,8 +116,14 @@ def main():
     odd, singles, pairs = read_odd()
     log("EasyCAT odd SYNC0 intervals: %d events, %d +/- pairs (timestamp latency), %d single shifts" % (
         len(odd), pairs, len(singles)))
+    arr = read_arr()
+    if arr:
+        lo = sorted(x[1] for x in arr)
+        hi = sorted(x[2] for x in arr)
+        log("EasyCAT frame arrival after SYNC0: %d buckets of 100 ms; min %d us, max %d us; "
+            "bucket max p50 %d / p99 %d us" % (len(arr), lo[0], hi[-1], hi[len(hi) // 2], hi[int(len(hi) * 0.99)]))
     if a.json:
-        json.dump({"EAxis%d" % k: ev[k] for k in range(3)} | {"odd": odd}, open(a.json, "w"))
+        json.dump({"EAxis%d" % k: ev[k] for k in range(3)} | {"odd": odd, "arr": arr}, open(a.json, "w"))
     t0 = min([b[0]["start"] for b in bs.values() if b] or [0])
     for k in range(3):
         st = [b["start"] for b in bs[k]]
@@ -123,16 +149,36 @@ def main():
                 row.append(min((c - b["start"] for c in cand), key=abs))
             near_all.append(row)
             sh = min(((ms - b["start"], dev) for ms, dev in singles), key=lambda x: abs(x[0]), default=None)
-            print("  EAxis%d %8.3f s  len %4d ms  events %3d (early %d) | %s | nearest SYNC0 shift %s" % (
+            near = [x for x in arr if -200 <= x[0] - b["start"] <= 200]
+            arr_txt = ("%d..%d us" % (min(x[1] for x in near), max(x[2] for x in near))) if near else "-"
+            print("  EAxis%d %8.3f s  len %4d ms  events %3d (early %d) | %s | SYNC0 shift %s | arrival +-200 ms %s" % (
                 k, (b["start"] - t0) / 1000.0, b["end"] - b["start"], b["n"], b["early"],
                 "  ".join("EAxis%d %+6s" % (j, "-" if d is None else d) for j, d in zip(others, row)),
-                "-" if sh is None else "%+d ms (%+d us)" % sh))
+                "-" if sh is None else "%+d ms (%+d us)" % sh, arr_txt))
         for idx, j in enumerate(others):
             d = [abs(r[idx]) for r in near_all if r[idx] is not None]
             if d:
                 print("  EAxis%d vs EAxis%d: %d of %d bursts within 50 ms, %d within 500 ms" % (
                     k, j, sum(x <= 50 for x in d), len(d), sum(x <= 500 for x in d)))
         print()
+    if a.plot and arr:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(14, 5))
+        ta = [(x[0] - t0) / 1000.0 for x in arr]
+        ax.fill_between(ta, [x[1] for x in arr], [x[2] for x in arr], step="post", color="0.6", label="frame arrival (min..max per 100 ms)")
+        lo_y = min(x[1] for x in arr)
+        for k, c in zip(range(3), ("tab:red", "tab:blue", "tab:green")):
+            xs = [(b["start"] - t0) / 1000.0 for b in bs[k]]
+            ax.plot(xs, [lo_y - 5 - 4 * k] * len(xs), "|", color=c, markersize=12, label="EAxis%d burst" % k)
+        ax.set_xlabel("s")
+        ax.set_ylabel("us after SYNC0")
+        ax.legend(loc="upper right")
+        ax.grid(alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(a.plot, dpi=110)
+        log("plot:", a.plot)
 
 
 if __name__ == "__main__":
