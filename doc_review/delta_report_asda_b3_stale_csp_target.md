@@ -57,6 +57,15 @@ sent (607A):    145 144 145 144 145 144 145 144 144 145 144 145 144 145
 drive (6062):     0 145 145  -1 145 144 289 289   0 145 145 143 288   1
 ```
 
+Example with the motion library bypassed: our PLC code writes 0x607A
+directly, exactly +145 every cycle. The drive's lag goes 3 -> 4 -> 3 -> 2 -> 3,
+so it sometimes takes an older and sometimes a newer target:
+
+```
+sent (607A):    145 145 145 145 145 145 145 145 145 145 145 145 145 145 145
+drive (6062):   145 145 145 145 145   0 145 145 145 290 290 -145 145 145 145
+```
+
 Example, robot path at higher speed (per-cycle increments, PUU):
 
 ```
@@ -77,6 +86,7 @@ step. The following error and motor current spike at the same instant.
 | Frames lost / bus errors | Master statistics | 0 lost, 0 TX / RX errors |
 | Frame timing vs SYNC0 at the end of the line | ESP32 + LAN9252 slave (last on the line, DC SYNC0) reading a cycle counter and a copy of the drive's target at every SYNC0, and timing the frame arrival | 0 stale, 0 skipped. The frame arrives 660-825 us after SYNC0, >= 175 us before the next SYNC0 |
 | Path planning | Single joint at constant velocity, no planner | Still 2-5 % of cycles |
+| Motion library | SoftMotion bypassed: PLC code writes the controlword and 0x607A directly, +145 PUU every cycle | Still 5.2 % (1,563 of 29,892 cycles); see below |
 | Feeding pattern | Rounds of 8 moves with stops vs continuous | Same rate |
 | Cycle time | 2 ms instead of 1 ms | Same fraction of segments |
 | P3.009.Z (read delay) | 0 -> 3 on one drive | No change |
@@ -91,6 +101,7 @@ cycles where 0x6062 is one cycle late.
 | Condition | Rate |
 |---|---|
 | Three EtherCAT starts, identical settings | 0.04 %, 3.13 %, 4.46 % |
+| Direct PDO writes (no motion library), 30 s ramp | 5.23 % late (4 cycles), 0.08 % early (2 cycles) |
 | One start, four servo-off/on cycles over ~5 min | 3.05 %, 3.43 %, 3.87 %, 4.16 % |
 | Master SyncOffset 30 / 40 / 50 % (one start each) | 5.62 % / 3.42 % / 0 % (50 % gave 4.3 % on another start) |
 

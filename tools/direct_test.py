@@ -16,7 +16,6 @@ the drive is disabled and the delta set back to virtual.
 
 import argparse
 import json
-import threading
 import time
 
 import machine as mc
@@ -52,28 +51,16 @@ def main():
         raise SystemExit("could not make EAxis0 alone virtual (mask %s)" % mc.delta_mask())
     log("EAxis0 virtual in SoftMotion, FSM", mc.fsm()[0])
 
-    stop = threading.Event()
-
-    def heartbeat():
-        while not stop.is_set():
-            try:
-                direct(hb=1)
-            except Exception as e:
-                log("heartbeat:", e)
-            time.sleep(0.5)
-
     mc.sys_cmd("DEM_STATS", reset=1)
     travel = 0 if a.hold_only else int(a.deg * PUU_PER_DEG)
     r = direct(start=1, step=a.step, travel=max(travel, 1), maxfe=int(0.5 * PUU_PER_DEG))
     log("DIRECT start:", r)
-    hb = threading.Thread(target=heartbeat, daemon=True)
-    hb.start()
     t0 = time.time()
     expect = 15 + (2 * travel / max(1, a.step) / 1000.0)
     try:
         last = None
         while time.time() - t0 < expect + 20:
-            r = direct()
+            r = direct(hb=1)   # the heartbeat (the PLC stops after 2 s without one)
             if r["state"] != last:
                 log("state %s %s  sw 0x%04X cw 0x%04X  target %d actual %d" % (
                     r["state"], r["reason"], r["sw"], r["cw"], r["target"], r["actual"]))
@@ -83,9 +70,8 @@ def main():
             if a.hold_only and r["state"] == 4:
                 time.sleep(2)
                 break
-            time.sleep(1)
+            time.sleep(0.4)
     finally:
-        stop.set()
         r = direct(stop=1)
         log("DIRECT stop:", {k: r[k] for k in ("state", "reason", "cycles", "sw")})
     dm = mc.sys_cmd("DEM_STATS")

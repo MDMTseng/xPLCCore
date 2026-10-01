@@ -416,6 +416,39 @@ So feed forward is off: it is not what makes the knock.
 **Open.** At 10:03:50 the PLC log shows an application download that these
 tools did not make. Check whether someone downloaded from the IDE.
 
+## 7e. 2026-10-01: direct drive test, SoftMotion bypassed
+
+`tools/direct_test.py` (PLC: SYS `DIRECT`, end of `PRG_EventLog`). EAxis0
+is made virtual in SoftMotion, so SoftMotion no longer writes its PDOs
+(the target in %QD12 reads 0). PLC code then writes the controlword
+(%QW22) and 0x607A (%QD12) itself: CiA402 enable, a constant +145 PUU per
+1 ms cycle up 1.5 deg, then back. It stops itself on a drive fault, a
+following error over 0.5 deg, or 2 s without the host heartbeat. The 0x6062
+checks (DEM_STATS) run unchanged.
+
+Results (owner OK, remote, 10:39-10:41):
+- `--hold-only`: the drive enabled (sw 0x1637) and held. Our controlword
+  reaches the drive.
+- First move attempt: stopped after 1,987 cycles by the heartbeat guard (a
+  host bug: the heartbeat ran in a second thread over the shared UI link;
+  now sent from the poll loop). In those 1,987 cycles: 48 late (2.4 %).
+- Full move, 29,892 cycles: lag histogram (0..6, none)
+  `1106 1 24 28306 1563 0 0 0`. **1,563 late = 5.2 %**, 58 stale. Bin 0 is
+  the enable / hold phases. Bin 2 (24) means the drive also sometimes
+  takes the *newer* target.
+- Snapshot (per-cycle increments, PUU):
+  ```
+  sent  (607A): 145 145 145 145 145 145 145 145 145 145 145 145 145 145 145
+  drive (6062): 145 145 145 145 145   0 145 145 145 290 290 -145 145 145 145
+  ```
+  The lag goes 3 -> 4 (the 0) -> 3 -> 2 -> 3. The drive's pick-up of the
+  target wanders around the latch point in both directions.
+
+**Conclusion.** No SoftMotion, no planner, no axis group: the PLC writes a
+constant ramp straight into the PDO, and the drive still uses targets from
+the wrong cycle at the same or a higher rate. This is the cleanest case for
+Delta (added to `delta_report_asda_b3_stale_csp_target.md`).
+
 ## 8. Next tests
 
 00. **After the power cycle** (the bus is down since the SyncOffset-60
