@@ -121,6 +121,18 @@ A fix should show:
 Repeat over several EtherCAT starts (`tools/safe_install.py` between runs),
 since the rate varies per start (0.04-4.5 % seen).
 
+## Burst timing across the drives
+
+`python tools/dem_events.py` after any real-delta motion (DEM_STATS reset
+first) compares the burst times of the three drives.
+
+Reference test: X0 Y0, Z 0 <-> -5 mm, F 5, 15 strokes, 60 s. On
+2026-10-01:
+- the two drives on Ver22106 burst together (12-13 of 13-14 within 500 ms);
+- EAxis0 on newer firmware bursts at other times.
+
+See `asda_stale_target_2026-09-30.md` section 7f.
+
 ## After the test
 
 - `direct_test.py` leaves the delta virtual and powered off.

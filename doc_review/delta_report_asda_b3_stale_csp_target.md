@@ -136,6 +136,36 @@ the new target drifts relative to SYNC0, periodically crossing the instant
 when the new PDO data becomes valid. It might be a beat between the drive's
 control clock and SYNC0, or a periodic correction of the drive's sync loop.
 
+### Timing across the three drives (added 2026-10-01 afternoon)
+
+We logged, per drive, the time of every burst (the start of a stretch
+where 0x6062 is one cycle late or early). Test conditions:
+- the three drives turn alike (pure Z move of the robot, 60 s);
+- EAxis1 and EAxis2 run firmware Ver22106;
+- EAxis0 was updated to a newer firmware [version: to fill in].
+
+| Pair | Bursts within 50 ms | within 500 ms |
+|---|---|---|
+| EAxis1 vs EAxis2 (same firmware) | 8 of 13 | **13 of 13** |
+| EAxis0 (new firmware) vs the others | 0 of 13 | 1-2 of 13 |
+
+A second run with EAxis0 at factory parameters gave the same picture
+(12 of 14 vs 2-5 of 15).
+
+- The two drives with the same firmware burst at the same moments (mostly
+  within 10-75 ms), with identical intervals.
+- The drive with the newer firmware bursts at other moments, with intervals
+  from the same family (2.4 / 2.6 / 3.5 s).
+
+This suggests a slow periodic drift of the frame timing relative to SYNC0
+that all drives see. Each firmware's pick-up point then fails at a
+different phase of that drift. The frame arrival measured at the end of
+the line varied between 660 and 825 us after SYNC0, which is more than
+half a cycle away from SYNC0 in both directions. We would like to know:
+- the drive's pick-up window relative to SYNC0;
+- why a timing that stays inside the cycle can make the drive take the
+  wrong target.
+
 ## What we ruled out
 
 | Suspect | How it was checked | Result |
@@ -183,6 +213,11 @@ All three drives show it at similar rates.
      which reads that bit as the positive limit.
    - 0x1C32:0B stays 0.
 5. Is ESI "ASDA-x3-E rev0.04" current for this firmware?
+6. Two drives with the same firmware burst at the same moments, while a
+   drive with newer firmware bursts at different moments (see "Timing
+   across the three drives"). What changed in the newer firmware's
+   RxPDO / SYNC0 handling? What frame-arrival window relative to SYNC0
+   does each version require?
 
 We can provide the ASDA-Soft scope recordings (.parscp), the per-cycle data
 captures, the drive parameter files, and the test program.

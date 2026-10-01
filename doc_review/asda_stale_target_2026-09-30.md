@@ -462,6 +462,81 @@ analysis, baseline numbers).
   - the diagnostics and SYS DIRECT (idle unless started).
 - Modbus RTU still disabled at the owner's request.
 
+## 7f. 2026-10-01 afternoon: burst timing across the three drives
+
+**New PLC log.** `GVL.DemEvt` / SYS `DEM_EVT`: per drive, the PLC ms of
+every start of a late or early stretch of 0x6062. `tools/dem_events.py`
+groups the events into bursts (gap 300 ms) and lists, for every burst of
+each drive, the nearest burst of the other two. Cleared by DEM_STATS
+reset:1.
+
+**Test.** Real delta at X0 Y0, Z 0 <-> -5 mm, F 5 mm/s, exact stops, 15
+strokes, 60 s. A pure Z move turns the three joints alike, so the three
+drives see the same motion.
+
+**EAxis0 firmware.** The owner updated EAxis0's firmware (version still to
+be noted). EAxis1 / EAxis2 keep B3-E-Ver22106. After the update:
+- EAxis0 P2.000 was 364 (was 351);
+- the drive rebooting on a live bus needs a re-download
+  (`tools/safe_install.py`), otherwise SoftMotion's group enable fails
+  with 11000 or the master reports a slave-count mismatch.
+
+Results:
+
+| Run | EAxis0 late | EAxis1 late | EAxis2 late | EAxis1 vs EAxis2 bursts within 500 ms (50 ms) | EAxis0 vs the others within 500 ms |
+|---|---|---|---|---|---|
+| EAxis0 new firmware, its own parameters (13:59) | 1,401 | 1,125 | 1,275 | 13 / 13 (8) | 1-2 / 13 |
+| EAxis0 new firmware, factory parameters (14:10) | 1,054 | 1,444 | 1,410 | 12 / 14 (6) | 2-5 / 15 |
+
+(An earlier 40 s run at 13:51, new firmware, own parameters: 6.2 % /
+2.6 % / 2.4 % late.)
+
+**Findings.**
+- **The two drives on the old firmware burst together.** Most bursts are
+  within 10-75 ms, with the same intervals (6.6, 5.6, 3.4, 2.43, 3.56, 2.7,
+  2.40, 3.55, 13.6 s ...).
+- **EAxis0 on the new firmware bursts at other times**, 0.4-3.4 s away, but
+  its intervals come from the same family (about 2.4 / 2.6 / 3.5 s and
+  their sums).
+- Factory parameters (gains, filters, feed forward) did not change the
+  picture. Drive tuning is not the cause.
+- **Working hypothesis (not yet proven).** Two drives with their own clocks
+  bursting together point at a common trigger: the frame's timing relative
+  to SYNC0 has a slow periodic drift. The EasyCAT saw the arrival move
+  within 660-825 us. Each firmware has its own pick-up point and fails
+  when the drift reaches it. If so, the master side (CODESYS DC / send
+  timing) drives the period and the drives are merely sensitive to it.
+  The Delta report states the master as "clean"; that holds per cycle,
+  not for timing.
+- **Next test.** EasyCAT reports the frame arrival every cycle (now only
+  min / max per window), logged with the burst times. If its peaks line
+  up with the bursts, it is master timing. Then try the CODESYS DC options
+  (DC sync mode, SyncOffset fine steps, task jitter) and give Delta the
+  pick-up window question.
+
+**EAxis0 factory reset, things to know.**
+- Factory DI2-DI4 = 0x22 / 0x23 / 0x21: negative limit, positive limit,
+  EMGS, normally closed. The DIs are unwired here, so all three are active
+  and the drive cannot enable. EAxis1/2 have 0 (unused).
+- Gear (P1.044/045/046), direction (P1.001) and P3.009/019/022 stayed the
+  same after the reset.
+- The owner restored the parameters with ASDA-Soft from
+  `axis0Param2.par` (taken 14:02, after the firmware update). 21 key
+  parameters were read back and all matched.
+- **.par format** (ASDA-Soft V7.2.14). Records of 16 bytes: uint16 group,
+  uint16 number, int32 value, 8 bytes unused. Groups 0-7 start at byte
+  656 / 2240 / 4240 / 6272 / 6896 / 7616 / 9328 / 10928.
+- `axis0Param.par` (09:52, before the firmware update) vs
+  `axis0Param2.par`: P1.037, P1.061-063, P1.095, P2.000/002/004/006,
+  P2.025/026/032/047/049/089/113/117/118 differ. Part of that is
+  ASDA-Soft auto tuning, part the new firmware.
+
+**State at 14:20.**
+- Delta virtual, powered off.
+- EAxis0: new firmware, parameters from `axis0Param2.par`.
+- Bus: all OP. Modbus off.
+- Left as is until Delta support responds.
+
 ## 8. Next tests
 
 00. **After the power cycle** (the bus is down since the SyncOffset-60
