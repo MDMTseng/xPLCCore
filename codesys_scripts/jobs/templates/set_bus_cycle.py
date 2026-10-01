@@ -5,13 +5,14 @@
 #
 #   rpc.py exec --file jobs/templates/set_bus_cycle.py
 #
-# CYCLE_US 1000 is the machine's normal cycle. 2000 was a trial
+# CYCLE_US 1000 is the machine's normal cycle. 10000 was a trial
+# (2026-10-01): no stale target at all in 60 s of Z strokes. 2000 was a trial
 # (2026-09-30): the ASDA drives used a stale target ~2x/s at 1 ms while
 # the PLC, the master and a DC-synced EasyCAT at the end of the wire were
 # all clean. Also change AxisGroupSM.BusPeriod (ms per scan) and
 # GVL.EcNominalUs to match, and check the drives' 0x60C2 afterwards.
 
-CYCLE_US = 1000
+CYCLE_US = 10000
 
 
 def t(v):
@@ -29,9 +30,15 @@ changed = []
 tc = proj.find("Task Configuration", True)[0]
 for task in tc.get_children(False):
     if task.get_name() == "EtherCAT_Task":
-        changed.append("EtherCAT_Task interval %s %s -> %d us" % (task.interval, task.interval_unit, CYCLE_US))
-        task.interval = str(CYCLE_US)
-        task.interval_unit = "us"
+        changed.append("EtherCAT_Task interval %s %s -> %d us" % (t(task.interval), t(task.interval_unit), CYCLE_US))
+        # Whole milliseconds in ms: 10000 us is refused ("The task interval
+        # is invalid"), 10 ms builds (2026-10-01).
+        if CYCLE_US % 1000 == 0:
+            task.interval = str(CYCLE_US // 1000)
+            task.interval_unit = "ms"
+        else:
+            task.interval = str(CYCLE_US)
+            task.interval_unit = "us"
 
 
 def params(o):
