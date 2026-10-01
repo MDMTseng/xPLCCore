@@ -363,6 +363,59 @@ Notes on the sweep:
     A plain End*() deadlocked the daemon.
   - The log keeps 500 entries: read it before retrying.
 
+## 7d. 2026-10-01: phase per start, drive settings, filters
+
+**Late % changes with each EtherCAT start.** After the PLC restart
+(`stale_suite.py repeat`, SyncOffset 50, single joint 0.1 deg/s, three
+downloads):
+- 0.04 %, 3.13 %, 4.46 %;
+- EasyCAT clean every time, frame arrival unchanged (662-825 us).
+
+**Servo off/on does not re-pick the phase.** Four cycles in one start:
+3.05 / 3.43 / 3.87 / 4.16 %. The rate rose slowly over ~5 min, so the drive's
+phase drifts within a start.
+
+**Production-like rounds do not avoid it.** `square_dip --batch 8`, same start:
+- rounds: 3.3 / 3.8 / 5.7 % of the moving cycles;
+- continuous: 3.8 / 3.6 / 3.5 %.
+
+**Drive parameters over SDO.**
+- `tools/drive_param.py read|write|restore`, through the PLC (SYS DRV_SDO /
+  DRV_SDO_RESULT). Pg.nnn is object 0x2000 + g*0x100 + nnn.
+- Writes go to EEPROM. Originals are kept in
+  `codesys_scripts/jobs/drive_params_backup.json`.
+- The manual (B3 user manual, CSP block diagram p.770) shows these filters in
+  the CSP path: 2108h = P1.008, 2119h-211Ch = P1.025-028, 2124h = P1.036,
+  2144h = P1.068.
+
+The three drives were set differently:
+
+| | EAxis0 | EAxis1 | EAxis2 |
+|---|---|---|---|
+| P1.068 moving filter | 2 ms | 10 ms | 4 ms |
+| P1.008 low-pass | 10 ms | 20 ms | 20 ms |
+| P2.000 position gain | 351 | 479 | 351 |
+| P2.002 feed forward | 0 | 0 | 0 |
+
+So feed forward is off: it is not what makes the knock.
+
+- **P1.068 is now 6/6/6 ms** on all three (kept). In one start, 2/10/4 ->
+  6/6/6 gave no clear change in the PLC following-error jumps; EAxis2's max
+  jump went 0.204 -> 0.125 deg. That metric mixes in normal acceleration;
+  torque 0x6077, already in the TxPDO, would measure the knock better.
+- **P3.019.Z = 1 (statusword bit 14 = SYNC_OK) cannot be used with
+  SoftMotion.** The SM3 Delta driver reads bit 14 as the positive hardware
+  limit, so every axis went errorstop and would not power. Restored to
+  0x21 on all three.
+- P3.022 = 0xFF04: the drive tolerates 4 cycles without a new PDO before
+  AL3E3. That is why a late target raises no alarm.
+- The manual's AL304 advice ("computing time too long: disable USB
+  monitoring") suggests ASDA-Soft over USB loads the drive CPU. The
+  2026-10-01 runs were made with the USB unplugged and still showed 3-4 %.
+
+**Open.** At 10:03:50 the PLC log shows an application download that these
+tools did not make. Check whether someone downloaded from the IDE.
+
 ## 8. Next tests
 
 00. **After the power cycle** (the bus is down since the SyncOffset-60

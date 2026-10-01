@@ -84,9 +84,10 @@ def main():
             # to a stop before the next is sent -- like production, where
             # the motion stops between placements.
             lap = [p for p in pkts[1:1 + len(pkts[1:-1]) // a.loops] if p["cmd"] == "G1"]
-            plc({"type": "SYS", "cmd": "EC_STATS", "reset": 1})
             rv.push("plc_send_many", {"pkts": pkts[:1]}, timeout=60)
             plc({"type": "M", "cmd": "WAIT_FOR_MOTION_STOP", "timeout": 30, "timeout_ms": 25000}, 30000)
+            plc({"type": "SYS", "cmd": "EC_STATS", "reset": 1})
+            plc({"type": "SYS", "cmd": "DEM_STATS", "reset": 1})
             k = rounds = 0
             last_log = time.time()
             try:
@@ -114,6 +115,12 @@ def main():
                                 "/".join(str(e["tnone%d" % i]) for i in range(3)),
                                 e["e_stale"], e["e_skip"], e["e_pg"],
                                 "/".join(e["o%d" % i].split(",")[7] for i in range(3))))
+                        dm = plc({"type": "SYS", "cmd": "DEM_STATS"})
+                        log("       drive demand: late %s  stale %s  d2 max %s | lag hist %s" % (
+                            "/".join(str(dm["dlate%d" % i]) for i in range(3)),
+                            "/".join(str(dm["ds%d" % i]) for i in range(3)),
+                            "/".join(str(dm["dmx%d" % i]) for i in range(3)),
+                            "  ".join(dm["dl%d" % i].rstrip(",") for i in range(3))))
             except KeyboardInterrupt:
                 log("stopping after the current round")
             log("%d rounds of %d G1" % (rounds, a.batch))

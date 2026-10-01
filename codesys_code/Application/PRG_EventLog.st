@@ -83,6 +83,12 @@ VAR
     lrTicLo     : LREAL := 1.0E9;
     lrTicHi     : LREAL;
     fbSdo       : ETC_CO_SdoRead4;
+    fbSdoReqR   : ETC_CO_SdoRead4;      // GVL.SdoReq* (DRV_SDO)
+    fbSdoReqW   : ETC_CO_SdoWrite4;
+    abySdoW     : ARRAY[1..4] OF BYTE;
+    aRingS      : ARRAY[0..2, 0..31] OF WORD;
+    wStat       : WORD;
+    xSyncOk     : BOOL;
     iSdoStep    : INT;
     iSdoWait    : INT;
     uiSdoDev    : UINT;
@@ -333,6 +339,14 @@ FOR iProf := 0 TO 2 DO
     diTHist[iProf, 0] := diTap;
     aRingT[iProf, iRing] := diTap;
     aRingD[iProf, iRing] := diDem;
+    CASE iProf OF
+        0: wStat := GVL.StatusTap0;
+        1: wStat := GVL.StatusTap1;
+    ELSE
+        wStat := GVL.StatusTap2;
+    END_CASE;
+    aRingS[iProf, iRing] := wStat;
+    xSyncOk := (wStat AND 16#4000) <> 0;
     diDemVel := diDem - diDemPrev[iProf];
     iLagN := LIMIT(0, GVL.DemLagNominal, 5);
     IF iSetValid[iProf] >= 2 THEN
@@ -353,6 +367,13 @@ FOR iProf := 0 TO 2 DO
         IF xLate THEN
             GVL.DemLate[iProf] := GVL.DemLate[iProf] + 1;
         END_IF;
+        IF NOT xSyncOk THEN
+            GVL.SyncOffCount[iProf] := GVL.SyncOffCount[iProf] + 1;
+            GVL.SyncOffLastMs[iProf] := udiNow;
+            IF xLate THEN
+                GVL.SyncOffAndLate[iProf] := GVL.SyncOffAndLate[iProf] + 1;
+            END_IF;
+        END_IF;
         GVL.DemD2Max[iProf] := MAX(GVL.DemD2Max[iProf], ABS(diDemVel - diDemVelPrev[iProf]));
         xGlitchD := ABS(diDemVel - diDemVelPrev[iProf]) > GVL.DiGlitchThresh;
         IF xGlitchD THEN
@@ -371,6 +392,7 @@ FOR iProf := 0 TO 2 DO
             FOR iSnapJ := 0 TO 31 DO
                 GVL.DemSnapT[GVL.DemSnapN, iSnapJ] := aRingT[iProf, (iRing + 1 + iSnapJ) MOD 32];
                 GVL.DemSnapD[GVL.DemSnapN, iSnapJ] := aRingD[iProf, (iRing + 1 + iSnapJ) MOD 32];
+                GVL.DemSnapS[GVL.DemSnapN, iSnapJ] := aRingS[iProf, (iRing + 1 + iSnapJ) MOD 32];
             END_FOR;
             GVL.DemSnapAxis[GVL.DemSnapN] := iProf;
             GVL.DemSnapMs[GVL.DemSnapN] := udiPostMs[iProf];
@@ -395,6 +417,8 @@ IF GVL.DemReset THEN
         GVL.DemGlitch[iProf] := 0;
         GVL.DemD2Max[iProf] := 0;
         GVL.DemLate[iProf] := 0;
+        GVL.SyncOffCount[iProf] := 0;
+        GVL.SyncOffAndLate[iProf] := 0;
         iPost[iProf] := 0;
         FOR iLag := 0 TO 7 DO
             GVL.DemLag[iProf, iLag] := 0;
@@ -497,7 +521,38 @@ GVL.EcTicHist[LIMIT(0, LREAL_TO_INT(lrTicUs / 100.0 - 0.5), 9)] := GVL.EcTicHist
 // Step k: drive k / 12 (EAxis0/1/2 = station 1003 / 1004 / 1005; wire
 // order QEC 1006, reel 1002, EAxis0..2, EC0808DN 1001, EasyCAT 1007), object k MOD 12 of
 // SDO_IDX / SDO_SUB; a pause of 50 cycles between reads, ~2 s a sweep.
-IF iSdoWait > 0 THEN
+// A DRV_SDO request (GVL.SdoReq*) runs first; the sweep waits.
+IF GVL.SdoReqActive THEN
+    IF GVL.SdoReqWrite THEN
+        abySdoW[1] := DINT_TO_BYTE(GVL.SdoReqValue AND 16#FF);
+        abySdoW[2] := DINT_TO_BYTE(SHR(GVL.SdoReqValue, 8) AND 16#FF);
+        abySdoW[3] := DINT_TO_BYTE(SHR(GVL.SdoReqValue, 16) AND 16#FF);
+        abySdoW[4] := DINT_TO_BYTE(SHR(GVL.SdoReqValue, 24) AND 16#FF);
+        fbSdoReqW(xExecute := TRUE, usiCom := 1, uiDevice := GVL.SdoReqStation, wIndex := GVL.SdoReqIndex,
+                  bySubindex := GVL.SdoReqSub, udiTimeOut := 1000, usiDataLength := GVL.SdoReqSize,
+                  abyData := abySdoW);
+        IF fbSdoReqW.xDone OR fbSdoReqW.xError THEN
+            GVL.SdoResOk := fbSdoReqW.xDone;
+            GVL.SdoResErr := SEL(fbSdoReqW.xError, 0, TO_DINT(fbSdoReqW.eError));
+            GVL.SdoResValue := GVL.SdoReqValue;
+            fbSdoReqW(xExecute := FALSE);
+            GVL.SdoResSeq := GVL.SdoReqSeq;
+            GVL.SdoReqActive := FALSE;
+        END_IF;
+    ELSE
+        fbSdoReqR(xExecute := TRUE, usiCom := 1, uiDevice := GVL.SdoReqStation, wIndex := GVL.SdoReqIndex,
+                  bySubindex := GVL.SdoReqSub, udiTimeOut := 1000);
+        IF fbSdoReqR.xDone OR fbSdoReqR.xError THEN
+            GVL.SdoResOk := fbSdoReqR.xDone;
+            GVL.SdoResErr := SEL(fbSdoReqR.xError, 0, TO_DINT(fbSdoReqR.eError));
+            GVL.SdoResValue := BYTE_TO_DINT(fbSdoReqR.abyData[1]) + SHL(BYTE_TO_DINT(fbSdoReqR.abyData[2]), 8)
+                               + SHL(BYTE_TO_DINT(fbSdoReqR.abyData[3]), 16) + SHL(BYTE_TO_DINT(fbSdoReqR.abyData[4]), 24);
+            fbSdoReqR(xExecute := FALSE);
+            GVL.SdoResSeq := GVL.SdoReqSeq;
+            GVL.SdoReqActive := FALSE;
+        END_IF;
+    END_IF;
+ELSIF iSdoWait > 0 THEN
     iSdoWait := iSdoWait - 1;
 ELSE
     CASE iSdoStep / 12 OF

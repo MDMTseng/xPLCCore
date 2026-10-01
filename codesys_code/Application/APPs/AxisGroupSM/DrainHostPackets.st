@@ -509,6 +509,43 @@ END_IF;
                     MessagePackerFb.PackKvDint(ADR('e1'), TO_DINT(JtErrId[1]));
                     MessagePackerFb.PackKvDint(ADR('e2'), TO_DINT(JtErrId[2]));
                 END_IF;
+            ELSIF (CommandType = 'DRV_SDO') THEN
+                // One SDO read / write to a drive (GVL.SdoReq*, run by
+                // PRG_EventLog): station (1003..1005 = EAxis0..2), index,
+                // sub, size (1, 2, 4), and value + write:1 to write. Replies
+                // seq; poll DRV_SDO_RESULT for that seq. busy if one runs.
+                ShouldReturn := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                IF GVL.SdoReqActive THEN
+                    CommandAck := FALSE;
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('busy'));
+                ELSE
+                    GVL.SdoReqStation := LINT_TO_UINT(MessageUnpackerFb.TryReadINT64('station', 0));
+                    GVL.SdoReqIndex := LINT_TO_WORD(MessageUnpackerFb.TryReadINT64('index', 0));
+                    GVL.SdoReqSub := LINT_TO_BYTE(MessageUnpackerFb.TryReadINT64('sub', 0));
+                    GVL.SdoReqSize := LINT_TO_USINT(MessageUnpackerFb.TryReadINT64('size', 4));
+                    GVL.SdoReqValue := LINT_TO_DINT(MessageUnpackerFb.TryReadINT64('value', 0));
+                    GVL.SdoReqWrite := MessageUnpackerFb.TryReadINT64('write', 0) <> 0;
+                    IF (GVL.SdoReqStation < 1001) OR (GVL.SdoReqStation > 1010) OR (GVL.SdoReqIndex = 0) THEN
+                        CommandAck := FALSE;
+                        MessagePackerFb.PackKvStr(ADR('err'), ADR('bad_args'));
+                    ELSE
+                        GVL.SdoReqSeq := GVL.SdoReqSeq + 1;
+                        GVL.SdoReqActive := TRUE;
+                        CommandAck := TRUE;
+                        MessagePackerFb.PackKvLint(ADR('seq_req'), UDINT_TO_LINT(GVL.SdoReqSeq));
+                    END_IF;
+                END_IF;
+            ELSIF (CommandType = 'DRV_SDO_RESULT') THEN
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                MessagePackerFb.PackKvBool(ADR('active'), GVL.SdoReqActive);
+                MessagePackerFb.PackKvLint(ADR('seq_req'), UDINT_TO_LINT(GVL.SdoReqSeq));
+                MessagePackerFb.PackKvLint(ADR('seq_res'), UDINT_TO_LINT(GVL.SdoResSeq));
+                MessagePackerFb.PackKvBool(ADR('ok'), GVL.SdoResOk);
+                MessagePackerFb.PackKvDint(ADR('sdo_err'), GVL.SdoResErr);
+                MessagePackerFb.PackKvDint(ADR('value'), GVL.SdoResValue);
             ELSIF (CommandType = 'DEM_STATS') THEN
                 // The drives' position demand (0x6062) vs the targets we sent
                 // (GVL.Dem*, PRG_EventLog). Per drive k: ds{k} stale, dlate{k}
@@ -540,12 +577,34 @@ END_IF;
                     EcObjKey := CONCAT('dl', INT_TO_STRING(EcTrI));
                     MessagePackerFb.PackKvStr(ADR(EcObjKey), ADR(EcTrStr));
                 END_FOR;
+                FOR EcTrI := 0 TO 2 DO
+                    EcObjKey := CONCAT('soff', INT_TO_STRING(EcTrI));
+                    MessagePackerFb.PackKvLint(ADR(EcObjKey), UDINT_TO_LINT(GVL.SyncOffCount[EcTrI]));
+                    EcObjKey := CONCAT('sofl', INT_TO_STRING(EcTrI));
+                    MessagePackerFb.PackKvLint(ADR(EcObjKey), UDINT_TO_LINT(GVL.SyncOffAndLate[EcTrI]));
+                    EcObjKey := CONCAT('stat', INT_TO_STRING(EcTrI));
+                    CASE EcTrI OF
+                        0: MessagePackerFb.PackKvDint(ADR(EcObjKey), WORD_TO_DINT(GVL.StatusTap0));
+                        1: MessagePackerFb.PackKvDint(ADR(EcObjKey), WORD_TO_DINT(GVL.StatusTap1));
+                    ELSE
+                        MessagePackerFb.PackKvDint(ADR(EcObjKey), WORD_TO_DINT(GVL.StatusTap2));
+                    END_CASE;
+                END_FOR;
                 MessagePackerFb.PackKvDint(ADR('nsnap'), INT_TO_DINT(GVL.DemSnapN));
                 EcTrI := LINT_TO_INT(MessageUnpackerFb.TryReadINT64('snap', -1));
                 IF (EcTrI >= 0) AND (EcTrI < GVL.DemSnapN) THEN
                     MessagePackerFb.PackKvDint(ADR('s_axis'), INT_TO_DINT(GVL.DemSnapAxis[EcTrI]));
                     MessagePackerFb.PackKvLint(ADR('s_ms'), UDINT_TO_LINT(GVL.DemSnapMs[EcTrI]));
                     MessagePackerFb.PackKvDint(ADR('s_why'), INT_TO_DINT(GVL.DemSnapWhy[EcTrI]));
+                    EcTrStr := '';
+                    FOR EcSnapK := 0 TO 31 DO
+                        IF (GVL.DemSnapS[EcTrI, EcSnapK] AND 16#4000) <> 0 THEN
+                            EcTrStr := CONCAT(EcTrStr, '1');
+                        ELSE
+                            EcTrStr := CONCAT(EcTrStr, '0');
+                        END_IF;
+                    END_FOR;
+                    MessagePackerFb.PackKvStr(ADR('s_sync'), ADR(EcTrStr));
                     FOR EcObjJ := 0 TO 3 DO
                         EcTrStr := '';
                         FOR EcSnapK := 0 TO 15 DO

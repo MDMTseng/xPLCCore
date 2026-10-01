@@ -317,6 +317,35 @@ VAR_GLOBAL
 	ActualTap0      AT %ID10 : DINT;    (* EAxis0 drive's Position actual 0x6064, same PDO: a live check *)
 	ActualTap1      AT %ID16 : DINT;
 	ActualTap2      AT %ID22 : DINT;
+	(* The drives' Statusword 0x6041 (read-only taps). With P3.019.Z = 1
+	   bit 14 is the drive's own SYNC_OK (synchronisation with the
+	   controller complete); otherwise it shows the positive limit. *)
+	StatusTap0      AT %IW18 : WORD;
+	StatusTap1      AT %IW30 : WORD;
+	StatusTap2      AT %IW42 : WORD;
+	(* Cycles with bit 14 off while the drive is powered (valid only with
+	   P3.019.Z = 1), the PLC ms of the last, and cycles where it is off
+	   while the demand readback shows a late (stale) target. *)
+	SyncOffCount    : ARRAY[0..2] OF UDINT;
+	SyncOffLastMs   : ARRAY[0..2] OF UDINT;
+	SyncOffAndLate  : ARRAY[0..2] OF UDINT;
+	DemSnapS        : ARRAY[0..7, 0..31] OF WORD;   (* statusword alongside each snapshot *)
+	(* One SDO request to a drive at a time (SYS DRV_SDO / DRV_SDO_RESULT),
+	   run by PRG_EventLog while the 0x1C32 sweep pauses. ASDA parameter
+	   Pg.nnn is object 16#2000 + g * 16#100 + nnn. An SDO write is stored
+	   in the drive's EEPROM (manual, P3.011 note). *)
+	SdoReqActive    : BOOL;
+	SdoReqWrite     : BOOL;
+	SdoReqStation   : UINT;
+	SdoReqIndex     : WORD;
+	SdoReqSub       : BYTE;
+	SdoReqSize      : USINT := 4;
+	SdoReqValue     : DINT;
+	SdoReqSeq       : UDINT;
+	SdoResSeq       : UDINT;
+	SdoResOk        : BOOL;
+	SdoResErr       : DINT;
+	SdoResValue     : DINT;
 	DemLag          : ARRAY[0..2, 0..7] OF UDINT;   (* [k, n]: demand = target n cycles before (0..6), 7 = none *)
 	DemLagNominal   : INT := 3;      (* the drive's normal delay, measured 2026-09-30 *)
 	DemLate         : ARRAY[0..2] OF UDINT;          (* demand = target DemLagNominal+1 before while that one moved: one cycle behind = a stale target *)
