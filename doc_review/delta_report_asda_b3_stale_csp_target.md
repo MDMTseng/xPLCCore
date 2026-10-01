@@ -1,26 +1,35 @@
-# ASDA-B3-E in CSP mode intermittently uses the previous cycle's target position
+# ASDA-B3-E in CSP mode periodically uses target positions from the wrong cycle
 
 **To:** Delta Electronics technical support (servo / EtherCAT)
 **Drives:** ASDA-B3-E (three units, EtherCAT), firmware shown in ASDA-Soft as
-`B3-E-Ver22106`.
+`B3-E-Ver22106-Sub 212, 96, L=120`.
 **Date of tests:** 2026-09-30 to 2026-10-01.
 
 ## Summary
 
-In CSP mode with DC SYNC0 synchronisation, the drives intermittently use the
-target position of one cycle earlier than usual. Their own position demand
-value (0x6062) then:
-1. repeats the previous increment, or stays still for one cycle;
-2. catches up with a double step in the next cycle.
+In CSP mode with DC SYNC0 synchronisation, the drives periodically take the
+target position (0x607A) from the wrong EtherCAT cycle. Every 2.4-3.6 s
+there is a burst of a few to a few tens of milliseconds. During a burst:
+- the drive's interpolated command position has slope steps (2x or 3x the
+  normal slope);
+- the command position jumps by up to 200 PUU within 1/8 ms.
 
 On a delta robot this is felt as small knocks and vibration.
 
-The master's targets are smooth every cycle. This was verified at the PLC
-and on the bus with an independent DC slave in the same frame. The drives'
-own sync counters stay at 0 (0x1C32:0B, :0C, :20). The fraction of affected
-cycles:
-- varies between EtherCAT starts: 0.04 % to 4.5 % in identical conditions;
-- drifts slowly within one start.
+The fault remains when the motion library is bypassed completely. Our PLC
+code writes the controlword and an exactly constant ramp (+145 PUU every
+1 ms cycle) straight into the RxPDO, and the drive still shows the bursts.
+
+The master side is clean:
+- the targets are smooth every cycle, verified at the PLC and on the bus
+  with an independent DC slave in the same frame;
+- no frames are lost;
+- the drives' own sync counters stay at 0 (0x1C32:0B, :0C, :20).
+
+The bursts:
+- do not depend on speed;
+- appear at the same rate on all three drives;
+- vary in rate between EtherCAT starts.
 
 We would like to know whether this is a known issue, whether a firmware
 update addresses it, and which settings you recommend.
@@ -38,70 +47,119 @@ update addresses it, and which settings you recommend.
 | TxPDO 0x1A01 | 6041, 6064, 606C, 6077, 60B9, **6062** (mapped in place of 60BA for this test), 60FD |
 | Drive parameters | P3.009 = 0x5055, P3.022 = 0xFF04, P1.008 = 10/20/20 ms, P1.068 = 2/10/4 ms (now 6/6/6 ms), P2.000 = 351/479/351, P2.002 = 0 |
 
-## What we observe
+## Minimal test case: no motion library
 
-Every cycle we compare the drive's position demand value **0x6062**
-(TxPDO) with the target position **0x607A** we sent:
+- The motion library leaves the drive alone. The PLC application writes the
+  controlword (0x6040) and target position (0x607A) directly.
+- The sequence:
+  1. CiA402 enable: 0x06, 0x07, 0x0F.
+  2. Then exactly **+145 PUU every 1 ms cycle** (about 0.1 deg/s) up 3 deg,
+     then back.
+- Every cycle we compare the drive's position demand value **0x6062** (in
+  the TxPDO) with the targets we sent.
 
-- **Normally,** 0x6062 equals the target sent **3 cycles** earlier, every
-  cycle (a constant pipeline delay).
-- **Sometimes,** for one cycle, 0x6062 equals the target sent **4 cycles**
-  earlier. The drive then either repeats the previous increment or moves
-  ~0, and the next cycle catches up with ~2 increments.
+Normally 0x6062 equals the target sent **3 cycles** earlier. Results:
 
-Example, single joint at constant speed (no path planning). These are
-per-cycle increments in PUU; the master sends 144 or 145 every cycle:
+| Run | Cycles | 0x6062 = target from 4 cycles back | from 2 cycles back |
+|---|---|---|---|
+| 1.5 deg, +145 / cycle | 29,892 | 1,563 (5.2 %) | 24 |
+| 1.5 deg, +145 / cycle | 29,892 | 1,719 (5.8 %) | 21 |
+| 3 deg, +145 / cycle | 59,782 | 1,997 (3.3 %) | 27 |
+| 3 deg, **+72 / cycle (half speed)** | 120,394 | 4,366 (3.6 %) | 73 |
 
-```
-sent (607A):    145 144 145 144 145 144 145 144 144 145 144 145 144 145
-drive (6062):     0 145 145  -1 145 144 289 289   0 145 145 143 288   1
-```
+The rate does not depend on speed. Halving the speed doubles the time, and
+the count doubles with it.
 
-Example with the motion library bypassed: our PLC code writes 0x607A
-directly, exactly +145 every cycle. The drive's lag goes 3 -> 4 -> 3 -> 2 -> 3,
-so it sometimes takes an older and sometimes a newer target:
-
-```
-sent (607A):    145 145 145 145 145 145 145 145 145 145 145 145 145 145 145
-drive (6062):   145 145 145 145 145   0 145 145 145 290 290 -145 145 145 145
-```
-
-Example, robot path at higher speed (per-cycle increments, PUU):
+Per-cycle increments (PUU) during a burst:
 
 ```
-sent (607A):    41043 43404 44989 45792 45844 45662 45591 45613
-drive (6062):   41043 43404 43404  1585 91636 45662 45662   -71
+sent  (607A):  145 145 145 145 145 145 145 145 145 145 145  145 145
+drive (6062):  145 145 145   0 145 145 145 290 290 -145 145 145 145
 ```
 
-The same is visible on the ASDA-Soft scope (8 kHz, Cmd Pos). One 1 ms
-interpolation segment repeats the previous slope, followed by a correction
-step. The following error and motor current spike at the same instant.
+In this burst the drive's delay goes 3 -> 4 -> 3 -> 2 -> 3 cycles. It takes
+both older and newer targets than usual.
+
+## ASDA-Soft scope (8 kHz) of the same test
+
+Recording `scope22.parscp`: half speed, 120 s, channels feedback position,
+command position, following error and motor current.
+
+### Inside one burst
+
+Normally the drive interpolates each 1 ms segment in 8 equal sub-steps of
+-9 PUU (-72 per ms). Excerpt from 70838-70875 ms:
+
+```
+ms      cmd/ms   8 sub-samples of Cmd Pos (1/8 ms)      following error
+70837     -72     -9  -9  -9  -9  -9  -9  -9  -9          -558
+70838     -72     54 -18 -18 -18 -18 -18 -18 -18          -544
+70839    -144    -18 -18 -18 -18 -18 -18 -18 -18          -535
+70840       0    126 -18 -18 -18 -18 -18 -18 -18          -591
+70841     -72     -9  -9  -9  -9  -9  -9  -9  -9          -529
+ ...
+70855       0    126 -18 -18 -18 -18 -18 -18 -18          -630
+70856    -144    -18 -18 -18 -18 -18 -18 -18 -18          -548
+70857       0    126 -18 -18 -18 -18 -18 -18 -18          -622
+ ...
+70871    -144     45 -27 -27 -27 -27 -27 -27 -27          -502
+70872    -216    -27 -27 -27 -27 -27 -27 -27 -27          -556
+70873      72    198 -18 -18 -18 -18 -18 -18 -18          -694
+70874    -144    -18 -18 -18 -18 -18 -18 -18 -18          -562
+70875      72    135  -9  -9  -9  -9  -9  -9  -9          -612
+70876     -72     -9  -9  -9  -9  -9  -9  -9  -9          -463
+```
+
+What the excerpt shows:
+- The interpolation slope becomes 2x (-18) or 3x (-27) the normal value.
+  The segment end points come from targets of different cycles.
+- At the start of a segment the command position jumps back by up to
+  198 PUU in one 1/8 ms sample. The command is discontinuous.
+- For about 37 ms, roughly half of the segments are wrong, alternating
+  between old and new targets.
+- The following error swings from about -530 to between -443 and -694 PUU.
+
+### Periodicity
+
+There are 44 bursts in 120 s. They are 2.37-3.57 s apart (2.8 s on average),
+in a repeating sequence of about **2.37 -> 2.58 -> 3.5 s**, so about 8.5 s
+per round. The largest bursts recur about every 8.3-8.5 s.
+
+Burst start times (ms): 374, 2962, 5346, 8896, 11492, 13858, 17327, 19994,
+22389, 25588, 28539, 30912, 33898, 37043, 39437, 42217, 45574, 47941,
+50527, 54102, 56471, 59052, 62524, 64997, 67579, 70399, 73519, 76095,
+78545, 82040, 84600, 86993, 90548, 93131, 95501, 99065, 101666, 104040,
+107400, 110186, 112561, 115712, 118684.
+
+This regular pattern suggests that the drive's internal point of taking
+the new target drifts relative to SYNC0, periodically crossing the instant
+when the new PDO data becomes valid. It might be a beat between the drive's
+control clock and SYNC0, or a periodic correction of the drive's sync loop.
 
 ## What we ruled out
 
 | Suspect | How it was checked | Result |
 |---|---|---|
+| Motion library / path planning | Bypassed: PLC code writes 0x6040 and 0x607A directly, constant +145 / +72 PUU per cycle | Still 3.3-5.8 % of cycles, periodic bursts |
 | Master trajectory | Second difference of the commanded position every cycle (float and integer) | Smooth; no glitch in > 1,000,000 cycles |
-| Data written into the frame | Read-only tap on the 0x607A process image every cycle, compared with the axis set value | Equal every cycle (131,012 / 131,012) |
+| Data written into the frame | Read-only tap on the 0x607A process image every cycle | Equal to the intended value every cycle |
 | Frames lost / bus errors | Master statistics | 0 lost, 0 TX / RX errors |
 | Frame timing vs SYNC0 at the end of the line | ESP32 + LAN9252 slave (last on the line, DC SYNC0) reading a cycle counter and a copy of the drive's target at every SYNC0, and timing the frame arrival | 0 stale, 0 skipped. The frame arrives 660-825 us after SYNC0, >= 175 us before the next SYNC0 |
-| Path planning | Single joint at constant velocity, no planner | Still 2-5 % of cycles |
-| Motion library | SoftMotion bypassed: PLC code writes the controlword and 0x607A directly, +145 PUU every cycle | Still 5.2 % (1,563 of 29,892 cycles); see below |
+| Speed | +145 and +72 PUU per cycle | Same rate |
 | Feeding pattern | Rounds of 8 moves with stops vs continuous | Same rate |
 | Cycle time | 2 ms instead of 1 ms | Same fraction of segments |
 | P3.009.Z (read delay) | 0 -> 3 on one drive | No change |
 | ASDA-Soft USB monitoring (AL304 hint) | USB unplugged | Still 3-4 % |
 | Drive's own sync diagnostics | 0x1C32:0B, :0C, :20 read during the events | Always 0 |
 
-## Rate of the effect
+## Variation between starts
 
-Single joint at 0.1 deg/s, SyncOffset 50 %. The rate is the share of moving
-cycles where 0x6062 is one cycle late.
+Single joint, SyncOffset 50 %. The rate is the share of moving cycles where
+0x6062 is one cycle late.
 
 | Condition | Rate |
 |---|---|
 | Three EtherCAT starts, identical settings | 0.04 %, 3.13 %, 4.46 % |
-| Direct PDO writes (no motion library), 30 s ramp | 5.23 % late (4 cycles), 0.08 % early (2 cycles) |
 | One start, four servo-off/on cycles over ~5 min | 3.05 %, 3.43 %, 3.87 %, 4.16 % |
 | Master SyncOffset 30 / 40 / 50 % (one start each) | 5.62 % / 3.42 % / 0 % (50 % gave 4.3 % on another start) |
 
@@ -111,9 +169,9 @@ All three drives show it at similar rates.
 
 1. Is this behaviour known for ASDA-B3-E firmware Ver22106 in CSP + DC
    SYNC0? Is there newer firmware that fixes it?
-2. When does the drive latch the RxPDO relative to SYNC0, and how does its
-   internal control cycle lock to SYNC0? The phase seems to change with
-   each EtherCAT start and to drift slowly within one start.
+2. When does the drive latch the RxPDO relative to SYNC0? How does its
+   internal control cycle lock to SYNC0? Is there a periodic correction
+   (about every 2.4-3.6 s) in that lock?
 3. Which settings do you recommend to make the target pick-up deterministic?
    - P3.009 and its digits;
    - the master's SYNC0 shift;
@@ -127,4 +185,4 @@ All three drives show it at similar rates.
 5. Is ESI "ASDA-x3-E rev0.04" current for this firmware?
 
 We can provide the ASDA-Soft scope recordings (.parscp), the per-cycle data
-captures, and the drive parameter files.
+captures, the drive parameter files, and the test program.
