@@ -339,6 +339,17 @@ VAR_GLOBAL
 	FbTqHist        : ARRAY[0..2, 0..7] OF UDINT;
 	FbTqMax         : ARRAY[0..2] OF INT;
 	FbReset         : BOOL;
+	(* Settling time (PRG_EventLog, SYS SETTLE): when the delta's set
+	   positions stop, the actual TCP (MC_GroupReadActualPosition, WCS) is
+	   recorded for 300 cycles; the last of them is the final position.
+	   SettleMs = time until the TCP stays within SettleTolMm of it,
+	   SettleErrUm = its distance at the stop. Ring of 256; a stop the
+	   motion leaves within 300 cycles is not counted. *)
+	SettleTolMm     : LREAL := 0.2;
+	SettleMs        : ARRAY[0..255] OF UDINT;
+	SettleErrUm     : ARRAY[0..255] OF UDINT;
+	SettleAtMs      : ARRAY[0..255] OF UDINT;
+	SettleN         : UDINT;
 	(* Direct drive test without SoftMotion (SYS DIRECT; PRG_EventLog):
 	   EAxis0's controlword 0x6040 and target 0x607A written by IEC code
 	   while EAxis0 is virtual in SoftMotion and the FSM is UnInited.

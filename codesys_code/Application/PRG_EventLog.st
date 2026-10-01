@@ -79,6 +79,18 @@ VAR
     iFbTq       : INT;
     iFbTqAbs    : INT;
     wFbSw       : WORD;
+    // Settling time (GVL.Settle*).
+    lrStSetPrev : ARRAY[0..2] OF LREAL;
+    xStMoving   : BOOL;
+    xStMovPrev  : BOOL;
+    iStCap      : INT := -1;
+    iStK        : INT;
+    iStLast     : INT;
+    arStX       : ARRAY[0..299] OF REAL;
+    arStY       : ARRAY[0..299] OF REAL;
+    arStZ       : ARRAY[0..299] OF REAL;
+    lrStD       : LREAL;
+    udiStAt     : UDINT;
     iSyncMin    : INT := 32767;
     iSyncMax    : INT := -32768;
     udiSyncBucket : UDINT;
@@ -808,4 +820,46 @@ IF GVL.FbReset THEN
         GVL.FbD2Max[iFbK] := 0;
         GVL.FbTqMax[iFbK] := 0;
     END_FOR;
+END_IF;
+
+// ---- Settling time (GVL.Settle*, SYS SETTLE) ----
+xStMoving := ABS(IoConfig_Globals.EAxis0.fSetPosition - lrStSetPrev[0]) > 1.0E-6
+             OR ABS(IoConfig_Globals.EAxis1.fSetPosition - lrStSetPrev[1]) > 1.0E-6
+             OR ABS(IoConfig_Globals.EAxis2.fSetPosition - lrStSetPrev[2]) > 1.0E-6;
+lrStSetPrev[0] := IoConfig_Globals.EAxis0.fSetPosition;
+lrStSetPrev[1] := IoConfig_Globals.EAxis1.fSetPosition;
+lrStSetPrev[2] := IoConfig_Globals.EAxis2.fSetPosition;
+IF xStMovPrev AND NOT xStMoving AND (iStCap < 0) AND AxisGroupSM.ArmPositionValid THEN
+    iStCap := 0;
+    udiStAt := udiNow;
+END_IF;
+xStMovPrev := xStMoving;
+IF iStCap >= 0 THEN
+    IF xStMoving OR NOT AxisGroupSM.ArmPositionValid THEN
+        iStCap := -1;                       // moving again before 300 cycles: not counted
+    ELSE
+        arStX[iStCap] := LREAL_TO_REAL(AxisGroupSM.GroupActualPositionFb.Position.c.X);
+        arStY[iStCap] := LREAL_TO_REAL(AxisGroupSM.GroupActualPositionFb.Position.c.Y);
+        arStZ[iStCap] := LREAL_TO_REAL(AxisGroupSM.GroupActualPositionFb.Position.c.Z);
+        iStCap := iStCap + 1;
+        IF iStCap >= 300 THEN
+            iStLast := 0;
+            FOR iStK := 0 TO 299 DO
+                lrStD := SQRT(EXPT(REAL_TO_LREAL(arStX[iStK] - arStX[299]), 2)
+                              + EXPT(REAL_TO_LREAL(arStY[iStK] - arStY[299]), 2)
+                              + EXPT(REAL_TO_LREAL(arStZ[iStK] - arStZ[299]), 2));
+                IF lrStD > GVL.SettleTolMm THEN
+                    iStLast := iStK + 1;
+                END_IF;
+            END_FOR;
+            lrStD := SQRT(EXPT(REAL_TO_LREAL(arStX[0] - arStX[299]), 2)
+                          + EXPT(REAL_TO_LREAL(arStY[0] - arStY[299]), 2)
+                          + EXPT(REAL_TO_LREAL(arStZ[0] - arStZ[299]), 2));
+            GVL.SettleMs[GVL.SettleN MOD 256] := INT_TO_UDINT(iStLast) * DINT_TO_UDINT(AxisGroupSM.BusPeriod);
+            GVL.SettleErrUm[GVL.SettleN MOD 256] := LREAL_TO_UDINT(lrStD * 1000.0);
+            GVL.SettleAtMs[GVL.SettleN MOD 256] := udiStAt;
+            GVL.SettleN := GVL.SettleN + 1;
+            iStCap := -1;
+        END_IF;
+    END_IF;
 END_IF;
