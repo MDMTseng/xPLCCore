@@ -44,6 +44,7 @@ Regenerate this file with `python tools/gen_script_index.py`.
 | `limit_test.py` | moves axes, writes PLC vars | Do the axis limits hold when the path asks for far more? |
 | `machine.py` | shared library (machine access, safety checks) | Shared machine access for the tools: the PLC through the standalone UI's harness link, the FSM, the delta's real/virtual mode, and the safety checks every tool must make the same way. |
 | `p3009_sweep.py` | moves axes, downloads | Sweep the ASDA drives' P3.009 (communication synchronization) and measure the stale-target rate at each setting. |
+| `param_sweep.py` | moves axes | Compare drive parameter sets (the same on all three delta drives) by the shock the motion feels and by the settling time. |
 | `plc_direct.py` | library (direct msgpack client, port 8125) | Talk to the PLC's msgpack server (port 8125) directly, without the UI. |
 | `pulse_test.py` | moves axes, writes PLC vars | Constant-pulse test for one delta drive, for the ASDA stale-target issue (doc_review/asda_stale_target_2026-09-30.md). |
 | `reel_real_test.py` | moves axes, writes PLC vars | Reel axis on the machine: power it, move it, check the cell count and the odometer against the encoder, and the tracker's stop detection on a real servo (a virtual axis has no standstill jitter). |
