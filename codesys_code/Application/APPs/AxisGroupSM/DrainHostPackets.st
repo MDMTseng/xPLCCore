@@ -576,6 +576,41 @@ END_IF;
                 MessagePackerFb.PackKvDint(ADR('actual'), GVL.ActualTap0);
                 MessagePackerFb.PackKvDint(ADR('sw'), WORD_TO_DINT(GVL.StatusTap0));
                 MessagePackerFb.PackKvDint(ADR('cw'), WORD_TO_DINT(GVL.CtlTap0));
+            ELSIF (CommandType = 'FB_STATS') THEN
+                // Feedback shock monitor (GVL.Fb*): per drive k, fd{k} =
+                // histogram of |d2 actual position| (edges 1k 2k 5k 10k 20k
+                // 50k 100k PUU), fdm{k} its max, ft{k} = histogram of |torque
+                // change| (edges 5 10 20 50 100 200 500, 0.1 %), ftm{k} its
+                // max, tq{k} = the torque now. reset:1 clears after the reply.
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                FOR EcTrI := 0 TO 2 DO
+                    EcTrStr := '';
+                    FOR EcObjJ := 0 TO 7 DO
+                        EcTrStr := CONCAT(EcTrStr, UDINT_TO_STRING(GVL.FbD2Hist[EcTrI, EcObjJ]));
+                        EcTrStr := CONCAT(EcTrStr, ',');
+                    END_FOR;
+                    EcObjKey := CONCAT('fd', INT_TO_STRING(EcTrI));
+                    MessagePackerFb.PackKvStr(ADR(EcObjKey), ADR(EcTrStr));
+                    EcObjKey := CONCAT('fdm', INT_TO_STRING(EcTrI));
+                    MessagePackerFb.PackKvDint(ADR(EcObjKey), GVL.FbD2Max[EcTrI]);
+                    EcTrStr := '';
+                    FOR EcObjJ := 0 TO 7 DO
+                        EcTrStr := CONCAT(EcTrStr, UDINT_TO_STRING(GVL.FbTqHist[EcTrI, EcObjJ]));
+                        EcTrStr := CONCAT(EcTrStr, ',');
+                    END_FOR;
+                    EcObjKey := CONCAT('ft', INT_TO_STRING(EcTrI));
+                    MessagePackerFb.PackKvStr(ADR(EcObjKey), ADR(EcTrStr));
+                    EcObjKey := CONCAT('ftm', INT_TO_STRING(EcTrI));
+                    MessagePackerFb.PackKvDint(ADR(EcObjKey), INT_TO_DINT(GVL.FbTqMax[EcTrI]));
+                END_FOR;
+                MessagePackerFb.PackKvDint(ADR('tq0'), INT_TO_DINT(GVL.TorqueTap0));
+                MessagePackerFb.PackKvDint(ADR('tq1'), INT_TO_DINT(GVL.TorqueTap1));
+                MessagePackerFb.PackKvDint(ADR('tq2'), INT_TO_DINT(GVL.TorqueTap2));
+                IF MessageUnpackerFb.TryReadINT64('reset', 0) <> 0 THEN
+                    GVL.FbReset := TRUE;
+                END_IF;
             ELSIF (CommandType = 'ESP_SYNC') THEN
                 // The EasyCAT SYNC0-interval log (GVL.SyncLog*): n = buckets
                 // so far, now = the last deviation (ns), ev = up to 12

@@ -20,6 +20,7 @@ Regenerate this file with `python tools/gen_script_index.py`.
 
 | Tool | Touches | What it does |
 |---|---|---|
+| `_burst_width_tmp.py` | moves axes |  |
 | `a_axis_test.py` | moves axes, writes PLC vars | The group's A axis on the machine (open-loop stepper on the QEC driver's second axis): rotate it through the axis group and check the commanded position, the move times and the peak speed / acceleration against the axis  |
 | `a_blend_stress.py` | moves axes | Queued, blended G1s that turn A, over and over: the move pattern the real PLC hung on right after SM3 4.20 was installed (2026-09-29, 5 queued G1s at Cor 45 with a different A each). |
 | `a_limit_step.py` | moves axes | One step of the A limit ladder on the machine (the Motors page's test from the command line, for a session where the operator reports the mark). |
@@ -33,6 +34,7 @@ Regenerate this file with `python tools/gen_script_index.py`.
 | `drive_param.py` | writes PLC vars | Read or write ASDA-B3 drive parameters over EtherCAT SDO (PLC SYS DRV_SDO / DRV_SDO_RESULT). |
 | `ec_stress.py` | moves axes, writes PLC vars | EtherCAT task timing under load (owner, 2026-09-29: DC statistics show the odd late cycle while the machine runs). |
 | `filter_compare.py` | moves axes | One measurement for comparing drive filter settings (e.g. |
+| `filter_sweep.py` | moves axes | Compare drive command filters by the shock the motion actually feels. |
 | `fly_leftover_test.py` | moves axes | Fly events a run leaves behind: the default TTL and SYS FLUSH. |
 | `gen_script_index.py` | writes these README files | Regenerate the script indexes from each script's own header: codesys_scripts/jobs/templates/README.md and tools/README.md. |
 | `host_crash_test.py` | moves axes | The host PC dies without closing its PLC connection (a blue screen): can it connect again after it comes back? |

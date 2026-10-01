@@ -66,6 +66,19 @@ VAR
     iLagN       : INT;
     xLate       : BOOL;
     xEarly      : BOOL;
+    // Feedback shock monitor (GVL.Fb*).
+    diFbPrev    : ARRAY[0..2] OF DINT;
+    diFbVelPrev : ARRAY[0..2] OF DINT;
+    iFbTqPrev   : ARRAY[0..2] OF INT;
+    iFbValid    : ARRAY[0..2] OF INT;
+    iFbK        : INT;
+    iFbJ        : INT;
+    diFbPos     : DINT;
+    diFbVel     : DINT;
+    diFbAbs     : DINT;
+    iFbTq       : INT;
+    iFbTqAbs    : INT;
+    wFbSw       : WORD;
     iSyncMin    : INT := 32767;
     iSyncMax    : INT := -32768;
     udiSyncBucket : UDINT;
@@ -737,3 +750,62 @@ ELSIF GVL.DirState <> 0 THEN
     GVL.DirState := 0;
 END_IF;
 GVL.DirRunning := GVL.DirEnable AND ((GVL.DirState = 4) OR (GVL.DirState = 5));
+
+// ---- Feedback shock monitor (GVL.Fb*, SYS FB_STATS) ----
+// Per drive in Operation enabled: |d2 of the actual position| and |torque
+// change| per cycle into histograms, to compare command filters.
+FOR iFbK := 0 TO 2 DO
+    CASE iFbK OF
+        0: diFbPos := GVL.ActualTap0; iFbTq := GVL.TorqueTap0; wFbSw := GVL.StatusTap0;
+        1: diFbPos := GVL.ActualTap1; iFbTq := GVL.TorqueTap1; wFbSw := GVL.StatusTap1;
+    ELSE
+        diFbPos := GVL.ActualTap2; iFbTq := GVL.TorqueTap2; wFbSw := GVL.StatusTap2;
+    END_CASE;
+    diFbVel := diFbPos - diFbPrev[iFbK];
+    IF (wFbSw AND 16#006F) = 16#0027 THEN
+        IF iFbValid[iFbK] < 2 THEN
+            iFbValid[iFbK] := iFbValid[iFbK] + 1;
+        ELSE
+            diFbAbs := ABS(diFbVel - diFbVelPrev[iFbK]);
+            IF diFbAbs < 1000 THEN iFbJ := 0;
+            ELSIF diFbAbs < 2000 THEN iFbJ := 1;
+            ELSIF diFbAbs < 5000 THEN iFbJ := 2;
+            ELSIF diFbAbs < 10000 THEN iFbJ := 3;
+            ELSIF diFbAbs < 20000 THEN iFbJ := 4;
+            ELSIF diFbAbs < 50000 THEN iFbJ := 5;
+            ELSIF diFbAbs < 100000 THEN iFbJ := 6;
+            ELSE iFbJ := 7;
+            END_IF;
+            GVL.FbD2Hist[iFbK, iFbJ] := GVL.FbD2Hist[iFbK, iFbJ] + 1;
+            GVL.FbD2Max[iFbK] := MAX(GVL.FbD2Max[iFbK], diFbAbs);
+            iFbTqAbs := ABS(iFbTq - iFbTqPrev[iFbK]);
+            IF iFbTqAbs < 5 THEN iFbJ := 0;
+            ELSIF iFbTqAbs < 10 THEN iFbJ := 1;
+            ELSIF iFbTqAbs < 20 THEN iFbJ := 2;
+            ELSIF iFbTqAbs < 50 THEN iFbJ := 3;
+            ELSIF iFbTqAbs < 100 THEN iFbJ := 4;
+            ELSIF iFbTqAbs < 200 THEN iFbJ := 5;
+            ELSIF iFbTqAbs < 500 THEN iFbJ := 6;
+            ELSE iFbJ := 7;
+            END_IF;
+            GVL.FbTqHist[iFbK, iFbJ] := GVL.FbTqHist[iFbK, iFbJ] + 1;
+            GVL.FbTqMax[iFbK] := MAX(GVL.FbTqMax[iFbK], iFbTqAbs);
+        END_IF;
+    ELSE
+        iFbValid[iFbK] := 0;
+    END_IF;
+    diFbVelPrev[iFbK] := diFbVel;
+    diFbPrev[iFbK] := diFbPos;
+    iFbTqPrev[iFbK] := iFbTq;
+END_FOR;
+IF GVL.FbReset THEN
+    GVL.FbReset := FALSE;
+    FOR iFbK := 0 TO 2 DO
+        FOR iFbJ := 0 TO 7 DO
+            GVL.FbD2Hist[iFbK, iFbJ] := 0;
+            GVL.FbTqHist[iFbK, iFbJ] := 0;
+        END_FOR;
+        GVL.FbD2Max[iFbK] := 0;
+        GVL.FbTqMax[iFbK] := 0;
+    END_FOR;
+END_IF;

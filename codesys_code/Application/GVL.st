@@ -323,6 +323,22 @@ VAR_GLOBAL
 	StatusTap0      AT %IW18 : WORD;
 	StatusTap1      AT %IW30 : WORD;
 	StatusTap2      AT %IW42 : WORD;
+	(* The drives' Torque actual 0x6077 (0.1 % rated), same TxPDO 0x1A01:
+	   after 6041 / 6064 / 606C. *)
+	TorqueTap0      AT %IW24 : INT;
+	TorqueTap1      AT %IW36 : INT;
+	TorqueTap2      AT %IW48 : INT;
+	(* Feedback shock monitor (PRG_EventLog, SYS FB_STATS), per drive while
+	   it is in Operation enabled: histograms of |second difference of the
+	   actual position 0x6064| per cycle (PUU; bin edges 1k 2k 5k 10k 20k
+	   50k 100k) and of |torque change| per cycle (0.1 %; edges 5 10 20 50
+	   100 200 500), and their maxima. A stale target shows as a spike in
+	   both. FbReset (FB_STATS reset:1) clears it. *)
+	FbD2Hist        : ARRAY[0..2, 0..7] OF UDINT;
+	FbD2Max         : ARRAY[0..2] OF DINT;
+	FbTqHist        : ARRAY[0..2, 0..7] OF UDINT;
+	FbTqMax         : ARRAY[0..2] OF INT;
+	FbReset         : BOOL;
 	(* Direct drive test without SoftMotion (SYS DIRECT; PRG_EventLog):
 	   EAxis0's controlword 0x6040 and target 0x607A written by IEC code
 	   while EAxis0 is virtual in SoftMotion and the FSM is UnInited.
