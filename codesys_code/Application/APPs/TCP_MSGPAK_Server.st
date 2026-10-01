@@ -145,7 +145,7 @@ IF fbMyServer.PKT_IDX > TMP_PKT_IDX THEN
 			OR RouteCmd = 'GET_DIAG' OR RouteCmd = 'VERSION' OR RouteCmd = 'RESET_DBG_INFO'
 			OR RouteCmd = 'SET_AXIS_SIM' OR RouteCmd = 'GET_COORD1_DEBUG' OR RouteCmd = 'EVT_MARK'
 			OR RouteCmd = 'PLAN_GET' OR RouteCmd = 'SET_OVERRIDE' OR RouteCmd = 'DI_WATCH' OR RouteCmd = 'TASK_STATS'
-			OR RouteCmd = 'AXIS_INFO' OR RouteCmd = 'IO_STATE' OR RouteCmd = 'EC_STATS' OR RouteCmd = 'DEM_STATS' OR RouteCmd = 'DRV_SDO' OR RouteCmd = 'DRV_SDO_RESULT'
+			OR RouteCmd = 'AXIS_INFO' OR RouteCmd = 'IO_STATE' OR RouteCmd = 'EC_STATS' OR RouteCmd = 'DEM_STATS' OR RouteCmd = 'DRV_SDO' OR RouteCmd = 'DRV_SDO_RESULT' OR RouteCmd = 'DIRECT'
 			OR RouteCmd = 'JOINT_MOVE' OR RouteCmd = 'JOINT_STOP' OR RouteCmd = 'JOINT_STATE');
 		IF RouteToSys AND (GVL.sysinfo_buf_ridx.Space() > 0) THEN
 			tmp_ptr:=ADR(GVL.sysinfo_buf[GVL.sysinfo_buf_ridx.GetHead()][0]);

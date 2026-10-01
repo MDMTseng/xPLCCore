@@ -26,6 +26,7 @@ Regenerate this file with `python tools/gen_script_index.py`.
 | `a_speed_compare.py` | moves axes | Motion time per part with and without A rotations, on the machine. |
 | `asda_scope.py` | read-only | Find stale-target events in ASDA-Soft scope recordings (B3-E, 8 kHz). |
 | `comm_profile.py` | read-only | Comm task profile: where the Comm task's time goes (EC_STATS cs/cb/co/ cscan/ctask/cout/cout500 from TCP_MSGPAK_Server / PRG_EcatEspHttp stamps) next to TASK_STATS for all tasks. |
+| `direct_test.py` | moves axes, writes PLC vars | Direct drive test without SoftMotion: EAxis0's controlword and target position are written by PLC code (SYS DIRECT, PRG_EventLog) while SoftMotion holds EAxis0 as a virtual axis. |
 | `drive_param.py` | writes PLC vars | Read or write ASDA-B3 drive parameters over EtherCAT SDO (PLC SYS DRV_SDO / DRV_SDO_RESULT). |
 | `ec_stress.py` | moves axes, writes PLC vars | EtherCAT task timing under load (owner, 2026-09-29: DC statistics show the odd late cycle while the machine runs). |
 | `filter_compare.py` | moves axes | One measurement for comparing drive filter settings (e.g. |

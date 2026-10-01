@@ -546,6 +546,34 @@ END_IF;
                 MessagePackerFb.PackKvBool(ADR('ok'), GVL.SdoResOk);
                 MessagePackerFb.PackKvDint(ADR('sdo_err'), GVL.SdoResErr);
                 MessagePackerFb.PackKvDint(ADR('value'), GVL.SdoResValue);
+            ELSIF (CommandType = 'DIRECT') THEN
+                // Direct drive test (GVL.Dir*): start:1 (with step, travel,
+                // maxfe in PUU) begins it, hb:1 keeps it alive (send < 2 s
+                // apart), stop:1 ends it (the drive is disabled). Replies
+                // the state either way.
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                IF MessageUnpackerFb.TryReadINT64('stop', 0) <> 0 THEN
+                    GVL.DirEnable := FALSE;
+                ELSIF MessageUnpackerFb.TryReadINT64('start', 0) <> 0 THEN
+                    GVL.DirStepInc := LINT_TO_DINT(MessageUnpackerFb.TryReadINT64('step', 145));
+                    GVL.DirTravelInc := LINT_TO_DINT(MessageUnpackerFb.TryReadINT64('travel', 2167057));
+                    GVL.DirMaxFe := LINT_TO_DINT(MessageUnpackerFb.TryReadINT64('maxfe', 722352));
+                    GVL.DirHbMs := LINT_TO_UDINT(RuntimeMs);
+                    GVL.DirState := 0;
+                    GVL.DirEnable := TRUE;
+                ELSIF MessageUnpackerFb.TryReadINT64('hb', 0) <> 0 THEN
+                    GVL.DirHbMs := LINT_TO_UDINT(RuntimeMs);
+                END_IF;
+                MessagePackerFb.PackKvDint(ADR('state'), INT_TO_DINT(GVL.DirState));
+                MessagePackerFb.PackKvStr(ADR('reason'), ADR(GVL.DirReason));
+                MessagePackerFb.PackKvLint(ADR('cycles'), UDINT_TO_LINT(GVL.DirCycles));
+                MessagePackerFb.PackKvBool(ADR('enabled'), GVL.DirEnable);
+                MessagePackerFb.PackKvDint(ADR('target'), GVL.TapTarget0);
+                MessagePackerFb.PackKvDint(ADR('actual'), GVL.ActualTap0);
+                MessagePackerFb.PackKvDint(ADR('sw'), WORD_TO_DINT(GVL.StatusTap0));
+                MessagePackerFb.PackKvDint(ADR('cw'), WORD_TO_DINT(GVL.CtlTap0));
             ELSIF (CommandType = 'DEM_STATS') THEN
                 // The drives' position demand (0x6062) vs the targets we sent
                 // (GVL.Dem*, PRG_EventLog). Per drive k: ds{k} stale, dlate{k}

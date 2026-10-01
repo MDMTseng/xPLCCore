@@ -89,6 +89,12 @@ VAR
     aRingS      : ARRAY[0..2, 0..31] OF WORD;
     wStat       : WORD;
     xSyncOk     : BOOL;
+    // Direct drive test (GVL.Dir*).
+    diDirStart  : DINT;
+    diDirTarget : DINT;
+    iDirDir     : INT;
+    wSw         : WORD;
+    xDirAllowed : BOOL;
     iSdoStep    : INT;
     iSdoWait    : INT;
     uiSdoDev    : UINT;
@@ -288,7 +294,8 @@ FOR iProf := 0 TO 2 DO
     diVel := pAxG^.diSetPosition - diSetPrev[iProf];   // wraps like the drive's 32-bit target
     diD2 := diVel - diVelPrev[iProf];
     lrD2 := lrV - lrVelPrev[iProf];
-    IF pAxG^.nAxisState = SMC_AXIS_STATE.power_off OR pAxG^.nAxisState = SMC_AXIS_STATE.errorstop THEN
+    IF (pAxG^.nAxisState = SMC_AXIS_STATE.power_off OR pAxG^.nAxisState = SMC_AXIS_STATE.errorstop)
+       AND NOT (iProf = 0 AND GVL.DirRunning) THEN
         iSetValid[iProf] := 0;             // SetPosition / power-up: start over
     ELSIF iSetValid[iProf] < 2 THEN
         iSetValid[iProf] := iSetValid[iProf] + 1;
@@ -585,3 +592,86 @@ GVL.DrvSmMissed[2] := GVL.DrvObj[2, 7];
 GVL.DrvSyncErr[0] := GVL.DrvObj[0, 9];
 GVL.DrvSyncErr[1] := GVL.DrvObj[1, 9];
 GVL.DrvSyncErr[2] := GVL.DrvObj[2, 9];
+
+// ---- Direct drive test without SoftMotion (GVL.Dir*, SYS DIRECT) ----
+// Runs only while EAxis0 is virtual in SoftMotion (SoftMotion leaves the
+// drive alone) and the FSM is UnInited. Idle (DirState 0) it does not touch
+// the outputs.
+xDirAllowed := IoConfig_Globals.EAxis0.bVirtual
+               AND (AxisGroupSM.AxisGroupManagerFb._eState = E_RobotState.UnInited);
+wSw := GVL.StatusTap0 AND 16#006F;
+IF GVL.DirEnable AND (GVL.DirState <> 99) THEN
+    IF NOT xDirAllowed THEN
+        GVL.DirReason := 'not_allowed';
+        GVL.DirState := 99;
+    ELSIF udiNow - GVL.DirHbMs > 2000 THEN
+        GVL.DirReason := 'heartbeat';
+        GVL.DirState := 99;
+    ELSIF (GVL.StatusTap0 AND 16#0008) <> 0 AND GVL.DirState >= 3 THEN
+        GVL.DirReason := 'drive_fault';
+        GVL.DirState := 99;
+    END_IF;
+END_IF;
+IF GVL.DirEnable THEN
+    CASE GVL.DirState OF
+        0:  // start: target = actual, fault reset if needed
+            GVL.TapTarget0 := GVL.ActualTap0;
+            IF (GVL.StatusTap0 AND 16#0008) <> 0 THEN
+                GVL.CtlTap0 := 16#0080;
+            ELSE
+                GVL.CtlTap0 := 16#0006;
+            END_IF;
+            GVL.DirCycles := 0;
+            GVL.DirReason := '';
+            GVL.DirState := 1;
+        1:  // shutdown -> ready to switch on
+            GVL.TapTarget0 := GVL.ActualTap0;
+            GVL.CtlTap0 := 16#0006;
+            IF wSw = 16#0021 THEN
+                GVL.DirState := 2;
+            END_IF;
+        2:  // switch on
+            GVL.TapTarget0 := GVL.ActualTap0;
+            GVL.CtlTap0 := 16#0007;
+            IF wSw = 16#0023 THEN
+                GVL.DirState := 3;
+            END_IF;
+        3:  // enable operation, holding the actual position
+            GVL.TapTarget0 := GVL.ActualTap0;
+            GVL.CtlTap0 := 16#000F;
+            IF wSw = 16#0027 THEN
+                diDirStart := GVL.ActualTap0;
+                diDirTarget := diDirStart;
+                iDirDir := 1;
+                GVL.DirState := 4;
+            END_IF;
+        4:  // constant step up DirTravelInc, then back
+            diDirTarget := diDirTarget + iDirDir * GVL.DirStepInc;
+            IF (iDirDir > 0) AND (diDirTarget - diDirStart >= MIN(GVL.DirTravelInc, GVL.DirTravelMax)) THEN
+                iDirDir := -1;
+            ELSIF (iDirDir < 0) AND (diDirTarget <= diDirStart) THEN
+                diDirTarget := diDirStart;
+                GVL.DirState := 5;
+            END_IF;
+            IF ABS(diDirTarget - GVL.ActualTap0) > GVL.DirMaxFe THEN
+                GVL.DirReason := 'following_error';
+                GVL.DirState := 99;
+            ELSE
+                GVL.TapTarget0 := diDirTarget;
+                GVL.CtlTap0 := 16#000F;
+                GVL.DirCycles := GVL.DirCycles + 1;
+            END_IF;
+        5:  // done: hold
+            GVL.TapTarget0 := diDirTarget;
+            GVL.CtlTap0 := 16#000F;
+    ELSE    // 99 aborted: disable the drive, hold
+        GVL.TapTarget0 := GVL.ActualTap0;
+        GVL.CtlTap0 := 16#0006;
+    END_CASE;
+ELSIF GVL.DirState <> 0 THEN
+    // stop: disable the drive once, then leave the outputs alone
+    GVL.TapTarget0 := GVL.ActualTap0;
+    GVL.CtlTap0 := 16#0006;
+    GVL.DirState := 0;
+END_IF;
+GVL.DirRunning := GVL.DirEnable AND ((GVL.DirState = 4) OR (GVL.DirState = 5));

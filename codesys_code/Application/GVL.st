@@ -323,6 +323,25 @@ VAR_GLOBAL
 	StatusTap0      AT %IW18 : WORD;
 	StatusTap1      AT %IW30 : WORD;
 	StatusTap2      AT %IW42 : WORD;
+	(* Direct drive test without SoftMotion (SYS DIRECT; PRG_EventLog):
+	   EAxis0's controlword 0x6040 and target 0x607A written by IEC code
+	   while EAxis0 is virtual in SoftMotion and the FSM is UnInited.
+	   CiA402 enable, then a constant step per cycle up DirTravelInc and
+	   back. Stops itself on a drive fault, a following error over
+	   DirMaxFe, no host heartbeat for 2 s, or SoftMotion taking the axis
+	   back. DirState: 0 idle, 1-3 enabling, 4 moving, 5 done (holding),
+	   99 aborted (DirReason). *)
+	CtlTap0         AT %QW22 : WORD;
+	DirEnable       : BOOL;
+	DirHbMs         : UDINT;
+	DirStepInc      : DINT := 145;          (* ~0.1 deg/s at 1 ms (1444705 PUU per deg) *)
+	DirTravelInc    : DINT := 2167057;      (* 1.5 deg *)
+	DirTravelMax    : DINT := 4334115;      (* 3 deg: hard cap *)
+	DirMaxFe        : DINT := 722352;       (* 0.5 deg *)
+	DirState        : INT;
+	DirReason       : STRING(31);
+	DirCycles       : UDINT;
+	DirRunning      : BOOL;                 (* states 4 / 5: the demand checks run for EAxis0 *)
 	(* Cycles with bit 14 off while the drive is powered (valid only with
 	   P3.019.Z = 1), the PLC ms of the last, and cycles where it is off
 	   while the demand readback shows a late (stale) target. *)
