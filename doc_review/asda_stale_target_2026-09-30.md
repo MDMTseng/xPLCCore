@@ -631,6 +631,9 @@ Later the same evening:
   drives raise AL3E3 (PDO not received within P3.022's cycles) at once on
   enable, also with SoftMotion bypassed (direct_test.py). CSP on the B3-E
   needs DC; Free Run / SM sync is not an option.
+  Second try: the drives have no OD 1006h (SDO error; 60C2 already says
+  1 ms) and P3.022.YX at its maximum 0x14 (20 cycles) still gave AL3E3
+  on enable. Restored DC and P3.022 0xFF04.
 
 Settings restored: SyncOffset 50, shift 0, P3.009 0x5055, QEC DC on.
 
