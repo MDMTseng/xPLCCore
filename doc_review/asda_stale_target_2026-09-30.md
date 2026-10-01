@@ -622,6 +622,16 @@ firmware) burst within 50 ms of each other on most bursts; EAxis0 (newer
 firmware) keeps the same rhythm at other moments. The cause looks
 drive-internal and stateful; for Delta.
 
+Later the same evening:
+- QEC and reel DC off: EAxis0 becomes the reference clock (its own ESC
+  makes its SYNC0). Still 4.0-5.0 % on all three, same rhythm, EAxis1/2
+  together (20 of 29 within 50 ms). The reel's normal DC values are
+  DC enable TRUE, sync0 enable TRUE, DCSetting 0 (QEC: 1 / 1 / 1).
+- ASDA in Free Run (DC off, 1C32:01 = 0), still CSP (0x6061 = 8): the
+  drives raise AL3E3 (PDO not received within P3.022's cycles) at once on
+  enable, also with SoftMotion bypassed (direct_test.py). CSP on the B3-E
+  needs DC; Free Run / SM sync is not an option.
+
 Settings restored: SyncOffset 50, shift 0, P3.009 0x5055, QEC DC on.
 
 ## 8. Next tests

@@ -1,6 +1,6 @@
 # -*- coding: ascii -*-
 # Turn DC on / off for the QEC stepper slave (station 1006, first on the
-# wire). The EtherCAT master takes the first DC slave as the reference
+# wire) and, with SLAVES, others (the reel, 1002, second). The EtherCAT master takes the first DC slave as the reference
 # clock, so with QEC's DC off the reference moves to the reel servo (1002).
 # Offline edit + save; deploy with tools/safe_install.py (drives off).
 #
@@ -12,7 +12,7 @@
 # then runs without SYNC0; do not move it during the trial.
 
 DC_ON = True
-SLAVE = "QEC_R11MP3S_V"
+SLAVES = ("QEC_R11MP3S_V",)    # add "reel_pull_motor" to move the reference to EAxis0
 VALUES = {"DC enable": "1" if DC_ON else "0",
           "DC sync0 enable": "1" if DC_ON else "0",
           "DCSetting": "1" if DC_ON else "0"}
@@ -28,23 +28,23 @@ def t(v):
 
 
 proj = projects.primary
-dev = proj.find(SLAVE, True)
-if not dev:
-    raise Exception("%s not found" % SLAVE)
-dev = dev[0]
 changed = []
-for c in dev.connectors:
-    try:
-        prms = list(c.host_parameters)
-    except Exception:
-        continue
-    for prm in prms:
-        pn = t(prm.name)
-        if pn in VALUES:
-            old = t(prm.value)
-            if old != VALUES[pn]:
-                prm.value = VALUES[pn]
-            changed.append("%s %s: %s -> %s" % (SLAVE, pn, old, t(prm.value)))
+for SLAVE in SLAVES:
+    dev = proj.find(SLAVE, True)
+    if not dev:
+        raise Exception("%s not found" % SLAVE)
+    for c in dev[0].connectors:
+        try:
+            prms = list(c.host_parameters)
+        except Exception:
+            continue
+        for prm in prms:
+            pn = t(prm.name)
+            if pn in VALUES:
+                old = t(prm.value)
+                if old != VALUES[pn]:
+                    prm.value = VALUES[pn]
+                changed.append("%s %s: %s -> %s" % (SLAVE, pn, old, t(prm.value)))
 for line in changed:
     print(line)
 proj.save()
