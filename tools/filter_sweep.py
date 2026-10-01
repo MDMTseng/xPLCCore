@@ -14,6 +14,8 @@ several ms. Per setting:
 
     python tools/filter_sweep.py --owner-ok --levels orig 4 8 12 [--speed 70] [--seconds 60]
 
+    python tools/filter_sweep.py --owner-ok --shape round --cor 49 --levels 0 12 --restore 12
+
 A level is one value for all three drives, or "a/b/c" per drive, or
 "orig" (the backup values).
 """
@@ -84,6 +86,11 @@ def main():
     ap.add_argument("--levels", nargs="+", default=["orig", "4", "8", "12"])
     ap.add_argument("--speed", type=float, default=70)
     ap.add_argument("--seconds", type=float, default=60)
+    ap.add_argument("--shape", choices=("dip", "round"), default="dip",
+                    help="dip: the square with dips; round: the 4-point square at Z 0, corners blended "
+                         "by --cor (49 = nearly a circle), lapped continuously")
+    ap.add_argument("--cor", type=float, default=49.0, help="corner distance for --shape round (mm, < 50)")
+    ap.add_argument("--restore", default="orig", help="P1.068 at the end: orig (the backup) or a level")
     ap.add_argument("--owner-ok", action="store_true")
     a = ap.parse_args()
     mc.require_owner_ok(a.owner_ok)
@@ -91,7 +98,13 @@ def main():
     orig = originals()
     log("P1.068 originals: %s" % orig)
     s = a.speed / 100.0
-    pkts = path(2000.0 * s, 200000.0 * s, 800000.0 * s, int(a.seconds) + 30)
+    if a.shape == "dip":
+        pkts = path(2000.0 * s, 200000.0 * s, 800000.0 * s, int(a.seconds) + 30)
+    else:
+        kin = dict(F=2000.0 * s, ACC=200000.0 * s, DEA=200000.0 * s, JERK=800000.0 * s)
+        pkts = [dict(kin, type="M", cmd="G1", X=float(x), Y=float(y), Z=0.0, Cor=a.cor)
+                for _ in range(int(a.seconds) * 3 + 30)
+                for x, y in ((-50, -50), (50, -50), (50, 50), (-50, 50))]
     results = []
     try:
         for lv in a.levels:
@@ -111,9 +124,9 @@ def main():
             print(json.dumps(results[-1]), flush=True)
     finally:
         virtual()
-        log("=== restore P1.068 %s ===" % orig)
+        log("=== restore P1.068 %s ===" % (orig if a.restore == "orig" else a.restore))
         mc.drives_off()
-        set_filter("orig", orig)
+        set_filter(a.restore, orig)
     json.dump(results, open("../codesys_scripts/jobs/filter_sweep.json", "w"), indent=1)
     log("summary (per drive EAxis0/1/2): pos d2 max | torque change max %")
     for r in results:

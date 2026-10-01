@@ -222,8 +222,17 @@ def set_delta(real):
     brings back the project's virtual delta). Powers the delta off first."""
     drives_off()
     rpc_write("GVL.AxisSimConfigMask", 0 if real else 7)
-    sys_cmd("SET_AXIS_SIM", mask=0 if real else 7)
     want = 0 if real else 7
+    # The PLC refuses a new mask while it still applies the last one
+    # ("sim_apply_busy", e.g. right after a download or a mode change).
+    for i in range(30):
+        try:
+            sys_cmd("SET_AXIS_SIM", mask=want)
+            break
+        except RuntimeError as e:
+            if "sim_apply_busy" not in str(e) or i == 29:
+                raise
+            time.sleep(1)
     for _ in range(60):
         if delta_mask() == want:
             return
