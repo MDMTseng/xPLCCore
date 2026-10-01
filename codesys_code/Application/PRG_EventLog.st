@@ -66,6 +66,8 @@ VAR
     iLagN       : INT;
     xLate       : BOOL;
     xEarly      : BOOL;
+    uiOddPrev   : UINT;
+    xOddValid   : BOOL;
     xLatePrev   : ARRAY[0..2] OF BOOL;
     xEarlyPrev  : ARRAY[0..2] OF BOOL;
     xGlitchD    : BOOL;
@@ -435,6 +437,7 @@ IF GVL.DemReset THEN
         GVL.DemD2Max[iProf] := 0;
         GVL.DemLate[iProf] := 0;
         GVL.DemEvtN[iProf] := 0;
+        GVL.OddLogN := 0;
         GVL.SyncOffCount[iProf] := 0;
         GVL.SyncOffAndLate[iProf] := 0;
         iPost[iProf] := 0;
@@ -452,8 +455,20 @@ ecat_esp_out10 := TO_USINT(SHR(GVL.EspSeq, 16) AND 16#FF);
 ecat_esp_out11 := TO_USINT(SHR(GVL.EspSeq, 24) AND 16#FF);
 GVL.EspStale := TO_UINT(ecat_esp_in22) + TO_UINT(ecat_esp_in23) * 256;
 GVL.EspSkip := TO_UINT(ecat_esp_in24) + TO_UINT(ecat_esp_in25) * 256;
-GVL.EspArrMinUs := TO_UINT(ecat_esp_in26) + TO_UINT(ecat_esp_in27) * 256;
-GVL.EspArrMaxUs := TO_UINT(ecat_esp_in28) + TO_UINT(ecat_esp_in29) * 256;
+// Inputs 26-29: odd SYNC0 intervals (count, last deviation us) since the
+// 2026-10-01 firmware (were the arrival min / max); logged per event
+// (GVL.OddLog*).
+GVL.EspOddCount := TO_UINT(ecat_esp_in26) + TO_UINT(ecat_esp_in27) * 256;
+GVL.EspOddDev := UINT_TO_INT(TO_UINT(ecat_esp_in28) + TO_UINT(ecat_esp_in29) * 256);
+GVL.EspArrMinUs := 0;
+GVL.EspArrMaxUs := 0;
+IF xOddValid AND (GVL.EspOddCount <> uiOddPrev) THEN
+    GVL.OddLogMs[GVL.OddLogN MOD 1024] := udiNow;
+    GVL.OddLogDev[GVL.OddLogN MOD 1024] := GVL.EspOddDev;
+    GVL.OddLogN := GVL.OddLogN + 1;
+END_IF;
+uiOddPrev := GVL.EspOddCount;
+xOddValid := TRUE;
 GVL.EspLate := TO_UINT(ecat_esp_in30) + TO_UINT(ecat_esp_in31) * 256;
 ecat_esp_out12 := TO_USINT(GVL.TapTarget0 AND 16#FF);
 ecat_esp_out13 := TO_USINT(SHR(GVL.TapTarget0, 8) AND 16#FF);

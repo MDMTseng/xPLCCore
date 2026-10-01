@@ -376,6 +376,17 @@ VAR_GLOBAL
 	   (DemEvtN - 1) MOD 1024). SYS DEM_EVT reads it; DEM_STATS reset:1
 	   clears it. Used to compare the burst times of the three drives. *)
 	DemEvt          : ARRAY[0..2, 0..1023] OF UDINT;
+	(* Odd SYNC0 intervals seen by the EasyCAT (firmware inputs 26-29):
+	   SYNC0-to-SYNC0 off the cycle by more than 3 us, timed by the ESP32.
+	   A shift of the DC system time moves every slave's SYNC0 at once.
+	   Each new one is logged with the PLC ms and the deviation (us),
+	   ring of 1024, OddLogN counts all. SYS ESP_ODD reads it; DEM_STATS
+	   reset:1 clears it. *)
+	EspOddCount     : UINT;
+	EspOddDev       : INT;
+	OddLogMs        : ARRAY[0..1023] OF UDINT;
+	OddLogDev       : ARRAY[0..1023] OF INT;
+	OddLogN         : UDINT;
 	DemEvtN         : ARRAY[0..2] OF UDINT;
 	(* Snapshots of the stale / glitch events: 32 cycles of sent target and
 	   drive demand (oldest first), the event 12 cycles from the end. Up to

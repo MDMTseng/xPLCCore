@@ -12,7 +12,7 @@
 # all clean. Also change AxisGroupSM.BusPeriod (ms per scan) and
 # GVL.EcNominalUs to match, and check the drives' 0x60C2 afterwards.
 
-CYCLE_US = 5000
+CYCLE_US = 1000
 
 
 def t(v):

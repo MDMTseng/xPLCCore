@@ -40,8 +40,9 @@
 //     22-23  stale: SYNC0 cycles that read the same counter as the last one
 //            (the frame had not arrived yet) -- the drives' symptom (UINT, wraps)
 //     24-25  skipped: counter steps > 1 (UINT, wraps)
-//     26-27  frame arrival after SYNC0, min over the last second, us (UINT)
-//     28-29  the same, max, us (UINT)
+//     26-27  odd SYNC0 intervals: SYNC0-to-SYNC0 (micros() in the ISR) off
+//            the SYNC0 cycle (ESC 0x09A0) by more than ODD_US (UINT, wraps)
+//     28-29  deviation of the last odd interval, us (INT16)
 //     30-31  late: cycles whose frame had not arrived by the next SYNC0,
 //            last second (UINT)
 //   Arrival = the first poll after MainTask that reads a new counter
@@ -103,6 +104,15 @@ static uint32_t seqPrev = 0;
 static bool seqValid = false;
 static uint16_t staleCount = 0, skipCount = 0;
 static uint16_t arrMinUs = 0, arrMaxUs = 0, lateCount = 0;   // last full second
+// Odd SYNC0 intervals (inputs 26-29): a shift of the DC system time moves
+// every slave's SYNC0 at once.
+static const int32_t ODD_US = 3;
+static uint16_t oddCount = 0;
+static int16_t oddLastDev = 0;
+static uint32_t nomUs = 0;                          // SYNC0 cycle, from 0x09A0
+static uint32_t oddPrevIrq = 0;
+static bool oddValid = false;
+static uint32_t oddHist[7] = {0};                   // |dev| 0,1,2,3,4-9,10-99,>=100 us; serial
 static uint32_t arrMinAcc = 0xFFFFFFFF, arrMaxAcc = 0, lateAcc = 0;
 // Position probe (inputs 11-14).
 static const int32_t POS_GLITCH_THRESH = 150000;
@@ -385,10 +395,10 @@ static void ecatCycle() {
   in[23] = staleCount >> 8;
   in[24] = skipCount & 0xFF;
   in[25] = skipCount >> 8;
-  in[26] = arrMinUs & 0xFF;
-  in[27] = arrMinUs >> 8;
-  in[28] = arrMaxUs & 0xFF;
-  in[29] = arrMaxUs >> 8;
+  in[26] = oddCount & 0xFF;
+  in[27] = oddCount >> 8;
+  in[28] = (uint16_t)oddLastDev & 0xFF;
+  in[29] = (uint16_t)oddLastDev >> 8;
   in[30] = lateCount & 0xFF;
   in[31] = lateCount >> 8;
 
@@ -445,6 +455,8 @@ static void ecatTaskFn(void *) {
     bool irq = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100)) > 0;
     if (!irq) {
       synced = false;
+      oddValid = false;
+      nomUs = 0;
       ecatCycle();
       continue;
     }
@@ -474,6 +486,22 @@ static void ecatTaskFn(void *) {
     }
     uint32_t tSync = irqUs;
     uint32_t seen = irqCount;
+    // SYNC0 interval from the ISR timestamps (no task wake-up jitter).
+    if (nomUs == 0) {
+      uint32_t c = EASYCAT.ReadEsc(0x09A0, 4);
+      if (c >= 100000UL && c < 100000000UL) nomUs = (c + 500) / 1000;
+    }
+    if (oddValid && nomUs) {
+      int32_t dev = (int32_t)(tSync - oddPrevIrq) - (int32_t)nomUs;
+      int32_t a = dev < 0 ? -dev : dev;
+      oddHist[a < 4 ? a : (a < 10 ? 4 : (a < 100 ? 5 : 6))]++;
+      if (a > ODD_US && a < 100000) {
+        oddCount++;
+        oddLastDev = dev > 32767 ? 32767 : (dev < -32767 ? -32767 : (int16_t)dev);
+      }
+    }
+    oddPrevIrq = tSync;
+    oddValid = true;
     ecatCycle();
     // CPU time of one cycle (encoder read, process data, stepper setup):
     // with the pulses in RMT this is all the CPU spends per millisecond.
@@ -524,13 +552,16 @@ void loop() {
     Serial.printf("{\"esc\":\"%s\",\"sync\":%d,\"irq\":%lu,\"int_min\":%u,\"int_max\":%u,"
                   "\"angle\":%u,\"pos\":%ld,\"status\":%u,\"agc\":%u,\"err\":%u,"
                   "\"step\":%ld,\"st_cmd\":%ld,\"st_status\":%u,\"st_fault\":%u,\"work_max_us\":%lu,"
-                  "\"enc_max_us\":%lu,\"stale\":%u,\"skip\":%u,\"arr_min\":%u,\"arr_max\":%u,\"late\":%u,\"poll0_min\":%u,\"poll0_max\":%u,\"early\":%u,\"pos_glitch\":%u,\"pos_d2max\":%lu}\n",
+                  "\"enc_max_us\":%lu,\"stale\":%u,\"skip\":%u,\"odd\":%u,\"odd_dev\":%d,\"odd_hist\":[%lu,%lu,%lu,%lu,%lu,%lu,%lu],\"arr_min\":%u,\"arr_max\":%u,\"late\":%u,\"poll0_min\":%u,\"poll0_max\":%u,\"early\":%u,\"pos_glitch\":%u,\"pos_d2max\":%lu}\n",
                   escName(escState), synced ? 1 : 0, (unsigned long)irqCount,
                   intervalMin, intervalMax, rawAngle, (long)position,
                   sensorStatus, agc, errCount,
                   (long)stepper::position(), (long)stepper::cmdPos, stepper::status(),
                   stepper::fault, (unsigned long)workMaxUs, (unsigned long)encWorkMaxUs,
-                  staleCount, skipCount, arrMinUs, arrMaxUs, lateCount, poll0Min, poll0Max, earlyCount,
+                  staleCount, skipCount, oddCount, (int)oddLastDev,
+                  (unsigned long)oddHist[0], (unsigned long)oddHist[1], (unsigned long)oddHist[2], (unsigned long)oddHist[3],
+                  (unsigned long)oddHist[4], (unsigned long)oddHist[5], (unsigned long)oddHist[6],
+                  arrMinUs, arrMaxUs, lateCount, poll0Min, poll0Max, earlyCount,
                   posGlitch, (unsigned long)posD2Max16 * 16);
   }
   delay(2);

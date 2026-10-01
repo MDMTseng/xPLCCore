@@ -12,6 +12,12 @@ If the drives' bursts coincide (within a few ms), the cause is common
 (master, SYNC0, DC). If they are unrelated, each drive's own clock / sync
 loop drifts on its own.
 
+It also reads the EasyCAT's odd SYNC0 intervals (SYS ESP_ODD: SYNC0-to-
+SYNC0 off the cycle by > 3 us, timed by the ESP32). A +x / -x pair in
+consecutive cycles is one late timestamp (ESP32 interrupt latency); a
+single one is a real shift of SYNC0 (DC system time). For every drive
+burst it prints the nearest single shift.
+
     python tools/dem_events.py [--gap 300] [--json FILE]
 
 Run any real-delta motion first (e.g. square_dip.py) after DEM_STATS reset.
@@ -40,6 +46,30 @@ def read(axis):
     return n, [(v >> 2, v & 3) for v in out]       # (ms, 1 late / 2 early)
 
 
+def read_odd():
+    n = mc.sys_cmd("ESP_ODD", **{"from": 0})["n"]
+    out = []
+    i = max(0, n - 1024)
+    while i < n:
+        ev = mc.sys_cmd("ESP_ODD", **{"from": i})["ev"].rstrip(",")
+        vals = [tuple(int(x) for x in e.split(":")) for e in ev.split(",") if e]
+        if not vals:
+            break
+        out += vals
+        i += len(vals)
+    singles, pairs = [], 0
+    k = 0
+    while k < len(out):
+        ms, dev = out[k]
+        if k + 1 < len(out) and out[k + 1][0] - ms <= 2 and abs(out[k + 1][1] + dev) <= 2:
+            pairs += 1
+            k += 2
+            continue
+        singles.append((ms, dev))
+        k += 1
+    return out, singles, pairs
+
+
 def bursts(events, gap):
     b = []
     for ms, code in events:
@@ -63,8 +93,11 @@ def main():
         n, ev[k] = read(k)
         bs[k] = bursts(ev[k], a.gap)
         log("EAxis%d: %d events%s, %d bursts" % (k, n, " (oldest overwritten)" if n > 1024 else "", len(bs[k])))
+    odd, singles, pairs = read_odd()
+    log("EasyCAT odd SYNC0 intervals: %d events, %d +/- pairs (timestamp latency), %d single shifts" % (
+        len(odd), pairs, len(singles)))
     if a.json:
-        json.dump({"EAxis%d" % k: ev[k] for k in range(3)}, open(a.json, "w"))
+        json.dump({"EAxis%d" % k: ev[k] for k in range(3)} | {"odd": odd}, open(a.json, "w"))
     t0 = min([b[0]["start"] for b in bs.values() if b] or [0])
     for k in range(3):
         st = [b["start"] for b in bs[k]]
@@ -89,9 +122,11 @@ def main():
                 cand = [st[c] for c in (i - 1, i) if 0 <= c < len(st)]
                 row.append(min((c - b["start"] for c in cand), key=abs))
             near_all.append(row)
-            print("  EAxis%d %8.3f s  len %4d ms  events %3d (early %d) | %s" % (
+            sh = min(((ms - b["start"], dev) for ms, dev in singles), key=lambda x: abs(x[0]), default=None)
+            print("  EAxis%d %8.3f s  len %4d ms  events %3d (early %d) | %s | nearest SYNC0 shift %s" % (
                 k, (b["start"] - t0) / 1000.0, b["end"] - b["start"], b["n"], b["early"],
-                "  ".join("EAxis%d %+6s" % (j, "-" if d is None else d) for j, d in zip(others, row))))
+                "  ".join("EAxis%d %+6s" % (j, "-" if d is None else d) for j, d in zip(others, row)),
+                "-" if sh is None else "%+d ms (%+d us)" % sh))
         for idx, j in enumerate(others):
             d = [abs(r[idx]) for r in near_all if r[idx] is not None]
             if d:

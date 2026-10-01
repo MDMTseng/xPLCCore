@@ -576,6 +576,26 @@ END_IF;
                 MessagePackerFb.PackKvDint(ADR('actual'), GVL.ActualTap0);
                 MessagePackerFb.PackKvDint(ADR('sw'), WORD_TO_DINT(GVL.StatusTap0));
                 MessagePackerFb.PackKvDint(ADR('cw'), WORD_TO_DINT(GVL.CtlTap0));
+            ELSIF (CommandType = 'ESP_ODD') THEN
+                // Odd SYNC0 intervals at the EasyCAT (GVL.OddLog*): n = events
+                // so far, cnt = the ESP32's counter, ev = up to 20 events
+                // from index from:i as ms:dev_us, comma separated.
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                EcEvtFrom := LINT_TO_UDINT(MessageUnpackerFb.TryReadINT64('from', 0));
+                MessagePackerFb.PackKvLint(ADR('n'), UDINT_TO_LINT(GVL.OddLogN));
+                MessagePackerFb.PackKvDint(ADR('cnt'), UINT_TO_DINT(GVL.EspOddCount));
+                EcTrStr := '';
+                EcEvtI := EcEvtFrom;
+                WHILE (EcEvtI < GVL.OddLogN) AND (EcEvtI < EcEvtFrom + 20) DO
+                    EcTrStr := CONCAT(EcTrStr, UDINT_TO_STRING(GVL.OddLogMs[EcEvtI MOD 1024]));
+                    EcTrStr := CONCAT(EcTrStr, ':');
+                    EcTrStr := CONCAT(EcTrStr, INT_TO_STRING(GVL.OddLogDev[EcEvtI MOD 1024]));
+                    EcTrStr := CONCAT(EcTrStr, ',');
+                    EcEvtI := EcEvtI + 1;
+                END_WHILE;
+                MessagePackerFb.PackKvStr(ADR('ev'), ADR(EcTrStr));
             ELSIF (CommandType = 'DEM_EVT') THEN
                 // The delay-change event log of drive axis:k (GVL.DemEvt):
                 // n = events so far, ev = up to 20 entries from index from:i
