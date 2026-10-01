@@ -369,6 +369,14 @@ VAR_GLOBAL
 	DemLagNominal   : INT := 3;      (* the drive's normal delay, measured 2026-09-30 *)
 	DemLate         : ARRAY[0..2] OF UDINT;          (* demand = target DemLagNominal+1 before while that one moved: one cycle behind = a stale target *)
 	DemReset        : BOOL;
+	(* Event log of the drive's delay changes, per drive: each entry is
+	   PLC ms * 4 + code, code 1 = start of a late stretch (demand one cycle
+	   behind the nominal lag), 2 = start of an early stretch (one cycle
+	   ahead). Ring of 1024; DemEvtN counts all (the newest is at
+	   (DemEvtN - 1) MOD 1024). SYS DEM_EVT reads it; DEM_STATS reset:1
+	   clears it. Used to compare the burst times of the three drives. *)
+	DemEvt          : ARRAY[0..2, 0..1023] OF UDINT;
+	DemEvtN         : ARRAY[0..2] OF UDINT;
 	(* Snapshots of the stale / glitch events: 32 cycles of sent target and
 	   drive demand (oldest first), the event 12 cycles from the end. Up to
 	   8; DEM_STATS reset:1 clears and re-arms. *)

@@ -65,6 +65,9 @@ VAR
     iSnapJ      : INT;
     iLagN       : INT;
     xLate       : BOOL;
+    xEarly      : BOOL;
+    xLatePrev   : ARRAY[0..2] OF BOOL;
+    xEarlyPrev  : ARRAY[0..2] OF BOOL;
     xGlitchD    : BOOL;
     iLag        : INT;
     iLagHit     : INT;
@@ -374,6 +377,13 @@ FOR iProf := 0 TO 2 DO
         IF xLate THEN
             GVL.DemLate[iProf] := GVL.DemLate[iProf] + 1;
         END_IF;
+        xEarly := (iLagN > 0) AND (diDem = diTHist[iProf, iLagN - 1]) AND (diDem <> diTHist[iProf, iLagN]);
+        IF (xLate AND NOT xLatePrev[iProf]) OR (xEarly AND NOT xEarlyPrev[iProf]) THEN
+            GVL.DemEvt[iProf, GVL.DemEvtN[iProf] MOD 1024] := udiNow * 4 + SEL(xLate, 2, 1);
+            GVL.DemEvtN[iProf] := GVL.DemEvtN[iProf] + 1;
+        END_IF;
+        xLatePrev[iProf] := xLate;
+        xEarlyPrev[iProf] := xEarly;
         IF NOT xSyncOk THEN
             GVL.SyncOffCount[iProf] := GVL.SyncOffCount[iProf] + 1;
             GVL.SyncOffLastMs[iProf] := udiNow;
@@ -424,6 +434,7 @@ IF GVL.DemReset THEN
         GVL.DemGlitch[iProf] := 0;
         GVL.DemD2Max[iProf] := 0;
         GVL.DemLate[iProf] := 0;
+        GVL.DemEvtN[iProf] := 0;
         GVL.SyncOffCount[iProf] := 0;
         GVL.SyncOffAndLate[iProf] := 0;
         iPost[iProf] := 0;

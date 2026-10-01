@@ -5,6 +5,8 @@ VAR
     EcObjJ  : INT;
     EcObjKey : STRING(7);
     EcTrI   : INT;
+    EcEvtFrom : UDINT;
+    EcEvtI  : UDINT;
     // Scratch raw-reads for SCRATCHPAD_WRITE field-presence detection
     // (code review fix #3). -1 sentinel from TryReadINT64 = missing key.
     // Moved here from PROGRAM AxisGroupSM VAR scope 2026-06-23: only
@@ -574,6 +576,25 @@ END_IF;
                 MessagePackerFb.PackKvDint(ADR('actual'), GVL.ActualTap0);
                 MessagePackerFb.PackKvDint(ADR('sw'), WORD_TO_DINT(GVL.StatusTap0));
                 MessagePackerFb.PackKvDint(ADR('cw'), WORD_TO_DINT(GVL.CtlTap0));
+            ELSIF (CommandType = 'DEM_EVT') THEN
+                // The delay-change event log of drive axis:k (GVL.DemEvt):
+                // n = events so far, ev = up to 20 entries from index from:i
+                // (ms * 4 + code, comma separated). Entries older than
+                // n - 1024 are overwritten.
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                EcTrI := LIMIT(0, LINT_TO_INT(MessageUnpackerFb.TryReadINT64('axis', 0)), 2);
+                EcEvtFrom := LINT_TO_UDINT(MessageUnpackerFb.TryReadINT64('from', 0));
+                MessagePackerFb.PackKvLint(ADR('n'), UDINT_TO_LINT(GVL.DemEvtN[EcTrI]));
+                EcTrStr := '';
+                EcEvtI := EcEvtFrom;
+                WHILE (EcEvtI < GVL.DemEvtN[EcTrI]) AND (EcEvtI < EcEvtFrom + 20) DO
+                    EcTrStr := CONCAT(EcTrStr, UDINT_TO_STRING(GVL.DemEvt[EcTrI, EcEvtI MOD 1024]));
+                    EcTrStr := CONCAT(EcTrStr, ',');
+                    EcEvtI := EcEvtI + 1;
+                END_WHILE;
+                MessagePackerFb.PackKvStr(ADR('ev'), ADR(EcTrStr));
             ELSIF (CommandType = 'DEM_STATS') THEN
                 // The drives' position demand (0x6062) vs the targets we sent
                 // (GVL.Dem*, PRG_EventLog). Per drive k: ds{k} stale, dlate{k}

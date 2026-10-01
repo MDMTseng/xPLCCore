@@ -1,0 +1,104 @@
+"""Compare the timing of the three delta drives' stale-target bursts.
+
+The PLC logs, per drive, every start of a stretch where the drive's
+position demand (0x6062) is one cycle late or early against the targets
+sent (GVL.DemEvt, SYS DEM_EVT; cleared by DEM_STATS reset:1). This reads
+the three logs, groups events less than --gap ms apart into bursts, and
+prints:
+- per drive: burst count and the intervals between bursts;
+- per burst of each drive: the nearest burst start of the other two.
+
+If the drives' bursts coincide (within a few ms), the cause is common
+(master, SYNC0, DC). If they are unrelated, each drive's own clock / sync
+loop drifts on its own.
+
+    python tools/dem_events.py [--gap 300] [--json FILE]
+
+Run any real-delta motion first (e.g. square_dip.py) after DEM_STATS reset.
+Only cycles where the target moves can show a lag, so stops hide bursts.
+"""
+
+import argparse
+import bisect
+import json
+
+import machine as mc
+from machine import log
+
+
+def read(axis):
+    n = mc.sys_cmd("DEM_EVT", axis=axis, **{"from": 0})["n"]
+    out = []
+    i = max(0, n - 1024)
+    while i < n:
+        ev = mc.sys_cmd("DEM_EVT", axis=axis, **{"from": i})["ev"].rstrip(",")
+        vals = [int(x) for x in ev.split(",") if x]
+        if not vals:
+            break
+        out += vals
+        i += len(vals)
+    return n, [(v >> 2, v & 3) for v in out]       # (ms, 1 late / 2 early)
+
+
+def bursts(events, gap):
+    b = []
+    for ms, code in events:
+        if b and ms - b[-1]["end"] < gap:
+            b[-1]["end"] = ms
+            b[-1]["n"] += 1
+            b[-1]["early"] += code == 2
+        else:
+            b.append({"start": ms, "end": ms, "n": 1, "early": int(code == 2)})
+    return b
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--gap", type=int, default=300, help="ms between events of one burst")
+    ap.add_argument("--json", help="save the raw events here")
+    a = ap.parse_args()
+    mc.reconnect()
+    ev, bs = {}, {}
+    for k in range(3):
+        n, ev[k] = read(k)
+        bs[k] = bursts(ev[k], a.gap)
+        log("EAxis%d: %d events%s, %d bursts" % (k, n, " (oldest overwritten)" if n > 1024 else "", len(bs[k])))
+    if a.json:
+        json.dump({"EAxis%d" % k: ev[k] for k in range(3)}, open(a.json, "w"))
+    t0 = min([b[0]["start"] for b in bs.values() if b] or [0])
+    for k in range(3):
+        st = [b["start"] for b in bs[k]]
+        iv = [(y - x) / 1000.0 for x, y in zip(st, st[1:])]
+        if iv:
+            log("EAxis%d intervals (s): %s" % (k, " ".join("%.2f" % x for x in iv)))
+            log("EAxis%d interval min / median / max: %.2f / %.2f / %.2f s" % (
+                k, min(iv), sorted(iv)[len(iv) // 2], max(iv)))
+    print()
+    print("burst starts (s from the first) and the nearest burst of the other drives (ms offset):")
+    for k in range(3):
+        others = [j for j in range(3) if j != k]
+        near_all = []
+        for b in bs[k]:
+            row = []
+            for j in others:
+                st = [x["start"] for x in bs[j]]
+                if not st:
+                    row.append(None)
+                    continue
+                i = bisect.bisect_left(st, b["start"])
+                cand = [st[c] for c in (i - 1, i) if 0 <= c < len(st)]
+                row.append(min((c - b["start"] for c in cand), key=abs))
+            near_all.append(row)
+            print("  EAxis%d %8.3f s  len %4d ms  events %3d (early %d) | %s" % (
+                k, (b["start"] - t0) / 1000.0, b["end"] - b["start"], b["n"], b["early"],
+                "  ".join("EAxis%d %+6s" % (j, "-" if d is None else d) for j, d in zip(others, row))))
+        for idx, j in enumerate(others):
+            d = [abs(r[idx]) for r in near_all if r[idx] is not None]
+            if d:
+                print("  EAxis%d vs EAxis%d: %d of %d bursts within 50 ms, %d within 500 ms" % (
+                    k, j, sum(x <= 50 for x in d), len(d), sum(x <= 500 for x in d)))
+        print()
+
+
+if __name__ == "__main__":
+    main()
