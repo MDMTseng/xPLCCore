@@ -53,7 +53,7 @@ def main():
     mc.reconnect()
     results = {}
     try:
-        for v in a.values:
+        for i, v in enumerate(a.values):
             val = int(v, 0)
             log("=== P3.009 0x%04X ===" % val)
             mc.drives_off()
@@ -64,11 +64,11 @@ def main():
             mc.fsm_to("Ready", timeout=180)
             r = run_z(a.seconds)
             virtual()
-            results[v] = {"readback": ["0x%04X" % (x & 0xFFFF) for x in rb], **r}
+            results["%d %s" % (i + 1, v)] = {"readback": ["0x%04X" % (x & 0xFFFF) for x in rb], **r}
             log("  late %%: %s | burst events: %s" % (
                 " / ".join("%.2f" % r["EAxis%d" % k]["late_pct"] for k in range(3)),
                 " / ".join(str(r["EAxis%d" % k]["events"]) for k in range(3))))
-            print(json.dumps({"P3.009": v, **results[v]}), flush=True)
+            print(json.dumps({"run": i + 1, "P3.009": v, **results["%d %s" % (i + 1, v)]}), flush=True)
     finally:
         virtual()
         log("=== restore P3.009 %s ===" % a.restore)

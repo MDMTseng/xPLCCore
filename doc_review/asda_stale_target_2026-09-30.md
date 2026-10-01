@@ -591,6 +591,39 @@ cycles per drive.
   (master / DC side), crossing each drive's pick-up window. EAxis0's new
   firmware has a different window position.
 
+## 7i. 2026-10-01 16:00-20:05: timing probes and DC settings (all at 1 ms)
+
+All tests: X0 Y0, continuous Z 0 <-> -5 mm at F 5 (G1 + G4 1 ms), one EtherCAT
+start each; late % = 0x6062 one cycle behind. The rate of one start varies
+by 1-2 points on its own, and there are stretches of ~15 min where the
+old-firmware drives run at 6-10 %.
+
+New probes (EasyCAT firmware + PLC logs, `tools/dem_events.py`):
+- Frame arrival by interrupt (INT carries SYNC0 + the output SM event):
+  540-614 us after SYNC0, steady; no change at the drives' bursts.
+- SYNC0 interval by MCPWM capture (12.5 ns): -13..+37 ns all the time,
+  also at the bursts. The DC system time does not jump.
+- (The LAN9252 0x09F0 timestamp is in the uncompensated local clock: it
+  drifts ~7.6 ppm against SYNC0. Do not use it for phase.)
+
+Tried, no effect on the rate or the 2.4 / 2.6 / 3.5 s burst rhythm:
+- reference clock moved from QEC to the reel (QEC DC off, `set_qec_dc.py`);
+- background SDO sweep off (`GVL.SdoSweepEnable`);
+- drive DC sync0 shift time 100-400 and 100000-300000 (unit unverified,
+  the drives do not implement 1C32:03);
+- P3.009 Z = 2, 3, 4, 5 (three starts each for 3 and 5), Y = 10;
+- master SyncOffset 0, 10, 20, 30, 40, 50 % (two starts each): means
+  3.8-5.0 %, frame 43-104 us (0 %) to 542-614 us (50 %) after SYNC0.
+
+One outlier: P3.009 Z = 8 gave 11 % on EAxis1/2 (one start, not repeated).
+
+What does change it: the cycle (5 ms 0.7 %, 10 ms 0). EAxis1 / EAxis2 (same
+firmware) burst within 50 ms of each other on most bursts; EAxis0 (newer
+firmware) keeps the same rhythm at other moments. The cause looks
+drive-internal and stateful; for Delta.
+
+Settings restored: SyncOffset 50, shift 0, P3.009 0x5055, QEC DC on.
+
 ## 8. Next tests
 
 00. **After the power cycle** (the bus is down since the SyncOffset-60
