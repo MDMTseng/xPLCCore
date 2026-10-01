@@ -537,6 +537,26 @@ Results:
 - Bus: all OP. Modbus off.
 - Left as is until Delta support responds.
 
+## 7g. 2026-10-01 14:30: 10 ms EtherCAT cycle
+
+`set_bus_cycle.py` with CYCLE_US 10000.
+- The EtherCAT_Task interval had to be set as "10 ms": "10000 us" fails to
+  build with "The task interval is invalid". The job now does this itself.
+- All slaves reached OP. The drives showed 1C32:02 = 10,000,000 ns and
+  0x60C2 = 1 x 10^-2 s.
+
+Same Z test as 7f (X0 Y0, Z 0 <-> -5 mm, F 5, 15 strokes, 60 s, 3,600
+moving cycles):
+- lag histogram `2439 30 30 3600 0 0 0 0` on all three drives;
+- **0 late, 0 stale, 0 burst events**.
+
+At 1 ms the same test gave 13-15 bursts per drive per minute. So at a 10 ms
+cycle the drives always take the right target, in line with a timing
+window: 10 ms leaves the frame far from the drive's pick-up point.
+
+**The machine is left at 10 ms** until the owner decides. Return with
+CYCLE_US 1000, then `tools/safe_install.py`.
+
 ## 8. Next tests
 
 00. **After the power cycle** (the bus is down since the SyncOffset-60
