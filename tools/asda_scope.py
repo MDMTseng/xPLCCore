@@ -8,6 +8,14 @@ difference taken one bus cycle apart: |d2| > --thresh.
 
     python tools/asda_scope.py FILE [FILE ...] [--cycle-ms 1] [--thresh 154530]
                                [--detail MS] [--top 8]
+    python tools/asda_scope.py FILE --ramp [--table MS0 MS1]
+
+--ramp is for constant-speed runs (tools/direct_test.py, pulse_test.py): a
+cycle is bad when its command increment differs from the nominal |step| by
+more than a third; bad cycles less than 300 ms apart form one burst. It
+prints every burst and the intervals between them (2026-10-01: every
+2.4-3.6 s). --table prints, per bus cycle, the increment, the 8 sub-sample
+steps of Cmd Pos and the following error from MS0 to MS1.
 
 FILE: a .parscp (7-zip holding scpTemp.scp) or a bare .scp / .parscp.scp.
 Format (ASDA-Soft V7.2.14, learned 2026-09-30): uint32 sample count at byte
@@ -64,6 +72,42 @@ def events(cmd, stride, thresh):
     return d, stale
 
 
+def ramp(f, names, cmd, fe, stride, a):
+    inc = cmd[stride::stride] - cmd[:-stride:stride]        # per bus cycle
+    # in motion: the 21-cycle sum moves, so a single stalled (0) cycle counts
+    win = np.convolve(inc, np.ones(21), "same")
+    moving = np.abs(win) > 5 * 21
+    nom = float(np.median(np.abs(inc[moving]))) if moving.any() else 0.0
+    print("%s: %s | %.1f s, nominal |step| %.0f PUU per cycle" % (
+        os.path.basename(f), "/".join(names), cmd.size / FS, nom))
+    if a.ramp and nom > 0:
+        bad = np.nonzero(moving & (np.abs(np.abs(inc) - nom) > nom / 3))[0]
+        gap = int(300 / a.cycle_ms)
+        bursts = []
+        for i in bad:
+            if bursts and i - bursts[-1][-1] < gap:
+                bursts[-1].append(int(i))
+            else:
+                bursts.append([int(i)])
+        print("  bad cycles %d of %d moving (%.2f %%), bursts %d" % (
+            len(bad), int(moving.sum()), 100.0 * len(bad) / max(1, moving.sum()), len(bursts)))
+        for b in bursts:
+            print("  %9.0f ms  length %5.0f ms  bad cycles %3d" % (
+                b[0] * a.cycle_ms, (b[-1] - b[0] + 1) * a.cycle_ms, len(b)))
+        iv = np.diff([b[0] * a.cycle_ms for b in bursts])
+        if iv.size:
+            print("  intervals (s): %s" % " ".join("%.2f" % (x / 1000) for x in iv))
+            print("  interval min / mean / max: %.2f / %.2f / %.2f s" % (
+                iv.min() / 1000, iv.mean() / 1000, iv.max() / 1000))
+    if a.table:
+        print("  %7s %7s   %-*s %7s" % ("ms", "cmd/cyc", 5 * stride, "sub-steps of Cmd Pos", "FE"))
+        for m in range(int(a.table[0] / a.cycle_ms), int(a.table[1] / a.cycle_ms) + 1):
+            k = m * stride
+            sub = np.diff(cmd[k:k + stride + 1])
+            print("  %7.0f %7d   %s %7d" % (m * a.cycle_ms, int(inc[m]),
+                                          " ".join("%4d" % x for x in sub), int(fe[k])))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("files", nargs="+")
@@ -73,10 +117,16 @@ def main():
                          "(normal p99 ~50000); use ~100 for tools/pulse_test.py")
     ap.add_argument("--detail", type=float, help="print the per-sample increments around this time (ms)")
     ap.add_argument("--top", type=int, default=8)
+    ap.add_argument("--ramp", action="store_true", help="constant-speed run: burst list and intervals")
+    ap.add_argument("--table", type=int, nargs=2, metavar=("MS0", "MS1"),
+                    help="per-cycle table of Cmd Pos sub-steps and following error")
     a = ap.parse_args()
     stride = int(round(a.cycle_ms * FS / 1000))
     for f in a.files:
         names, (ch0, cmd, fe, cur) = load(f)
+        if a.ramp or a.table:
+            ramp(f, names, cmd, fe, stride, a)
+            continue
         n = cmd.size
         d, st = events(cmd, stride, a.thresh)
         moving = np.abs(d) > 1000

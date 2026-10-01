@@ -449,6 +449,19 @@ constant ramp straight into the PDO, and the drive still uses targets from
 the wrong cycle at the same or a higher rate. This is the cleanest case for
 Delta (added to `delta_report_asda_b3_stale_csp_target.md`).
 
+**Re-running it:** `asda_direct_test_runbook.md` (commands, scope settings,
+analysis, baseline numbers).
+
+**Machine back to the packing-machine configuration (2026-10-01 12:18):**
+- P1.068 restored on all three drives (2 / 10 / 4 ms); P3.019 0x21;
+  P3.009 0x5055.
+- Delta virtual, powered off.
+- Kept on purpose:
+  - SyncOffset 50 (0 was clearly worse);
+  - 0x6062 in TxPDO 0x1A01 (0x60BA was unused);
+  - the diagnostics and SYS DIRECT (idle unless started).
+- Modbus RTU still disabled at the owner's request.
+
 ## 8. Next tests
 
 00. **After the power cycle** (the bus is down since the SyncOffset-60
