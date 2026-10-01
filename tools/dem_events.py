@@ -23,6 +23,10 @@ after its SYNC0, min / max per 100 ms): for every drive burst, the
 arrival range in the 100 ms buckets around it, against the whole run.
 --plot FILE draws arrival over time with the bursts marked.
 
+And the SYNC0 interval at the EasyCAT in ns (SYS ESP_SYNC: interval
+minus the cycle, MCPWM-capture timestamps, min / max per 100 ms): a shift
+of the DC system time would show here at the bursts.
+
     python tools/dem_events.py [--gap 300] [--json FILE] [--plot FILE.png]
 
 Run any real-delta motion first (e.g. square_dip.py) after DEM_STATS reset.
@@ -89,6 +93,20 @@ def read_arr():
     return out                                     # (ms, min us, max us)
 
 
+def read_sync():
+    n = mc.sys_cmd("ESP_SYNC", **{"from": 0})["n"]
+    out = []
+    i = max(0, n - 4096)
+    while i < n:
+        ev = mc.sys_cmd("ESP_SYNC", **{"from": i})["ev"].rstrip(",")
+        vals = [tuple(int(x) for x in e.split(":")) for e in ev.split(",") if e]
+        if not vals:
+            break
+        out += vals
+        i += len(vals)
+    return out                                     # (ms, min ns, max ns)
+
+
 def bursts(events, gap):
     b = []
     for ms, code in events:
@@ -106,6 +124,7 @@ def main():
     ap.add_argument("--gap", type=int, default=300, help="ms between events of one burst")
     ap.add_argument("--json", help="save the raw events here")
     ap.add_argument("--plot", help="PNG: frame arrival over time with the bursts")
+    ap.add_argument("--quick", action="store_true", help="skip the EasyCAT logs (arrival, SYNC0): bursts only")
     a = ap.parse_args()
     mc.reconnect()
     ev, bs = {}, {}
@@ -113,17 +132,23 @@ def main():
         n, ev[k] = read(k)
         bs[k] = bursts(ev[k], a.gap)
         log("EAxis%d: %d events%s, %d bursts" % (k, n, " (oldest overwritten)" if n > 1024 else "", len(bs[k])))
-    odd, singles, pairs = read_odd()
+    odd, singles, pairs = ([], [], 0) if a.quick else read_odd()
     log("EasyCAT odd SYNC0 intervals: %d events, %d +/- pairs (timestamp latency), %d single shifts" % (
         len(odd), pairs, len(singles)))
-    arr = read_arr()
+    arr = [] if a.quick else read_arr()
     if arr:
         lo = sorted(x[1] for x in arr)
         hi = sorted(x[2] for x in arr)
         log("EasyCAT frame arrival after SYNC0: %d buckets of 100 ms; min %d us, max %d us; "
             "bucket max p50 %d / p99 %d us" % (len(arr), lo[0], hi[-1], hi[len(hi) // 2], hi[int(len(hi) * 0.99)]))
+    syn = [] if a.quick else read_sync()
+    if syn:
+        lo = sorted(x[1] for x in syn)
+        hi = sorted(x[2] for x in syn)
+        log("EasyCAT SYNC0 interval minus cycle: %d buckets; min %d ns, max %d ns; bucket min p1 %d, bucket max p99 %d ns" % (
+            len(syn), lo[0], hi[-1], lo[int(len(lo) * 0.01)], hi[int(len(hi) * 0.99)]))
     if a.json:
-        json.dump({"EAxis%d" % k: ev[k] for k in range(3)} | {"odd": odd, "arr": arr}, open(a.json, "w"))
+        json.dump({"EAxis%d" % k: ev[k] for k in range(3)} | {"odd": odd, "arr": arr, "sync": syn}, open(a.json, "w"))
     t0 = min([b[0]["start"] for b in bs.values() if b] or [0])
     for k in range(3):
         st = [b["start"] for b in bs[k]]
@@ -151,6 +176,8 @@ def main():
             sh = min(((ms - b["start"], dev) for ms, dev in singles), key=lambda x: abs(x[0]), default=None)
             near = [x for x in arr if -200 <= x[0] - b["start"] <= 200]
             arr_txt = ("%d..%d us" % (min(x[1] for x in near), max(x[2] for x in near))) if near else "-"
+            nsy = [x for x in syn if -200 <= x[0] - b["start"] <= 200]
+            arr_txt += " | SYNC0 dev +-200 ms %s" % (("%d..%d ns" % (min(x[1] for x in nsy), max(x[2] for x in nsy))) if nsy else "-")
             print("  EAxis%d %8.3f s  len %4d ms  events %3d (early %d) | %s | SYNC0 shift %s | arrival +-200 ms %s" % (
                 k, (b["start"] - t0) / 1000.0, b["end"] - b["start"], b["n"], b["early"],
                 "  ".join("EAxis%d %+6s" % (j, "-" if d is None else d) for j, d in zip(others, row)),
@@ -165,15 +192,26 @@ def main():
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        fig, ax = plt.subplots(figsize=(14, 5))
+        fig, (ax, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
         ta = [(x[0] - t0) / 1000.0 for x in arr]
         ax.fill_between(ta, [x[1] for x in arr], [x[2] for x in arr], step="post", color="0.6", label="frame arrival (min..max per 100 ms)")
         lo_y = min(x[1] for x in arr)
         for k, c in zip(range(3), ("tab:red", "tab:blue", "tab:green")):
             xs = [(b["start"] - t0) / 1000.0 for b in bs[k]]
             ax.plot(xs, [lo_y - 5 - 4 * k] * len(xs), "|", color=c, markersize=12, label="EAxis%d burst" % k)
-        ax.set_xlabel("s")
         ax.set_ylabel("us after SYNC0")
+        if syn:
+            ts = [(x[0] - t0) / 1000.0 for x in syn]
+            ax2.fill_between(ts, [x[1] for x in syn], [x[2] for x in syn], step="post", color="tab:purple", alpha=0.6,
+                             label="SYNC0 interval - cycle (min..max per 100 ms)")
+            ylo = min(x[1] for x in syn)
+            for k, c in zip(range(3), ("tab:red", "tab:blue", "tab:green")):
+                xs = [(b["start"] - t0) / 1000.0 for b in bs[k]]
+                ax2.plot(xs, [ylo - 5 - 5 * k] * len(xs), "|", color=c, markersize=12)
+            ax2.set_ylabel("ns")
+            ax2.legend(loc="upper right")
+            ax2.grid(alpha=0.3)
+        ax2.set_xlabel("s")
         ax.legend(loc="upper right")
         ax.grid(alpha=0.3)
         fig.tight_layout()

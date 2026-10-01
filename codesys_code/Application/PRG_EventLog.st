@@ -66,8 +66,9 @@ VAR
     iLagN       : INT;
     xLate       : BOOL;
     xEarly      : BOOL;
-    uiOddPrev   : UINT;
-    xOddValid   : BOOL;
+    iSyncMin    : INT := 32767;
+    iSyncMax    : INT := -32768;
+    udiSyncBucket : UDINT;
     uiArrMin    : UINT := 16#FFFF;
     uiArrMax    : UINT;
     udiArrBucket : UDINT;
@@ -442,6 +443,7 @@ IF GVL.DemReset THEN
         GVL.DemEvtN[iProf] := 0;
         GVL.OddLogN := 0;
         GVL.ArrLogN := 0;
+        GVL.SyncLogN := 0;
         GVL.SyncOffCount[iProf] := 0;
         GVL.SyncOffAndLate[iProf] := 0;
         iPost[iProf] := 0;
@@ -462,8 +464,26 @@ GVL.EspSkip := TO_UINT(ecat_esp_in24) + TO_UINT(ecat_esp_in25) * 256;
 // Inputs 26-29: odd SYNC0 intervals (count, last deviation us) since the
 // 2026-10-01 firmware (were the arrival min / max); logged per event
 // (GVL.OddLog*).
-GVL.EspOddCount := TO_UINT(ecat_esp_in26) + TO_UINT(ecat_esp_in27) * 256;
+// Inputs 26-27: this SYNC0 interval minus the cycle, ns (MCPWM capture,
+// 2026-10-01 firmware); logged per 100 ms (GVL.SyncLog*).
+GVL.EspSyncDevNs := UINT_TO_INT(TO_UINT(ecat_esp_in26) + TO_UINT(ecat_esp_in27) * 256);
+IF GVL.EspSyncDevNs <> -32768 THEN
+    iSyncMin := MIN(iSyncMin, GVL.EspSyncDevNs);
+    iSyncMax := MAX(iSyncMax, GVL.EspSyncDevNs);
+END_IF;
+IF udiNow - udiSyncBucket >= 100 THEN
+    IF iSyncMax >= iSyncMin THEN
+        GVL.SyncLogMs[GVL.SyncLogN MOD 4096] := udiSyncBucket;
+        GVL.SyncLogMin[GVL.SyncLogN MOD 4096] := iSyncMin;
+        GVL.SyncLogMax[GVL.SyncLogN MOD 4096] := iSyncMax;
+        GVL.SyncLogN := GVL.SyncLogN + 1;
+    END_IF;
+    udiSyncBucket := udiNow;
+    iSyncMin := 32767;
+    iSyncMax := -32768;
+END_IF;
 GVL.EspOddDev := 0;
+// Inputs 28-29: frame arrival after SYNC0, us; logged per 100 ms (GVL.ArrLog*).
 GVL.EspArrUs := TO_UINT(ecat_esp_in28) + TO_UINT(ecat_esp_in29) * 256;
 IF GVL.EspArrUs <> 16#FFFF THEN
     uiArrMin := MIN(uiArrMin, GVL.EspArrUs);
@@ -482,13 +502,7 @@ IF udiNow - udiArrBucket >= 100 THEN
 END_IF;
 GVL.EspArrMinUs := 0;
 GVL.EspArrMaxUs := 0;
-IF xOddValid AND (GVL.EspOddCount <> uiOddPrev) THEN
-    GVL.OddLogMs[GVL.OddLogN MOD 1024] := udiNow;
-    GVL.OddLogDev[GVL.OddLogN MOD 1024] := GVL.EspOddDev;
-    GVL.OddLogN := GVL.OddLogN + 1;
-END_IF;
-uiOddPrev := GVL.EspOddCount;
-xOddValid := TRUE;
+
 GVL.EspLate := TO_UINT(ecat_esp_in30) + TO_UINT(ecat_esp_in31) * 256;
 ecat_esp_out12 := TO_USINT(GVL.TapTarget0 AND 16#FF);
 ecat_esp_out13 := TO_USINT(SHR(GVL.TapTarget0, 8) AND 16#FF);
@@ -605,6 +619,8 @@ IF GVL.SdoReqActive THEN
             GVL.SdoReqActive := FALSE;
         END_IF;
     END_IF;
+ELSIF NOT GVL.SdoSweepEnable THEN
+    ;   // background reads off (DRV_SDO requests still run)
 ELSIF iSdoWait > 0 THEN
     iSdoWait := iSdoWait - 1;
 ELSE

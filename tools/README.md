@@ -39,6 +39,7 @@ Regenerate this file with `python tools/gen_script_index.py`.
 | `joint_bench.py` | moves axes | Delta joint bench steps through the UI's link (the Motors page must be open in the standalone UI with XPLC_HARNESS=1; its Delta joints panel shows the same state live, with a STOP). |
 | `limit_test.py` | moves axes, writes PLC vars | Do the axis limits hold when the path asks for far more? |
 | `machine.py` | shared library (machine access, safety checks) | Shared machine access for the tools: the PLC through the standalone UI's harness link, the FSM, the delta's real/virtual mode, and the safety checks every tool must make the same way. |
+| `p3009_sweep.py` | moves axes, downloads | Sweep the ASDA drives' P3.009 (communication synchronization) and measure the stale-target rate at each setting. |
 | `plc_direct.py` | library (direct msgpack client, port 8125) | Talk to the PLC's msgpack server (port 8125) directly, without the UI. |
 | `pulse_test.py` | moves axes, writes PLC vars | Constant-pulse test for one delta drive, for the ASDA stale-target issue (doc_review/asda_stale_target_2026-09-30.md). |
 | `reel_real_test.py` | moves axes, writes PLC vars | Reel axis on the machine: power it, move it, check the cell count and the odometer against the encoder, and the tracker's stop detection on a real servo (a virtual axis has no standstill jitter). |
@@ -46,3 +47,4 @@ Regenerate this file with `python tools/gen_script_index.py`.
 | `square_dip.py` | moves axes | Square (or line) paths for the delta through the UI's link (standalone UI with XPLC_HARNESS=1): up to Z0, then the corners of a square (+-HALF mm in X and Y at Z0) with a dip to Z DIP at each corner, back to X0 Y0 Z0. |
 | `stale_suite.py` | moves axes, downloads | After-recovery test suite for the ASDA stale-target investigation (doc_review/asda_stale_target_2026-09-30.md, sections 7c and 8). |
 | `sync_offset_sweep.py` | moves axes, downloads | SyncOffset sweep with the drive-demand metric (ASDA stale-target investigation, doc_review/asda_stale_target_2026-09-30.md section 7c). |
+| `sync_shift_sweep.py` | moves axes, downloads | Sweep the ASDA drives' "DC sync0 shift time" and measure the stale-target rate at each level (the drives' SYNC0 fires this much later than the other slaves'; the frame then has more time before the drives' SYNC0). |

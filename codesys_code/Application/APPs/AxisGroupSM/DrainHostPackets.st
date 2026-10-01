@@ -576,6 +576,28 @@ END_IF;
                 MessagePackerFb.PackKvDint(ADR('actual'), GVL.ActualTap0);
                 MessagePackerFb.PackKvDint(ADR('sw'), WORD_TO_DINT(GVL.StatusTap0));
                 MessagePackerFb.PackKvDint(ADR('cw'), WORD_TO_DINT(GVL.CtlTap0));
+            ELSIF (CommandType = 'ESP_SYNC') THEN
+                // The EasyCAT SYNC0-interval log (GVL.SyncLog*): n = buckets
+                // so far, now = the last deviation (ns), ev = up to 12
+                // buckets from index from:i as ms:min:max (ns).
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                EcEvtFrom := LINT_TO_UDINT(MessageUnpackerFb.TryReadINT64('from', 0));
+                MessagePackerFb.PackKvLint(ADR('n'), UDINT_TO_LINT(GVL.SyncLogN));
+                MessagePackerFb.PackKvDint(ADR('now'), INT_TO_DINT(GVL.EspSyncDevNs));
+                EcTrStr := '';
+                EcEvtI := EcEvtFrom;
+                WHILE (EcEvtI < GVL.SyncLogN) AND (EcEvtI < EcEvtFrom + 12) DO
+                    EcTrStr := CONCAT(EcTrStr, UDINT_TO_STRING(GVL.SyncLogMs[EcEvtI MOD 4096]));
+                    EcTrStr := CONCAT(EcTrStr, ':');
+                    EcTrStr := CONCAT(EcTrStr, INT_TO_STRING(GVL.SyncLogMin[EcEvtI MOD 4096]));
+                    EcTrStr := CONCAT(EcTrStr, ':');
+                    EcTrStr := CONCAT(EcTrStr, INT_TO_STRING(GVL.SyncLogMax[EcEvtI MOD 4096]));
+                    EcTrStr := CONCAT(EcTrStr, ',');
+                    EcEvtI := EcEvtI + 1;
+                END_WHILE;
+                MessagePackerFb.PackKvStr(ADR('ev'), ADR(EcTrStr));
             ELSIF (CommandType = 'ESP_ARR') THEN
                 // The EasyCAT frame-arrival log (GVL.ArrLog*): n = buckets so
                 // far, now = the last arrival (us), ev = up to 12 buckets from

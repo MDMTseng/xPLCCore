@@ -394,6 +394,17 @@ VAR_GLOBAL
 	   (~6.8 min), ArrLogN counts all. SYS ESP_ARR reads it; DEM_STATS
 	   reset:1 clears it. *)
 	EspArrUs        : UINT;
+	(* SYNC0 interval minus the cycle at the EasyCAT, ns, timestamped by the
+	   ESP32's MCPWM capture (12.5 ns; firmware inputs 26-27, -32768 =
+	   none): shows sub-us shifts of the DC system time, which move every
+	   slave's SYNC0 at once. Logged as min / max per 100 ms, ring of 4096
+	   (~6.8 min), SyncLogN counts all. SYS ESP_SYNC reads it; DEM_STATS
+	   reset:1 clears it. *)
+	EspSyncDevNs    : INT;
+	SyncLogMs       : ARRAY[0..4095] OF UDINT;
+	SyncLogMin      : ARRAY[0..4095] OF INT;
+	SyncLogMax      : ARRAY[0..4095] OF INT;
+	SyncLogN        : UDINT;
 	ArrLogMs        : ARRAY[0..4095] OF UDINT;
 	ArrLogMin       : ARRAY[0..4095] OF UINT;
 	ArrLogMax       : ARRAY[0..4095] OF UINT;
@@ -492,6 +503,7 @@ VAR_GLOBAL
 	(* The drives' sync objects (PRG_EventLog SDO_IDX / SDO_SUB), [drive,
 	   object]; -1 + DrvObjErr = SDO error. *)
 	DrvObj          : ARRAY[0..2, 0..11] OF DINT;
+	SdoSweepEnable  : BOOL := TRUE;   (* FALSE: no background SDO reads (mailbox traffic off; 2026-10-01 test) *)
 	DrvObjErr       : ARRAY[0..2, 0..11] OF DINT;
 
 	(* Tape moves that stopped short of their target (the ReelMv block). *)

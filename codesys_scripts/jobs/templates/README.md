@@ -93,12 +93,14 @@ One-off probes live in `_archive/`. Regenerate this file with
 | `set_bus_cycle.py` | edits project | Set the EtherCAT bus cycle: EtherCAT_Task interval, the master's MasterCycleTime and every slave's DC sync0 / sync1 cycle time. |
 | `set_comm_task_period.py` | ? | Set the Comm task (TCP_MSGPAK_Server) period. |
 | `set_drive_demand_pdo.py` | edits project | Put the drive's position demand value (0x6062, what the drive's control loop actually uses) into its TxPDO, in place of the touch probe position 0x60BA (same size, unused here), so the PLC sees per cycle what the ASDA di |
+| `set_drive_sync_shift.py` | edits project | Set "DC sync0 shift time" on the three ASDA-B3-E slaves (EAxis0/1/2): their SYNC0 fires this much later than the other slaves'. |
 | `set_ec_sync_offset.py` | edits project, PLC session | Set the EtherCAT master's SyncOffset (% of the cycle between the frame and SYNC0), then save the project. |
 | `set_group_a_axis.py` | edits project | The axis group's A axis (SpiderR tool kinematics Kin_CAxis): SM_Drive_GenericDSP402, drive ID 7, logical device 1 = the second axis of the QEC stepper driver (M2 / "Y", where the rotation motor is wired). |
 | `set_mb_comport.py` | edits project | Set Modbus_COM's ComPort, then build. |
 | `set_mb_server_address.py` | edits project | Set SmartBowlFeeder's Modbus ServerAddress, then build. |
 | `set_modbus_bus_cycle.py` | ? | Pin the Modbus RTU branch to the Comm task. |
 | `set_modbus_enabled.py` | edits project | Enable or disable the Modbus RTU branch (Modbus_COM and everything under it: the client port and the SmartBowlFeeder slave). |
+| `set_qec_dc.py` | edits project | Turn DC on / off for the QEC stepper slave (station 1006, first on the wire). |
 | `set_sm3_420.py` | edits project | NOT IN USE (2026-09-30): the real PLC hangs on the first blended G1 with A as additional axis on SM3 4.20; the machine runs SM3 4.18 + Kin_CAxis. |
 | `stamp_build_info.py` | edits project | Stamp BUILD_GIT_SHA / BUILD_TS_MS in GVL.st with the current git rev and a unix-ms timestamp. |
 | `stop_then_install.py` | PLC session | Full install: download the project to the PLC and start it. |

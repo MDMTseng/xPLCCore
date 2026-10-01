@@ -1,0 +1,51 @@
+# -*- coding: ascii -*-
+# Turn DC on / off for the QEC stepper slave (station 1006, first on the
+# wire). The EtherCAT master takes the first DC slave as the reference
+# clock, so with QEC's DC off the reference moves to the reel servo (1002).
+# Offline edit + save; deploy with tools/safe_install.py (drives off).
+#
+#   rpc.py exec --file jobs/templates/set_qec_dc.py
+#
+# DC_ON = True is the machine's normal setting (DC enable 1, sync0 enable 1,
+# DCSetting 1). 2026-10-01: off as a trial, to see whether the ASDA
+# stale-target bursts follow the reference clock. EAXIS_A (on the QEC)
+# then runs without SYNC0; do not move it during the trial.
+
+DC_ON = True
+SLAVE = "QEC_R11MP3S_V"
+VALUES = {"DC enable": "1" if DC_ON else "0",
+          "DC sync0 enable": "1" if DC_ON else "0",
+          "DCSetting": "1" if DC_ON else "0"}
+
+
+def t(v):
+    try:
+        if isinstance(v, unicode):
+            return v.encode("utf-8", "replace")
+        return str(v)
+    except Exception:
+        return "?"
+
+
+proj = projects.primary
+dev = proj.find(SLAVE, True)
+if not dev:
+    raise Exception("%s not found" % SLAVE)
+dev = dev[0]
+changed = []
+for c in dev.connectors:
+    try:
+        prms = list(c.host_parameters)
+    except Exception:
+        continue
+    for prm in prms:
+        pn = t(prm.name)
+        if pn in VALUES:
+            old = t(prm.value)
+            if old != VALUES[pn]:
+                prm.value = VALUES[pn]
+            changed.append("%s %s: %s -> %s" % (SLAVE, pn, old, t(prm.value)))
+for line in changed:
+    print(line)
+proj.save()
+print("saved")
