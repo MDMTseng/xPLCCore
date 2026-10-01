@@ -637,6 +637,46 @@ Later the same evening:
 
 Settings restored: SyncOffset 50, shift 0, P3.009 0x5055, QEC DC on.
 
+## 7j. 2026-10-01 night: cycle length, drive filter, settling
+
+**Cycle** (`tools/dc_sweep.py cycle`, continuous Z test, late % mean):
+1 ms ~3.8 %, 3 ms 1.04 %, 4 ms 0.92 %, 5 ms 0.76 %, 10 ms 0. But one stale
+cycle is one cycle's worth of motion: at 5 ms it is 5x the step of 1 ms
+(at F 1000 mm/s: 5 mm instead of 1 mm). The owner chose to stay at 1 ms
+and soften the steps with the drive filter instead.
+
+**Motion does not move the frame timing** (`tools/arrival_phases.py`,
+standstill vs the square at 50 % / 80 %, 1 ms): frame arrival 542-603 us
+after SYNC0 in every phase, 100 ms spread ~23 us in all.
+
+**Feedback shock monitor** (PLC, SYS FB_STATS): per drive in Operation
+enabled, histograms of |d2 actual position| and |torque change| per
+cycle; torque taps `TorqueTap0/1/2 AT %IW24/36/48` (0x6077, 0.1 %).
+
+**P1.068 sweep** (`tools/filter_sweep.py`, square with dips at 70 %, 60 s,
+late % unchanged 3.6-4.5 %); torque change per cycle, max %, and count
+of jumps >= 20 % per minute (EAxis0/1/2):
+
+| P1.068 | max | >= 20 % per min |
+|---|---|---|
+| 2 / 10 / 4 (old) | 93 / 61 / 67 | 265 / 208 / 302 |
+| 4 | 46 / 36 / 43 | 168 / 192 / 267 |
+| 8 | 56 / 36 / 40 | 58 / 167 / 108 |
+| 12 | 33 / 32 / 34 | 5 / 36 / 90 |
+
+**Settling to 0.2 mm** (PLC SYS SETTLE: the actual TCP from
+MC_GroupReadActualPosition after the set positions stop, 300 cycles;
+`tools/settle_test.py`, PnP-like X +-50 with dips to -15 at 70 %, 31 stops):
+old 1 / 2 / 3 ms (p50 / p90 / max), 4 ms 0 / 0 / 0, 8 ms 2 / 2 / 3,
+12 ms 4 / 4 / 5. Error at the stop 0.14-0.45 mm.
+
+**Decision (owner, 2026-10-02 00:14): P1.068 = 12 ms on all three drives**
+(written by SDO, EEPROM). Mind:
+- `codesys_scripts/jobs/drive_params_backup.json` still holds the old
+  2 / 10 / 4; `tools/drive_param.py restore` would write them back.
+- `axis0Param2.par` (owner's ASDA-Soft file) has P1.068 = 2; after loading
+  it, set 12 again.
+
 ## 8. Next tests
 
 00. **After the power cycle** (the bus is down since the SyncOffset-60
