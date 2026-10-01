@@ -88,19 +88,46 @@ def reconnect(tries=20):
     raise SystemExit("the UI's link to the PLC did not come back")
 
 
+SUPERVISOR = os.path.join(REPO, "codesys_scripts", "supervisor.py")
+
+
+def restart_daemon():
+    """The daemon retires after its 4 h budget ("daemon not reachable"):
+    kill the IDE and start it again (it saves after every job)."""
+    subprocess.run([PY, SUPERVISOR, "kill", "--yes"], cwd=REPO, capture_output=True, timeout=120)
+    for _ in range(15):
+        r = subprocess.run([PY, SUPERVISOR, "ps"], cwd=REPO, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=60)
+        if "No CODESYS" in (r.stdout or ""):
+            break
+        time.sleep(2)
+    subprocess.run([PY, SUPERVISOR, "start"], cwd=REPO, capture_output=True, timeout=600)
+    log("CODESYS daemon restarted")
+
+
 def rpc(*args, timeout=600):
-    """Run codesys_scripts/rpc.py (the CODESYS daemon); returns output lines."""
+    """Run codesys_scripts/rpc.py (the CODESYS daemon); returns output lines.
+    A retired daemon is restarted once and the call retried."""
+    lines = _rpc(*args, timeout=timeout)
+    if any("daemon not reachable" in l or "start it with: rpc.py daemon-start" in l for l in lines):
+        restart_daemon()
+        lines = _rpc(*args, timeout=timeout)
+    return lines
+
+
+def _rpc(*args, timeout=600):
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
     r = subprocess.run([PY, RPC] + list(args), cwd=REPO, capture_output=True, text=True,
-                       timeout=timeout, env=env)
-    return (r.stdout + r.stderr).strip().splitlines()
+                       encoding="utf-8", errors="replace", timeout=timeout, env=env)
+    return ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
 
 
 def run_tool(name, *args, timeout=600):
     """Run another script from tools/; returns its output lines."""
     r = subprocess.run([PY, os.path.join(_HERE, name)] + list(args), cwd=REPO, capture_output=True,
-                       text=True, timeout=timeout)
-    return (r.stdout + r.stderr).strip().splitlines()
+                       text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                       env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+    return ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
 
 
 def rpc_write(symbol, value):
