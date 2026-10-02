@@ -23,6 +23,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { buildPath, kinAt, lapsFor, parseStats, type AxisStats, type PathKind } from '../lib/pathTests';
 import { streamPackets, type StreamState } from '../lib/stream';
 import type { Send } from '../lib/motors';
+import { useHarnessAction } from '../harness/registry';
 
 const cell: React.CSSProperties = { padding: '3px 8px', borderBottom: '1px solid #e5e7eb', textAlign: 'right', whiteSpace: 'nowrap' };
 const head: React.CSSProperties = { ...cell, fontWeight: 600, background: '#f3f4f6' };
@@ -215,6 +216,10 @@ export const PathTestPanel: React.FC<{
       readState();
     }
   };
+
+  // Harness (read-only): what the panel shows, to check it is loaded.
+  useHarnessAction('path_panel_state', async () => ({ fsm, real, kind, speed, seconds, running, stats }),
+    [fsm, real, kind, speed, seconds, running, stats]);
 
   const canStart = !running && fsm === 'Ready' && !stream.current.running && (real === false || confirm);
 
