@@ -801,6 +801,17 @@ the mismatch (not verified).
 Rule: keep the device tree order under the EtherCAT master the same as the
 wire order; check after any rewiring.
 
+**Enforced** (19:15, `jobs/templates/set_slave_order.py`, commit 17cb85c):
+the tree is in wire order (EC0808DN, QEC, reel, EAxis0, EAxis1, EAxis2,
+EasyCAT) and no slave is Optional any more, so the master addresses by
+position and should refuse a wrong wire order; the station-alias check
+stays (swapped identical drives). Before, the tree was EC0808DN, EAxis0,
+EAxis1, QEC, EAxis2, reel, EasyCAT and matched no wiring -- only the first
+slave (the reference) ever mattered. The reorder moved the drives' IEC
+addresses; the GVL taps follow. Checked: all 7 OP, SYNC0 at the EasyCAT
+0 ns, taps read sane values, EAxis0 direct test 0.00 % (drive enabled
+through CtlTap0 at its new address).
+
 Jobs: `jobs/templates/set_drives_only.py` (bus without QEC, reel, EC0808,
 EasyCAT), `set_master_like_delta.py`, `dump_master_all.py`; EC0808 DC with
 `set_qec_dc.py` (SLAVES = ("EC0808DN",)). `tools/machine.py`
