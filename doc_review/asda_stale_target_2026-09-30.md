@@ -751,11 +751,21 @@ Notes:
   passes, not at SYNC0; the frame arrives 542-603 us after SYNC0 with ~23 us
   spread per 100 ms, still once per 1 ms cycle.
 
-**Still to do:**
-- The circle test on all three joints, to confirm the torque spikes are gone.
-- With the cause gone, P1.068 = 16 ms is no longer needed; a smaller value
-  gives a shorter settling time (section 7j).
-- Tell Delta: the drive was not at fault.
+**Circle (shock) and PnP (settle), `tools/param_sweep.py`, 70 %, 60 s:**
+
+| P1.068 | late % | torque change max % (EAxis0/1/2) | >= 20 % | >= 50 % | settle ms | error at stop |
+|---|---|---|---|---|---|---|
+| 0 (no filter) | 0 / 0 / 0 | 18 / 34 / 24 | 0 / 153 / 32 | 0 | 0 | ~24 um |
+| 12 | 0 / 0 / 0 | 17 / 33 / 21 | 0 / 118 / 4 | 0 | 0 | ~186 um |
+
+Before the fix, no filter gave ~700 % and 16 ms still 22-33 %. With the
+cause gone the filter barely lowers the shock but adds lag, so **P1.068 = 0**
+on all three drives (EEPROM, 2026-10-02 17:12; P1.008 0, P2.002 0,
+P2.025 5). EAxis1 has the most >= 20 % changes; its gain P2.000 479 is
+higher than the others' (~350).
+
+**Still to do:** tell Delta the drive was not at fault; consider EAxis1's
+gain.
 
 Jobs: `jobs/templates/set_drives_only.py` (bus without QEC, reel, EC0808,
 EasyCAT), `set_master_like_delta.py`, `dump_master_all.py`; EC0808 DC with
