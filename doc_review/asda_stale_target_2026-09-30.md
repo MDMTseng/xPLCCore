@@ -677,6 +677,31 @@ old 1 / 2 / 3 ms (p50 / p90 / max), 4 ms 0 / 0 / 0, 8 ms 2 / 2 / 3,
 - `axis0Param2.par` (owner's ASDA-Soft file) has P1.068 = 2; after loading
   it, set 12 again.
 
+## 7k. 2026-10-02: QEC and reel wired out of the line
+
+The owner wired the PLC straight to EAxis0 (QEC 1006 and reel 1002 out of
+the line); `set_slaves_bypass.py` disables both slaves and makes their axes
+virtual (EAXIS_A, SM_Drive_GenericDSP402 = the A rotation, reelpullmotor).
+EtherCAT runs with 5 slaves; EAxis0 is the DC reference.
+
+- SoftMotion cannot power the group this way: the FSM's Powering waits for
+  SMC_GroupPower (the group includes the A axis) and for the reel's
+  MC_Power, and axes under a disabled device are not processed even when
+  virtual. The delta drives themselves enabled (sw 0x1637). A circle test
+  would need the PLC to leave A and the reel out of the power-up.
+- Direct PDO ramp (`direct_test.py`, EAxis0, +145 PUU per cycle, 1.5 deg):
+  **late 4.93 %** (1,475 of ~29,900), stale 49 -- the same as with the full
+  line (3-6 %). The other slaves on the line are not the cause.
+
+Fixes made on the way:
+- the axis-sim reinit only reinitialises the axes whose mode changes
+  (AxisSimApplyFlip); the reel with a disabled slave failed ReinitDrive
+  (81) and aborted a delta-only switch;
+- `machine.set_delta` uses SYS DELTA_MODE (delta trio only, reel untouched).
+
+To restore: wire back (PLC -> QEC -> reel -> EAxis0 ...), run
+`set_slaves_bypass.py` with BYPASS = False, download.
+
 ## 8. Next tests
 
 00. **After the power cycle** (the bus is down since the SyncOffset-60

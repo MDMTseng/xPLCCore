@@ -145,6 +145,12 @@ PROGRAM AxisGroupSM
         AxisSimApplySeq     : INT := 0;
         AxisSimDesired      : BYTE := 0;
         AxisSimApplyTarget  : BYTE := 0;
+        // Axes the current apply actually flips (bit per axis, set at its
+        // start): only those are reinitialised. An axis already in the
+        // target mode is left alone -- e.g. the reel with its slave
+        // disabled (set_slaves_bypass.py) fails ReinitDrive, which used to
+        // abort a delta-only switch.
+        AxisSimApplyFlip    : BYTE := 0;
         AxisSimApplyStartMs : LINT := 0;
         AXIS_SIM_APPLY_TIMEOUT_MS : LINT := 10000;
 
@@ -813,6 +819,7 @@ GVL.EcProfT0 := LTIME();
         IF (AxisSimApplySeq = 0) AND GVL.AxisSimHostRequested
            AND (AxisSimDesired <> GVL.AxisSimMaskApplied) THEN
             AxisSimApplyTarget  := AxisSimDesired;
+            AxisSimApplyFlip    := AxisSimDesired XOR GVL.AxisSimMaskApplied;
             AxisSimApplyStartMs := RuntimeMs;
             AxisSimApplySeq     := 1;
         END_IF;
@@ -827,16 +834,16 @@ GVL.EcProfT0 := LTIME();
     // FB calls every scan (rising edge of bExecute starts the reinit;
     // falling edge after completion/abort resets the FBs).
     AxisSimReinit0(Axis := IoConfig_Globals.EAxis0,
-                   bExecute := (AxisSimApplySeq = 1),
+                   bExecute := (AxisSimApplySeq = 1) AND ((AxisSimApplyFlip AND 16#01) <> 0),
                    bVirtual := (AxisSimApplyTarget AND 16#01) <> 0);
     AxisSimReinit1(Axis := IoConfig_Globals.EAxis1,
-                   bExecute := (AxisSimApplySeq = 1),
+                   bExecute := (AxisSimApplySeq = 1) AND ((AxisSimApplyFlip AND 16#02) <> 0),
                    bVirtual := (AxisSimApplyTarget AND 16#02) <> 0);
     AxisSimReinit2(Axis := IoConfig_Globals.EAxis2,
-                   bExecute := (AxisSimApplySeq = 1),
+                   bExecute := (AxisSimApplySeq = 1) AND ((AxisSimApplyFlip AND 16#04) <> 0),
                    bVirtual := (AxisSimApplyTarget AND 16#04) <> 0);
     AxisSimReinitReel(Axis := reelpullmotor,
-                      bExecute := (AxisSimApplySeq = 1),
+                      bExecute := (AxisSimApplySeq = 1) AND ((AxisSimApplyFlip AND 16#08) <> 0),
                       bVirtual := (AxisSimApplyTarget AND 16#08) <> 0);
 
     IF AxisSimApplySeq = 1 THEN
@@ -852,8 +859,10 @@ GVL.EcProfT0 := LTIME();
                 OR TO_DWORD(AxisSimReinit2.nErrorID)
                 OR TO_DWORD(AxisSimReinitReel.nErrorID);
             AxisSimApplySeq := 0;
-        ELSIF AxisSimReinit0.bDone AND AxisSimReinit1.bDone
-              AND AxisSimReinit2.bDone AND AxisSimReinitReel.bDone THEN
+        ELSIF (AxisSimReinit0.bDone OR ((AxisSimApplyFlip AND 16#01) = 0))
+              AND (AxisSimReinit1.bDone OR ((AxisSimApplyFlip AND 16#02) = 0))
+              AND (AxisSimReinit2.bDone OR ((AxisSimApplyFlip AND 16#04) = 0))
+              AND (AxisSimReinitReel.bDone OR ((AxisSimApplyFlip AND 16#08) = 0)) THEN
             // Applied is live-derived above; all-bDone just ends the
             // sequence (drops Execute so the FBs reset).
             AxisSimApplySeq := 0;

@@ -221,13 +221,16 @@ def set_delta(real):
     """Real or virtual delta for this run of the PLC (a download or restart
     brings back the project's virtual delta). Powers the delta off first."""
     drives_off()
-    rpc_write("GVL.AxisSimConfigMask", 0 if real else 7)
     want = 0 if real else 7
-    # The PLC refuses a new mask while it still applies the last one
-    # ("sim_apply_busy", e.g. right after a download or a mode change).
+    # SYS DELTA_MODE (2026-10-02): the delta trio only -- the reel's bit is
+    # left alone (with its slave bypassed, set_slaves_bypass.py, the reel
+    # must stay virtual). It replaces writing GVL.AxisSimConfigMask through
+    # the IDE plus SET_AXIS_SIM. The PLC refuses a new mask while it still
+    # applies the last one ("sim_apply_busy").
+    pkt = {"real": 1, "site_clear": 1} if real else {"real": 0}
     for i in range(30):
         try:
-            sys_cmd("SET_AXIS_SIM", mask=want)
+            sys_cmd("DELTA_MODE", **pkt)
             break
         except RuntimeError as e:
             if "sim_apply_busy" not in str(e) or i == 29:

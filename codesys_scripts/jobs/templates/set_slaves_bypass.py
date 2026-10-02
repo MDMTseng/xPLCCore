@@ -1,7 +1,7 @@
 # -*- coding: ascii -*-
 # Bypass the QEC (A axis stepper, station 1006) and the reel servo (1002)
 # on the EtherCAT line: disable both slaves in the device tree and make
-# their axes (EAXIS_A, reelpullmotor) virtual, so the PLC code and the
+# their axes (EAXIS_A, SM_Drive_GenericDSP402 = A, reelpullmotor) virtual, so the PLC code and the
 # delta kinematics (SpiderR chains A) still have them. With BYPASS = False
 # both come back (slaves enabled, axes real). Offline edit + save; deploy
 # with tools/safe_install.py after the wiring matches.
@@ -13,7 +13,7 @@
 
 BYPASS = True
 SLAVES = ("QEC_R11MP3S_V", "reel_pull_motor")
-AXES = ("EAXIS_A", "reelpullmotor")
+AXES = ("EAXIS_A", "SM_Drive_GenericDSP402", "reelpullmotor")   # SM_Drive_GenericDSP402 = the A rotation (QEC axis 2); EAXIS_A = QEC axis 1, unwired
 
 
 def t(v):
