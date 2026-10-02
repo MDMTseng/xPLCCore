@@ -264,6 +264,9 @@ def bus_up():
 def ethercat_state():
     """From the CODESYS daemon: master xConfigFinished and LastMessage."""
     out = {}
+    # A read right after an install or restart_app answers "Application not
+    # logged in" until the session is logged out once (2026-10-02).
+    rpc("logout", timeout=60)
     for v in ("xConfigFinished", "LastMessage"):
         lines = rpc("read", "IoConfig_Globals.EtherCAT_Master_SoftMotion." + v, timeout=120)
         out[v] = lines[-1] if lines else "?"

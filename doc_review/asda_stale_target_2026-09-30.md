@@ -1,9 +1,11 @@
 # ASDA stale target: delta vibration investigation (2026-09-30)
 
-Status: **open**. The evidence points inside the ASDA-B3-E drive. The next
-step is a single-joint constant-pulse test with the ASDA scope (section 8),
-then a report to Delta. This document is the handover: what was measured,
-what is ruled out, the tools, the machine state and the next tests.
+Status: **solved 2026-10-02** (section 7l). The cause was the EC0808DN IO
+coupler running with DC on; with its DC off and the coupler first on the
+wire the drives take the right target every cycle (0.00 % late). Sections
+1-7k are the history of the search: what was measured and ruled out on the
+way, the tools, and the earlier (wrong) conclusion that it was inside the
+ASDA-B3-E drive.
 
 ## 1. Symptom
 
@@ -702,7 +704,66 @@ Fixes made on the way:
 To restore: wire back (PLC -> QEC -> reel -> EAxis0 ...), run
 `set_slaves_bypass.py` with BYPASS = False, download.
 
-## 8. Next tests
+## 7l. 2026-10-02: Delta's own PLC, then the cause: EC0808DN DC
+
+**Delta's PLC.** A Delta engineer drove our ASDA-B3-E from their own PLC
+(AX-C12, DIADesigner-AX, SM_Drive_ETC_Delta_ASDA_B3; 1 ms, SyncOffset 20 %,
+sync window monitoring off; PLC wired to the drive alone). One axis up and
+down: no skipping. Their scope files (`scope_otherPLC1/2`, 29.6 s + 8 s,
+16 PUU/ms) have 0 bad cycles on a per-cycle-increment check that finds a
+burst every ~2.5 s in our scope22. The owner also watched longer runs on
+the scope: clean.
+
+**Steps, all `tools/direct_test.py` (EAxis0, PDO written directly, 0.1 deg/s,
+~30000 cycles):**
+
+| Bus | Master | EC0808 DC | late % |
+|---|---|---|---|
+| full line (QEC, reel, 3 drives, EC0808, EasyCAT) | original | on | 4.93 (2026-10-01) |
+| full line | like Delta: LRW, SyncWindowMonitoring 0, SyncOffset 20 | on | 5.05 |
+| 3 drives only | like Delta | (unplugged) | **0.00** |
+| 3 drives + EC0808 | like Delta | on | 3.71 |
+| 3 drives + EC0808 | like Delta | **off** | **0.00** |
+| full line, EC0808 last | original | off | QEC, reel stay SAFE-OP: AL 0x2D "No Sync error" |
+| full line, QEC + reel + EC0808 DC off | original | off | 0.00, but the A axis does not move (set changes, actual stays) |
+| **full line, EC0808 first on the wire** | original | **off** | **0.00**, all 7 OP |
+
+Notes:
+- The EasyCAT was not on the line when the vibration first appeared, so it
+  is not the cause.
+- With EC0808 off but last on the wire, QEC and reel (DC on) failed with
+  "No Sync error" after a download, an application restart and a power
+  cycle. With EC0808's DC back on they came up. Why the IO coupler's DC
+  setting decides whether the first two slaves get SYNC0 is not known.
+- The master settings like Delta's made no difference; they are back to the
+  original values.
+
+**Production configuration now:**
+- Wire order: PLC -> EC0808DN (DC off) -> QEC -> reel -> EAxis0 -> EAxis1 ->
+  EAxis2 -> EasyCAT.
+- EC0808DN: DC enable 0, sync0 enable 0, DCSetting 0. QEC: 1 / 1 / 1. Reel:
+  TRUE / TRUE / DCSetting 0.
+- Master: SyncOffset 50, MasterUseLRW FALSE, SyncWindowMonitoring 1000.
+- Checked on the machine: EAxis0 direct test 0.00 % (29892 cycles at lag
+  3); `tools/a_axis_test.py`: all A positions as commanded;
+  `tools/reel_real_test.py`: PASS (25 cells, 0-26 counts, drift 8.5).
+- EC0808's IO without DC: outputs apply and inputs latch when the frame
+  passes, not at SYNC0; the frame arrives 542-603 us after SYNC0 with ~23 us
+  spread per 100 ms, still once per 1 ms cycle.
+
+**Still to do:**
+- The circle test on all three joints, to confirm the torque spikes are gone.
+- With the cause gone, P1.068 = 16 ms is no longer needed; a smaller value
+  gives a shorter settling time (section 7j).
+- Tell Delta: the drive was not at fault.
+
+Jobs: `jobs/templates/set_drives_only.py` (bus without QEC, reel, EC0808,
+EasyCAT), `set_master_like_delta.py`, `dump_master_all.py`; EC0808 DC with
+`set_qec_dc.py` (SLAVES = ("EC0808DN",)). `tools/machine.py`
+`ethercat_state()` now logs out first ("Application not logged in" right
+after an install or restart).
+
+## 8. Next tests (before 7l; kept for the record)
 
 00. **After the power cycle** (the bus is down since the SyncOffset-60
     download, 2026-09-30 23:41):
