@@ -17,6 +17,10 @@ arrival min / max, the medians of the bucket min and max, and the spread
 % (DEM_STATS reset at the phase start).
 
     python tools/arrival_phases.py --owner-ok [--rounds 3] [--idle 5] [--move 10]
+                                   [--speeds 50,80]
+
+--speeds: the two motion phases in % of production (100 % = F 2000,
+ACC 200000, JERK 800000); e.g. 1,1 for a slow check (2026-10-02).
 """
 
 import argparse
@@ -52,7 +56,15 @@ def now_ms():
 
 def home():
     mc.plc(dict(type="M", cmd="G1", X=0.0, Y=0.0, Z=0.0, F=200.0, ACC=2000.0, DEA=2000.0, JERK=20000.0, Cor=0.0))
-    mc.plc({"type": "M", "cmd": "WAIT_FOR_MOTION_STOP", "timeout": 30, "timeout_ms": 12000}, 13000)
+    # At slow --speeds the moves already queued in the PLC take longer than
+    # one 12 s wait (2026-10-02, 1 %: block_timeout): wait again, ~2 min max.
+    for i in range(10):
+        try:
+            mc.plc({"type": "M", "cmd": "WAIT_FOR_MOTION_STOP", "timeout": 30, "timeout_ms": 12000}, 13000)
+            return
+        except RuntimeError as e:
+            if "block_timeout" not in str(e) or i == 9:
+                raise
 
 
 def dem_counts():
@@ -110,16 +122,18 @@ def main():
     ap.add_argument("--rounds", type=int, default=3)
     ap.add_argument("--idle", type=float, default=5)
     ap.add_argument("--move", type=float, default=10)
+    ap.add_argument("--speeds", default="50,80", help="the two motion phases, %% of production")
     ap.add_argument("--owner-ok", action="store_true")
     a = ap.parse_args()
+    sp = [float(x) / 100.0 for x in a.speeds.split(",")]
     mc.require_owner_ok(a.owner_ok)
     mc.reconnect()
     mc.set_delta(real=True)
     mc.fsm_to("Ready", timeout=180)
     mc.sys_cmd("DEM_STATS", reset=1)        # once: it also clears the arrival log
     phases = []
-    slow = path(1000.0, 100000.0, 400000.0, 40)
-    fast = path(1600.0, 160000.0, 640000.0, 60)
+    slow = path(2000.0 * sp[0], 200000.0 * sp[0], 800000.0 * sp[0], 40)
+    fast = path(2000.0 * sp[1], 200000.0 * sp[1], 800000.0 * sp[1], 60)
     try:
         for r in range(a.rounds):
             for name, kind in (("idle", None), ("square", slow), ("idle", None), ("fast", fast)):

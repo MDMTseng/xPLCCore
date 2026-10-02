@@ -767,6 +767,27 @@ higher than the others' (~350).
 **Still to do:** tell Delta the drive was not at fault; consider EAxis1's
 gain.
 
+**EasyCAT timing after the fix** (`tools/arrival_phases.py --speeds 1,1`,
+round 3; the ESP32 had to be reset after the machine's power cycle -- its
+LAN9252 lost the interrupt setup -- and the EasyCAT needed a re-download to
+leave INIT):
+
+| | before (2026-10-01) | after |
+|---|---|---|
+| frame arrival after SYNC0 | 542-603 us | 544-619 us |
+| spread per 100 ms | ~23 us | p50 35, max 63 us |
+| idle vs motion | same | same |
+| SYNC0 interval - 1 ms | -13..+37 ns | -250..-200 ns, constant |
+| drives late | 3.8-5 % | 0.00 % (6 motion phases) |
+
+The SYNC0 period moved by ~225 ns per ms (~0.02 %): the DC system time now
+follows a different reference clock. Likely reading (not yet verified in
+the IDE's DC diagnostics): CODESYS took the first DC slave in the
+configuration order as reference, which was EC0808DN although it sat 6th
+on the wire. That would explain why moving the "reference" off QEC
+(2026-10-01) changed nothing, why QEC and reel lost sync when EC0808's DC
+went off while it was last on the wire, and the drives' periodic bursts.
+
 Jobs: `jobs/templates/set_drives_only.py` (bus without QEC, reel, EC0808,
 EasyCAT), `set_master_like_delta.py`, `dump_master_all.py`; EC0808 DC with
 `set_qec_dc.py` (SLAVES = ("EC0808DN",)). `tools/machine.py`
