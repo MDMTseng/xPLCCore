@@ -33,7 +33,9 @@ def read_settle():
         ev = mc.sys_cmd("SETTLE", **{"from": i})["ev"].rstrip(",")
         # The reply string holds 255 chars: the last entry can be cut off;
         # keep the complete ones and read the rest next time.
-        vals = [tuple(int(x) for x in e.split(":")) for e in ev.split(",") if e.count(":") == 2]
+        # A cut entry can still hold two colons ("123:45:"): skip empty parts.
+        vals = [tuple(int(x) for x in e.split(":")) for e in ev.split(",")
+                if e.count(":") == 2 and all(e.split(":"))]
         vals = [v for v in vals if len(v) == 3]
         if not vals:
             break

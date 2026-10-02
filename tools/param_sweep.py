@@ -20,6 +20,7 @@ At the end the base set is written again.
 
 import argparse
 import json
+import os
 import time
 
 import drive_param as dp
@@ -37,10 +38,19 @@ def parse(spec):
 
 
 def write(params):
+    # Every SDO is ~2 s through the PLC's SDO channel and the UI link: read
+    # each value once and write only the drives that differ (2026-10-02, a
+    # base set already in place took 70 s per pass, now ~20 s).
     bk = dp.load_backup()
     for name, value in sorted(params.items()):
+        cur = [dp.read(name, k) for k in range(3)]
+        if cur == [value] * 3:
+            log("  %s = %s (already)" % (name, value))
+            continue
         for k in range(3):
-            bk.setdefault("EAxis%d %s" % (k, name), dp.read(name, k))
+            if cur[k] == value:
+                continue
+            bk.setdefault("EAxis%d %s" % (k, name), cur[k])
             json.dump(bk, open(dp.BACKUP, "w"), indent=1, sort_keys=True)
             dp.sdo(dp.STATIONS[k], dp.obj(name), value)
         rb = [dp.read(name, k) for k in range(3)]
@@ -93,7 +103,7 @@ def main():
         log("=== back to base %s ===" % base)
         mc.drives_off()
         write(base)
-    json.dump(results, open("../codesys_scripts/jobs/param_sweep.json", "w"), indent=1)
+    json.dump(results, open(os.path.join(mc.REPO, "codesys_scripts", "jobs", "param_sweep.json"), "w"), indent=1)
     log("summary (torque change max % EAxis0/1/2 | >=20 % count | settle):")
     for r in results:
         sh = r["shock"]
