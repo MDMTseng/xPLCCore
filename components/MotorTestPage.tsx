@@ -13,6 +13,8 @@ import type { COMCtrlObj } from '../types';
 import { useHarnessAction } from '../harness/registry';
 import { InputMonitor } from './InputMonitor';
 import { JointPanel } from './JointPanel';
+import { PathTestPanel } from './PathTestPanel';
+import { newStreamState, streamPackets, type StreamState } from '../lib/stream';
 import {
   A_AXIS, MOTORS, applyLimits, readAxis, runATest, scaleLimits, toAxisUnits, toShowUnits, turnsPerUnit,
   type AxisInfo, type Limits, type Send, type TestResult,
@@ -101,32 +103,14 @@ export const MotorTestPage: React.FC<{ COMCtrlObj: COMCtrlObj; active?: boolean 
   // 15 s): plc_stream_start returns at once; plc_stream_status reports
   // {sent, total, running, err}; plc_send_many_abort stops sending (the
   // moves already queued in the PLC still run).
-  const stream = useRef<{ sent: number; total: number; running: boolean; err: string }>({ sent: 0, total: 0, running: false, err: '' });
+  // The same stream state for the harness and the path test panel: one
+  // stream at a time (lib/stream.ts).
+  const stream = useRef<StreamState>(newStreamState());
   useHarnessAction('plc_stream_status', async () => ({ ...stream.current }), []);
   useHarnessAction('plc_stream_start', async (p: any) => {
     if (stream.current.running) throw new Error('stream already running');
     const pkts: any[] = p?.pkts ?? [];
-    const win = Math.max(1, Number(p?.window ?? 8));
-    sendManyAbort.current = false;
-    stream.current = { sent: 0, total: pkts.length, running: true, err: '' };
-    (async () => {
-      const pending = new Set<Promise<void>>();
-      try {
-        for (let i = 0; i < pkts.length && !sendManyAbort.current; i++) {
-          while (pending.size >= win) await Promise.race(pending);
-          if (sendManyAbort.current) break;
-          const pr: Promise<void> = send(pkts[i], p?.timeoutMs ?? 30000)
-            .then(() => { stream.current.sent++; })
-            .finally(() => { pending.delete(pr); });
-          pending.add(pr);
-        }
-        await Promise.all(pending);
-      } catch (e: any) {
-        stream.current.err = String(e?.message ?? e);
-      } finally {
-        stream.current.running = false;
-      }
-    })();
+    streamPackets(send, pkts, stream, sendManyAbort, { window: p?.window, timeoutMs: p?.timeoutMs });
     return { total: pkts.length };
   }, [send]);
 
@@ -157,6 +141,9 @@ export const MotorTestPage: React.FC<{ COMCtrlObj: COMCtrlObj; active?: boolean 
   return (
     <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: 8 }}>
       <div style={{ flex: 3, minWidth: 0 }}>
+        <div style={box}>
+          <PathTestPanel send={send} active={active} log={addLog} stream={stream} abort={sendManyAbort} />
+        </div>
         <div style={box}>
           <InputMonitor send={send} active={active} />
         </div>
