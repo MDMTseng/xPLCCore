@@ -3,7 +3,8 @@
 // doc_review/asda_stale_target_2026-09-30.md 7j).
 //
 // Paths (lib/pathTests.ts): "round" (4-point square, corners 49 mm, nearly
-// a circle: the shock test) and "square dip" (corners with dips to -15).
+// a circle: the shock test), "square dip" (corners with dips to -15) and
+// "Z up/down" (X0 Y0, Z 0 <-> depth with exact stops).
 // Speed in % of F 2000 mm/s. The stream runs for the set time (0 = until
 // Stop), then the arm goes back to X0 Y0 Z0. Needs the FSM in Ready; with a
 // real delta the operator confirms the site is clear for each run.
@@ -55,6 +56,8 @@ export const PathTestPanel: React.FC<{
   const [speed, setSpeed] = useState(70);
   const [seconds, setSeconds] = useState(60);
   const [fsm, setFsm] = useState('');
+  const [fsmErr, setFsmErr] = useState('');
+  const [depth, setDepth] = useState(15);
   const [real, setReal] = useState<boolean | undefined>(undefined);
   const [confirm, setConfirm] = useState(false);
   const [running, setRunning] = useState('');
@@ -66,7 +69,9 @@ export const PathTestPanel: React.FC<{
 
   const readState = useCallback(async () => {
     try {
-      setFsm(String((await send({ type: 'SYS', cmd: 'GA_EV', ev: 0 }))?.st_str ?? ''));
+      const g = await send({ type: 'SYS', cmd: 'GA_EV', ev: 0 });
+      setFsm(String(g?.st_str ?? ''));
+      setFsmErr(g?.err_src ? `${g.err_src}${g.err_id ? ` (${g.err_id})` : ''}` : '');
       const m = await send({ type: 'SYS', cmd: 'GET_MACHINE_STATE' });
       setReal(((Number(m?.axes_sim_mask ?? 7) & 7) !== 7));
     } catch { /* not connected */ }
@@ -175,7 +180,7 @@ export const PathTestPanel: React.FC<{
 
   const start = async () => {
     if (running) return;
-    const label = `${kind === 'round' ? 'circle' : 'square dip'} ${speed}%`;
+    const label = `${kind === 'round' ? 'circle' : kind === 'zUpDown' ? `Z 0/-${depth}` : 'square dip'} ${speed}%`;
     stopReq.current = false;
     setRunning(label);
     setElapsed(0);
@@ -183,7 +188,7 @@ export const PathTestPanel: React.FC<{
       await send({ type: 'SYS', cmd: 'FB_STATS', reset: 1 });
       await send({ type: 'SYS', cmd: 'DEM_STATS', reset: 1 });
       const dur = seconds > 0 ? seconds : 3600;
-      const pkts = buildPath(kind, speed, lapsFor(kind, speed, dur));
+      const pkts = buildPath(kind, speed, lapsFor(kind, speed, dur), kind === 'zUpDown' ? { dip: -Math.abs(depth) } : {});
       log(`${label}: ${seconds > 0 ? `${seconds} s` : 'until Stop'} (F ${fmt(kinAt(speed).F, 0)} mm/s)`);
       const t0 = Date.now();
       const done = streamPackets(send, pkts, stream, abort);
@@ -230,6 +235,8 @@ export const PathTestPanel: React.FC<{
         <span style={{ color: '#6b7280', fontSize: 12 }}>
           FSM {fsm || '?'} · delta {real === undefined ? '?' : real ? 'REAL' : 'virtual'}
         </span>
+        {fsm === 'Error' && fsmErr && <span style={{ color: '#b91c1c', fontSize: 12 }}>error: {fsmErr}
+          {fsmErr.includes('11000') ? ' -- group enable refused after a virtual/real switch: needs a download' : ''}</span>}
         <span style={{ marginLeft: 8 }}>Delta:</span>
         <button disabled={!!running || real === false} onClick={() => setMode(false)}
           style={{ fontWeight: real === false ? 700 : 400 }}>Virtual</button>
@@ -244,6 +251,11 @@ export const PathTestPanel: React.FC<{
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
         <label><input type="radio" checked={kind === 'round'} disabled={!!running} onChange={() => setKind('round')} /> Circle (shock test)</label>
         <label><input type="radio" checked={kind === 'squareDip'} disabled={!!running} onChange={() => setKind('squareDip')} /> Square with dips</label>
+        <label><input type="radio" checked={kind === 'zUpDown'} disabled={!!running} onChange={() => setKind('zUpDown')} /> Z up/down</label>
+        {kind === 'zUpDown' && (
+          <span>depth <input type="number" min={1} max={30} step={1} value={depth} style={{ width: 50 }} disabled={!!running}
+            onChange={(e) => setDepth(Math.min(30, Math.max(1, Number(e.target.value))))} /> mm</span>
+        )}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
         <span>Speed</span>

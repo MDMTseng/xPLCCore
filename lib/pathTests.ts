@@ -9,9 +9,13 @@
 //   (49 of 50 = nearly a circle). A smooth path: torque spikes on it come
 //   from the drives' stale targets (doc_review/asda_stale_target_2026-09-30.md).
 //
+// - zUpDown: X0 Y0, Z 0 <-> `dip` and back, an exact stop (G4 1 ms) at each
+//   end. All three joints turn alike, the simplest motion to watch on a
+//   drive scope.
+//
 // Shock is judged on `round`, settling on PnP stops (tools/settle_test.py).
 
-export type PathKind = 'round' | 'squareDip';
+export type PathKind = 'round' | 'squareDip' | 'zUpDown';
 
 export const kinAt = (speedPct: number) => {
   const s = Math.max(0.01, speedPct / 100);
@@ -25,6 +29,16 @@ export function buildPath(kind: PathKind, speedPct: number, laps: number,
   const corners: [number, number][] = [[-h, -h], [h, -h], [h, h], [-h, h]];
   const pk: any[] = [];
   for (let l = 0; l < laps; l++) {
+    if (kind === 'zUpDown') {
+      // Gentle ramps for a short stroke: ACC = 10 x F, JERK = 10 x ACC (the
+      // circle's 100 x F would be ~14 g at 70 %).
+      const zk = { F: kin.F, ACC: kin.F * 10, DEA: kin.F * 10, JERK: kin.F * 100 };
+      for (const z of [o.dip ?? -15, 0]) {
+        pk.push({ ...zk, type: 'M', cmd: 'G1', X: 0, Y: 0, Z: z, Cor: 0 });
+        pk.push({ type: 'M', cmd: 'G4', P: 0.001 });
+      }
+      continue;
+    }
     for (const [x, y] of corners) {
       if (kind === 'round') {
         pk.push({ ...kin, type: 'M', cmd: 'G1', X: x, Y: y, Z: 0, Cor: o.cor ?? 49 });
@@ -44,7 +58,7 @@ export function buildPath(kind: PathKind, speedPct: number, laps: number,
 // time; extra laps are never sent).
 export const lapsFor = (kind: PathKind, speedPct: number, seconds: number) => {
   const f = kinAt(speedPct).F;                       // mm/s
-  const perimeter = kind === 'round' ? 330 : 400 + 4 * 2 * 15;
+  const perimeter = kind === 'round' ? 330 : kind === 'zUpDown' ? 2 * 15 : 400 + 4 * 2 * 15;
   return Math.max(1, Math.ceil((seconds * f) / perimeter * 1.5) + 2);
 };
 
