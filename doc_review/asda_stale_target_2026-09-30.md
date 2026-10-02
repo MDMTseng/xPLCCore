@@ -812,6 +812,24 @@ addresses; the GVL taps follow. Checked: all 7 OP, SYNC0 at the EasyCAT
 0 ns, taps read sane values, EAxis0 direct test 0.00 % (drive enabled
 through CtlTap0 at its new address).
 
+**Station addresses moved with the reorder:** the master now assigns them
+in tree order: EC0808DN 1001, QEC 1002, reel 1003, **EAxis0..2
+1004..1006**, EasyCAT 1007 (read back by 0x1018). Tools and the PLC's SDO
+sweep used 1003..1005; the first sweep after the download hit the reel
+with a drive parameter read (failed, nothing written). Fixed (bdb23d3);
+`drive_param.sdo()` now checks 0x1018:01 = Delta before any write. The
+leftover biSetPos mapping on EAxis1's Target Position is gone (417b02f).
+
+**Final check, this configuration** (`param_sweep.py`, 12 ms first, then
+none):
+
+| P1.068 | late % | torque change max % | >= 20 % | >= 50 % | settle | error at stop |
+|---|---|---|---|---|---|---|
+| 12 | 0 / 0 / 0 | 17.5 / 31.9 / 23.9 | 0 / 105 / 34 | 0 | 0 ms | ~188 um |
+| 0 | 0 / 0 / 0 | 17.2 / 30.8 / 24.4 | 0 / 134 / 35 | 0 | 0 ms | ~24 um |
+
+P1.068 stays 0 on all three drives.
+
 Jobs: `jobs/templates/set_drives_only.py` (bus without QEC, reel, EC0808,
 EasyCAT), `set_master_like_delta.py`, `dump_master_all.py`; EC0808 DC with
 `set_qec_dc.py` (SLAVES = ("EC0808DN",)). `tools/machine.py`
