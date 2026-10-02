@@ -1474,6 +1474,50 @@ END_IF;
                 MessagePackerFb.PackKvDint(ADR('io_cmd_count'), TO_DINT(IoCommandCount));
                 MessagePackerFb.PackKvDint(ADR('io_trig_count'), TO_DINT(IoTriggerCount));
                 MessagePackerFb.PackKvDint(ADR('flyevent_avail'), TO_DINT(FlyEventAvailableCount));
+            ELSIF (CommandType = 'DELTA_MODE') THEN
+                // Delta trio real (real:1) or virtual (real:0) for this PLC
+                // run, from the UI (components/PathTestPanel.tsx). Unlike
+                // SET_AXIS_SIM it can make the project-virtual delta real:
+                // it changes AxisSimConfigMask, the same as tools/machine.py
+                // set_delta does through the IDE. Guards: UnInited only (no
+                // power), no reinit in progress, and real:1 needs
+                // site_clear:1 (the operator confirmed the site is clear).
+                // RAM only: a download or PLC restart brings back the
+                // project's virtual delta. The reel bit is not touched. The
+                // drives flip within seconds (SMC3_ReinitDrive); the host
+                // polls axes_sim_mask before powering on.
+                ShouldReturn := TRUE;
+                AxisSimMaskRaw := MessageUnpackerFb.TryReadINT64('real', -1);
+                ResponsePacketPointer^.ele_count := 0;
+                IF (AxisSimMaskRaw < 0) OR (AxisSimMaskRaw > 1) THEN
+                    CommandAck := FALSE;
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('bad_arg'));
+                ELSIF (AxisGroupManagerFb._eState <> E_RobotState.UnInited) THEN
+                    CommandAck := FALSE;
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('not_uninited'));
+                ELSIF (AxisSimApplySeq <> 0) THEN
+                    CommandAck := FALSE;
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('sim_apply_busy'));
+                ELSIF (AxisSimMaskRaw = 1) AND (MessageUnpackerFb.TryReadINT64('site_clear', 0) <> 1) THEN
+                    CommandAck := FALSE;
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('site_clear_required'));
+                ELSIF (AxisSimMaskRaw = 1) AND GVL.bVirtualMotorsMode THEN
+                    CommandAck := FALSE;
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('virtual_motors_mode_on'));
+                ELSE
+                    CommandAck := TRUE;
+                    IF AxisSimMaskRaw = 1 THEN
+                        GVL.AxisSimConfigMask := GVL.AxisSimConfigMask AND 16#F8;
+                        GVL.AxisSimMask_Request := GVL.AxisSimMask_Request AND 16#F8;
+                    ELSE
+                        GVL.AxisSimConfigMask := GVL.AxisSimConfigMask OR 16#07;
+                        GVL.AxisSimMask_Request := GVL.AxisSimMask_Request OR 16#07;
+                    END_IF;
+                    GVL.AxisSimMaskSetMs := RuntimeMs;
+                    GVL.AxisSimHostRequested := TRUE;
+                    MessagePackerFb.PackKvDint(ADR('mask'),
+                        TO_DINT(GVL.AxisSimMask_Request OR GVL.AxisSimConfigMask));
+                END_IF;
             ELSIF (CommandType = 'SET_AXIS_SIM') THEN
                 // Per-axis simulation mask (bench mode). bit0..2 =
                 // EAxis0/1/2 (delta trio), bit3 = reelpullmotor; 1 =

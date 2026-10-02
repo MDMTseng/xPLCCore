@@ -8,6 +8,13 @@
 // Stop), then the arm goes back to X0 Y0 Z0. Needs the FSM in Ready; with a
 // real delta the operator confirms the site is clear for each run.
 //
+// Delta mode: Virtual / Real switches the delta trio for this PLC run (SYS
+// DELTA_MODE, UnInited only; Real needs the "site is clear" tick, which
+// the PLC also checks). The FSM is reset (drives off) first, then the
+// panel waits for the drives to flip (axes_sim_mask). A download or PLC
+// restart brings back the project's virtual delta. Power off resets the
+// FSM (all drives off).
+//
 // Numbers (PLC SYS FB_STATS / DEM_STATS, reset at Start): per drive the
 // share of cycles the drive used a one-cycle-old target, the largest torque
 // change in one cycle (% rated) and how many exceeded 20 % / 50 %.
@@ -100,6 +107,57 @@ export const PathTestPanel: React.FC<{
     }
   };
 
+  const toUnInited = async () => {
+    const end = Date.now() + 20000;
+    for (;;) {
+      const st = String((await send({ type: 'SYS', cmd: 'GA_EV', ev: 0 }))?.st_str ?? '');
+      setFsm(st);
+      if (st === 'UnInited') return;
+      if (Date.now() > end) throw new Error(`FSM did not reach UnInited (${st})`);
+      try { await send({ type: 'SYS', cmd: 'GA_EV', ev: EV.RESET }); } catch { /* shows in the state */ }
+      await delay(400);
+    }
+  };
+
+  const powerOff = async () => {
+    setRunning('power off');
+    try { await toUnInited(); log('power off: FSM UnInited'); }
+    catch (e: any) { log(`power off failed: ${e?.message ?? e}`); }
+    finally { setRunning(''); readState(); }
+  };
+
+  const setMode = async (wantReal: boolean) => {
+    if (wantReal && !confirm) { log('tick "the site is clear" first'); return; }
+    setRunning(wantReal ? 'switching to REAL' : 'switching to virtual');
+    try {
+      await toUnInited();
+      const pkt: any = { type: 'SYS', cmd: 'DELTA_MODE', real: wantReal ? 1 : 0 };
+      if (wantReal) pkt.site_clear = 1;
+      for (let i = 0; ; i++) {
+        try { await send(pkt); break; }
+        catch (e: any) {
+          if (!String(e?.message ?? e).includes('sim_apply_busy') || i > 30) throw e;
+          await delay(1000);
+        }
+      }
+      const end = Date.now() + 40000;
+      for (;;) {
+        const m = await send({ type: 'SYS', cmd: 'GET_MACHINE_STATE' });
+        const mask = Number(m?.axes_sim_mask ?? -1) & 7;
+        if (mask === (wantReal ? 0 : 7)) break;
+        if (Date.now() > end) throw new Error(`drives did not switch (mask ${mask})`);
+        await delay(500);
+      }
+      log(wantReal ? 'delta REAL (for this PLC run)' : 'delta virtual');
+    } catch (e: any) {
+      log(`delta mode failed: ${e?.message ?? e}`);
+    } finally {
+      setRunning('');
+      setConfirm(false);
+      readState();
+    }
+  };
+
   const readFilters = async () => {
     try {
       const out: string[] = [];
@@ -167,6 +225,12 @@ export const PathTestPanel: React.FC<{
         <span style={{ color: '#6b7280', fontSize: 12 }}>
           FSM {fsm || '?'} · delta {real === undefined ? '?' : real ? 'REAL' : 'virtual'}
         </span>
+        <span style={{ marginLeft: 8 }}>Delta:</span>
+        <button disabled={!!running || real === false} onClick={() => setMode(false)}
+          style={{ fontWeight: real === false ? 700 : 400 }}>Virtual</button>
+        <button disabled={!!running || real === true || !confirm} onClick={() => setMode(true)}
+          title="tick 'the site is clear' first" style={{ fontWeight: real ? 700 : 400, color: '#b91c1c' }}>Real</button>
+        <button disabled={!!running || fsm === 'UnInited'} onClick={powerOff}>Power off</button>
         <button disabled={!!running || fsm === 'Ready'} onClick={toReady}>Home → Ready</button>
         <button disabled={!!running} onClick={readFilters}>Read drive filters</button>
       </div>
@@ -188,12 +252,10 @@ export const PathTestPanel: React.FC<{
         <span style={{ color: '#6b7280', fontSize: 12 }}>s (0 = until Stop)</span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
-        {real && (
-          <label style={{ color: '#b91c1c' }}>
-            <input type="checkbox" checked={confirm} disabled={!!running} onChange={(e) => setConfirm(e.target.checked)} />
-            {' '}Real delta: the site is clear for this run
-          </label>
-        )}
+        <label style={{ color: '#b91c1c' }}>
+          <input type="checkbox" checked={confirm} disabled={!!running} onChange={(e) => setConfirm(e.target.checked)} />
+          {' '}The site is clear (needed for Real and for a run on the real delta)
+        </label>
         <button style={{ fontSize: 15, padding: '4px 18px' }} disabled={!canStart} onClick={start}>Start</button>
         <button style={{ fontSize: 15, padding: '4px 18px' }} disabled={!running || running === 'homing'}
           onClick={() => { stopReq.current = true; abort.current = true; }}>Stop</button>
