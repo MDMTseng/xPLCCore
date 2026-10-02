@@ -1,11 +1,12 @@
 # ASDA stale target: delta vibration investigation (2026-09-30)
 
-Status: **solved 2026-10-02** (section 7l). The cause was the EC0808DN IO
-coupler running with DC on; with its DC off and the coupler first on the
-wire the drives take the right target every cycle (0.00 % late). Sections
-1-7k are the history of the search: what was measured and ruled out on the
-way, the tools, and the earlier (wrong) conclusion that it was inside the
-ASDA-B3-E drive.
+Status: **solved 2026-10-02** (section 7l). The cause: the slave order in
+the project did not match the wire. EC0808DN is first in the configuration,
+so CODESYS used it as the DC reference clock, but it was wired 6th, after
+the three drives. With EC0808 wired first (matching the configuration) the
+drives take the right target every cycle (0.00 % late), with EC0808's DC on
+or off. Sections 1-7k are the history of the search, including the earlier
+(wrong) conclusion that it was inside the ASDA-B3-E drive.
 
 ## 1. Symptom
 
@@ -787,6 +788,18 @@ configuration order as reference, which was EC0808DN although it sat 6th
 on the wire. That would explain why moving the "reference" off QEC
 (2026-10-01) changed nothing, why QEC and reel lost sync when EC0808's DC
 went off while it was last on the wire, and the drives' periodic bursts.
+
+**Confirmed: EC0808 DC on, wired first** (17:57): all 7 OP, SYNC0 interval
+at the EasyCAT 0 ns (EC0808 is the reference again, as before the fix:
+-13..+37 ns; with its DC off -225 ns), EAxis0 direct test **0.00 %**. So
+EC0808's clock is fine as a reference; what broke the drives was the
+reference sitting downstream of them because the configured order (EC0808
+first) differed from the wire (EC0808 6th). EC0808DN and QEC are
+"Optional" slaves in the project, which is probably why the master accepted
+the mismatch (not verified).
+
+Rule: keep the device tree order under the EtherCAT master the same as the
+wire order; check after any rewiring.
 
 Jobs: `jobs/templates/set_drives_only.py` (bus without QEC, reel, EC0808,
 EasyCAT), `set_master_like_delta.py`, `dump_master_all.py`; EC0808 DC with
