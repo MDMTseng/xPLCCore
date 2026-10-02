@@ -830,6 +830,14 @@ none):
 
 P1.068 stays 0 on all three drives.
 
+**EAxis1 gain trial** (20:11): EAxis1's P2.000 / P2.004 / P2.006 (479 /
+1916 / 305) are all ~31 % above EAxis0/2 (364-370 / 1457-1482 / 232-236),
+the ratio of an auto-tune at a higher bandwidth. Lowered to 367 / 1470 /
+234: EAxis1 torque change max 30.8 % (same), >= 20 % 142 (was 134), error
+at stop 30 um (was 24). No gain; restored (21:40). The owner suspects a
+stiffer reducer on EAxis1, which fits the higher auto-tuned gains; a
+symmetric Z stroke comparing the three joints' torque would show it.
+
 Jobs: `jobs/templates/set_drives_only.py` (bus without QEC, reel, EC0808,
 EasyCAT), `set_master_like_delta.py`, `dump_master_all.py`; EC0808 DC with
 `set_qec_dc.py` (SLAVES = ("EC0808DN",)). `tools/machine.py`
