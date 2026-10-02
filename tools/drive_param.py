@@ -1,6 +1,9 @@
 """Read or write ASDA-B3 drive parameters over EtherCAT SDO (PLC SYS
 DRV_SDO / DRV_SDO_RESULT). Parameter Pg.nnn is object 16#2000 + g*16#100 + nnn,
-subindex 0. The delta drives are EAxis0/1/2 = stations 1003/1004/1005.
+subindex 0. The delta drives are EAxis0/1/2 = stations 1004/1005/1006 (since the
+2026-10-02 slave reorder: EC0808DN 1001, QEC 1002, reel 1003, EasyCAT 1007).
+A write first checks the station's identity (0x1018:01 = Delta 0x1DD) and
+refuses any other device.
 
     python tools/drive_param.py read P3.019 P1.068 [--axes 0 1 2]
     python tools/drive_param.py write P1.068 4 [--axes 0 1 2]
@@ -23,7 +26,9 @@ import time
 import machine as mc
 from machine import log
 
-STATIONS = {0: 1003, 1: 1004, 2: 1005}
+STATIONS = {0: 1004, 1: 1005, 2: 1006}
+DELTA_VENDOR = 0x1DD
+_checked = set()
 BACKUP = os.path.join(mc.REPO, "codesys_scripts", "jobs", "drive_params_backup.json")
 
 
@@ -34,8 +39,15 @@ def obj(name):
     return 0x2000 + int(m.group(1)) * 0x100 + int(m.group(2))
 
 
-def sdo(station, index, value=None, size=4):
-    pkt = {"station": station, "index": index, "sub": 0, "size": size}
+def sdo(station, index, value=None, size=4, sub=0):
+    if value is not None and station not in _checked:
+        # 2026-10-02: a slave reorder moved the station addresses and the
+        # old 1003 became the reel; never write a drive parameter blind.
+        vendor = sdo(station, 0x1018, sub=1)
+        if vendor != DELTA_VENDOR:
+            raise SystemExit("station %d is not a Delta drive (vendor 0x%X): no write" % (station, vendor))
+        _checked.add(station)
+    pkt = {"station": station, "index": index, "sub": sub, "size": size}
     if value is not None:
         pkt.update(value=int(value), write=1)
     for _ in range(50):

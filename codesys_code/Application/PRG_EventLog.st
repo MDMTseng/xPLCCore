@@ -618,8 +618,9 @@ END_IF;
 GVL.EcTicHist[LIMIT(0, LREAL_TO_INT(lrTicUs / 100.0 - 0.5), 9)] := GVL.EcTicHist[LIMIT(0, LREAL_TO_INT(lrTicUs / 100.0 - 0.5), 9)] + 1;
 
 // ---- The delta drives' sync objects by SDO (GVL.DrvObj*) ----
-// Step k: drive k / 12 (EAxis0/1/2 = station 1003 / 1004 / 1005; wire
-// order QEC 1006, reel 1002, EAxis0..2, EC0808DN 1001, EasyCAT 1007), object k MOD 12 of
+// Step k: drive k / 12 (EAxis0/1/2 = station 1004 / 1005 / 1006; wire and
+// tree order since 2026-10-02: EC0808DN 1001, QEC 1002, reel 1003, EAxis0..2,
+// EasyCAT 1007), object k MOD 12 of
 // SDO_IDX / SDO_SUB; a pause of 50 cycles between reads, ~2 s a sweep.
 // A DRV_SDO request (GVL.SdoReq*) runs first; the sweep waits.
 IF GVL.SdoReqActive THEN
@@ -658,10 +659,10 @@ ELSIF iSdoWait > 0 THEN
     iSdoWait := iSdoWait - 1;
 ELSE
     CASE iSdoStep / 12 OF
-        0: uiSdoDev := 1003;
-        1: uiSdoDev := 1004;
+        0: uiSdoDev := 1004;
+        1: uiSdoDev := 1005;
     ELSE
-        uiSdoDev := 1005;
+        uiSdoDev := 1006;
     END_CASE;
     fbSdo(xExecute := TRUE, usiCom := 1, uiDevice := uiSdoDev, wIndex := SDO_IDX[iSdoStep MOD 12],
           bySubindex := SDO_SUB[iSdoStep MOD 12], udiTimeOut := 500);

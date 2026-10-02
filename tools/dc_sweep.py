@@ -27,6 +27,7 @@ import os
 import re
 import time
 
+import drive_param as dp
 import machine as mc
 from machine import log
 from sync_shift_sweep import run_z, virtual
@@ -107,7 +108,7 @@ def main():
             if a.kind == "cycle":
                 from sync_shift_sweep import sdo_read
                 log("  60C2 (sub1, sub2) per drive:", [(sdo_read(st, 0x60C2, 1, 1), sdo_read(st, 0x60C2, 2, 1))
-                                                       for st in (1003, 1004, 1005)])
+                                                       for st in dp.STATIONS.values()])
             mc.set_delta(real=True)
             mc.fsm_to("Ready", timeout=180)
             r = run_z(a.seconds)

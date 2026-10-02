@@ -513,7 +513,7 @@ END_IF;
                 END_IF;
             ELSIF (CommandType = 'DRV_SDO') THEN
                 // One SDO read / write to a drive (GVL.SdoReq*, run by
-                // PRG_EventLog): station (1003..1005 = EAxis0..2), index,
+                // PRG_EventLog): station (1004..1006 = EAxis0..2), index,
                 // sub, size (1, 2, 4), and value + write:1 to write. Replies
                 // seq; poll DRV_SDO_RESULT for that seq. busy if one runs.
                 ShouldReturn := TRUE;

@@ -27,7 +27,7 @@ import machine as mc
 from machine import log
 
 JOB = os.path.join(mc.REPO, "codesys_scripts", "jobs", "templates", "set_drive_sync_shift.py")
-STATIONS = (1003, 1004, 1005)
+STATIONS = (1004, 1005, 1006)    # EAxis0/1/2 since the 2026-10-02 slave reorder
 
 
 def set_shift(value):
