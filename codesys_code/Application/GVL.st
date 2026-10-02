@@ -292,8 +292,8 @@ VAR_GLOBAL
 	   addresses from jobs/templates/dump_drive_target_addr.py). Never
 	   written by the application. *)
 	TapTarget0      AT %QD46 : DINT;
-	TapTarget1      AT %QD16 : DINT;
-	TapTarget2      AT %QD20 : DINT;
+	TapTarget1      AT %QD50 : DINT;
+	TapTarget2      AT %QD54 : DINT;
 	(* Per drive: glitches of the tapped target (|d2| > DiGlitchThresh),
 	   its max |d2|, and how the tap relates to diSetPosition at the end
 	   of the task: equal to this cycle's (TapEqNow), to last cycle's
