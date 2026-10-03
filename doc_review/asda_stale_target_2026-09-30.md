@@ -843,6 +843,13 @@ symmetric Z stroke comparing the three joints' torque would show it.
 0.00 % on all three, torque change per cycle max 5.7 / 7.5 / 8.5 %, none
 >= 20 %, FSM Ready throughout.
 
+**1 h soak, square with dips at 70 %** (2026-10-03 11:31-12:31,
+`circle_soak.py --shape dip --speed 70 --minutes 60`, no drive filter):
+3.47 M moving cycles per drive, late 0.00 %, torque change per cycle max
+31.9 / 40.9 / 44.9 %, >= 20 % 15801 / 23892 / 44475 (the dips' direction
+changes, steady per lap), none >= 50 %, FSM Ready throughout; the maxima
+were reached in the first minutes and barely grew after.
+
 Jobs: `jobs/templates/set_drives_only.py` (bus without QEC, reel, EC0808,
 EasyCAT), `set_master_like_delta.py`, `dump_master_all.py`; EC0808 DC with
 `set_qec_dc.py` (SLAVES = ("EC0808DN",)). `tools/machine.py`

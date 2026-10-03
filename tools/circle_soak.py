@@ -3,10 +3,12 @@
 cycle (FB_STATS) since the start.
 
     python tools/circle_soak.py --owner-ok [--speed 30] [--minutes 60]
-                                [--report 60] [--tq-stop 100]
+                                [--report 60] [--tq-stop 100] [--shape round|dip]
 
-The path is param_sweep's: the 4-point square +-50 mm at Z 0 with corners
-blended by --cor (49 = nearly a circle). Stops by itself when a drive's
+--shape round (default) is param_sweep's path: the 4-point square +-50 mm
+at Z 0 with corners blended by --cor (49 = nearly a circle). --shape dip is
+square_dip's: the same square with a dip to Z -15 at each corner, corner
+distance 14, a 10 ms dwell at the bottom (the PnP-like path). Stops by itself when a drive's
 torque change per cycle exceeds --tq-stop % rated (gearbox protection),
 the FSM reports an error, or the stream ends early; also when the file
 codesys_scripts/jobs/circle_soak.stop exists. At the end: home, delta
@@ -41,7 +43,8 @@ def main():
     ap.add_argument("--speed", type=float, default=30)
     ap.add_argument("--minutes", type=float, default=60)
     ap.add_argument("--report", type=float, default=60)
-    ap.add_argument("--cor", type=float, default=49.0)
+    ap.add_argument("--cor", type=float, default=49.0, help="corner distance for --shape round")
+    ap.add_argument("--shape", choices=("round", "dip"), default="round")
     ap.add_argument("--tq-stop", type=float, default=100.0, help="stop above this torque change per cycle, %% rated")
     ap.add_argument("--owner-ok", action="store_true")
     a = ap.parse_args()
@@ -51,9 +54,20 @@ def main():
     seconds = a.minutes * 60
     s = a.speed / 100.0
     kin = dict(F=2000.0 * s, ACC=200000.0 * s, DEA=200000.0 * s, JERK=800000.0 * s)
-    laps = int(seconds / 0.3) + 50          # a lap takes >= ~0.5 s at 30 %: more than enough
-    pkts = [dict(kin, type="M", cmd="G1", X=float(x), Y=float(y), Z=0.0, Cor=a.cor)
-            for _ in range(laps) for x, y in ((-50, -50), (50, -50), (50, 50), (-50, 50))]
+    square = ((-50, -50), (50, -50), (50, 50), (-50, 50))
+    if a.shape == "round":
+        laps = int(seconds / 0.3) + 50      # a lap takes >= ~0.5 s at 30 %: more than enough
+        pkts = [dict(kin, type="M", cmd="G1", X=float(x), Y=float(y), Z=0.0, Cor=a.cor)
+                for _ in range(laps) for x, y in square]
+    else:
+        laps = int(seconds / 0.5) + 50      # a dip lap takes ~1 s at 70 %
+        pkts = []
+        for _ in range(laps):
+            for x, y in square:
+                pkts.append(dict(kin, type="M", cmd="G1", X=float(x), Y=float(y), Z=0.0, Cor=14.0))
+                pkts.append(dict(kin, type="M", cmd="G1", X=float(x), Y=float(y), Z=-15.0, Cor=14.0))
+                pkts.append({"type": "M", "cmd": "G4", "P": 0.01})
+                pkts.append(dict(kin, type="M", cmd="G1", X=float(x), Y=float(y), Z=0.0, Cor=0.0))
     mc.reconnect()
     reason = "time"
     try:
@@ -62,7 +76,7 @@ def main():
         mc.sys_cmd("FB_STATS", reset=1)
         mc.sys_cmd("DEM_STATS", reset=1)
         mc.push("plc_stream_start", {"pkts": pkts, "timeoutMs": 30000})
-        log("soak started: %.0f %% for %.0f min, %d packets" % (a.speed, a.minutes, len(pkts)))
+        log("soak started: %s %.0f %% for %.0f min, %d packets" % (a.shape, a.speed, a.minutes, len(pkts)))
         t0 = last = time.time()
         while time.time() - t0 < seconds:
             time.sleep(1)
