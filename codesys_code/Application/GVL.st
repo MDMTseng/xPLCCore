@@ -350,6 +350,22 @@ VAR_GLOBAL
 	SettleErrUm     : ARRAY[0..255] OF UDINT;
 	SettleAtMs      : ARRAY[0..255] OF UDINT;
 	SettleN         : UDINT;
+	(* Every stop of the set positions, short PnP dwells too (PRG_EventLog,
+	   SYS DWELL; 2026-10-03): target = the commanded TCP at the stop; per
+	   stop, logged when the motion leaves: DwAtMs stop time, DwDwellMs how
+	   long it stayed, DwSettleMs time until the actual TCP is within
+	   SettleTolMm of the target for good (16#FFFFFFFF: not within when it
+	   left), DwErr0Um / DwErrLeaveUm distance at the stop / when leaving.
+	   Ring of 4096, DwN counts all. DwHist: settle time histogram, edges
+	   1 2 5 10 15 20 50 ms, last bin = not settled; DwErrLeaveMaxUm. *)
+	DwAtMs          : ARRAY[0..4095] OF UDINT;
+	DwDwellMs       : ARRAY[0..4095] OF UDINT;
+	DwSettleMs      : ARRAY[0..4095] OF UDINT;
+	DwErr0Um        : ARRAY[0..4095] OF UDINT;
+	DwErrLeaveUm    : ARRAY[0..4095] OF UDINT;
+	DwN             : UDINT;
+	DwHist          : ARRAY[0..8] OF UDINT;
+	DwErrLeaveMaxUm : UDINT;
 	(* Trace of the last completed stop: 100 cycles before the set positions
 	   stopped and the 300 after, commanded TCP (MC_GroupReadSetPosition)
 	   and actual TCP (MC_GroupReadActualPosition), WCS mm. TrSeq counts

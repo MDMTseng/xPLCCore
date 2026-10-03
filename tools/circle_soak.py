@@ -13,11 +13,20 @@ torque change per cycle exceeds --tq-stop % rated (gearbox protection),
 the FSM reports an error, or the stream ends early; also when the file
 codesys_scripts/jobs/circle_soak.stop exists. At the end: home, delta
 virtual. Drive parameters are not touched.
+
+Every stop of the set positions (the dips' 10 ms dwells too) is logged by
+the PLC (SYS DWELL, 2026-10-03): the per-minute line adds the stops, the
+share settled within 0.2 mm before leaving, and the max error when
+leaving. --dwell-log FILE also writes every stop to a CSV (at_ms, dwell_ms,
+settle_ms or empty when not settled, err_stop_um, err_leave_um); the PLC
+ring holds 4096 stops, read every --report s.
 """
 
 import argparse
 import os
 import time
+
+NOT_SETTLED = 4294967295
 
 import machine as mc
 from machine import log
@@ -38,6 +47,34 @@ def stats():
     return out
 
 
+def dwell_summary():
+    try:                                    # a PLC without SYS DWELL (before 2026-10-03)
+        d = mc.sys_cmd("DWELL")
+        h = [int(x) for x in d["hist"].rstrip(",").split(",")]
+    except Exception:
+        return None
+    n = sum(h)
+    return {"n": n, "settled_pct": 100.0 * (n - h[8]) / max(1, n), "le15_pct": 100.0 * sum(h[:5]) / max(1, n),
+            "emax": d["emax"], "next": d["n"]}
+
+
+def dwell_read(frm, fh):
+    """Append stops frm.. to the CSV; returns the next index (skips what
+    the 4096 ring already overwrote)."""
+    n = mc.sys_cmd("DWELL")["n"]
+    i = max(frm, n - 4000)
+    while i < n:
+        ev = mc.sys_cmd("DWELL", **{"from": i})["ev"].rstrip(",")
+        rows = [e.split(":") for e in ev.split(",") if e.count(":") == 4 and all(e.split(":"))]
+        if not rows:
+            break
+        for r in rows:
+            fh.write("%s,%s,%s,%s,%s\n" % (r[0], r[1], "" if int(r[2]) == NOT_SETTLED else r[2], r[3], r[4]))
+        i += len(rows)
+    fh.flush()
+    return i
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--speed", type=float, default=30)
@@ -46,6 +83,7 @@ def main():
     ap.add_argument("--cor", type=float, default=49.0, help="corner distance for --shape round")
     ap.add_argument("--shape", choices=("round", "dip"), default="round")
     ap.add_argument("--tq-stop", type=float, default=100.0, help="stop above this torque change per cycle, %% rated")
+    ap.add_argument("--dwell-log", help="CSV file for every stop")
     ap.add_argument("--owner-ok", action="store_true")
     a = ap.parse_args()
     mc.require_owner_ok(a.owner_ok)
@@ -75,6 +113,14 @@ def main():
         mc.fsm_to("Ready", timeout=180)
         mc.sys_cmd("FB_STATS", reset=1)
         mc.sys_cmd("DEM_STATS", reset=1)
+        try:
+            mc.sys_cmd("DWELL", reset=1)
+        except Exception:
+            pass
+        fh = open(a.dwell_log, "a") if a.dwell_log else None
+        if fh:
+            fh.write("at_ms,dwell_ms,settle_ms,err_stop_um,err_leave_um\n")
+        dw_next = 0
         mc.push("plc_stream_start", {"pkts": pkts, "timeoutMs": 30000})
         log("soak started: %s %.0f %% for %.0f min, %d packets" % (a.shape, a.speed, a.minutes, len(pkts)))
         t0 = last = time.time()
@@ -96,6 +142,12 @@ def main():
                     "/".join("%.1f" % x["tq_max"] for x in st),
                     "/".join(str(x["ge20"]) for x in st),
                     "/".join(str(x["ge50"]) for x in st), fsm))
+                dw = dwell_summary()
+                if dw:
+                    log("        stops %d | settled before leaving %.2f %% | settle <= 15 ms %.2f %% | err leaving max %d um" % (
+                        dw["n"], dw["settled_pct"], dw["le15_pct"], dw["emax"]))
+                if fh:
+                    dw_next = dwell_read(dw_next, fh)
                 if fsm == "Error":
                     reason = "FSM error %s %s" % (r.get("err_src"), r.get("err_id"))
                     break

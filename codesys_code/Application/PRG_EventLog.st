@@ -91,6 +91,19 @@ VAR
     arStZ       : ARRAY[0..299] OF REAL;
     lrStD       : LREAL;
     udiStAt     : UDINT;
+    // Every stop, short ones too (GVL.Dw*).
+    xDwOn       : BOOL;
+    iDwN        : DINT;
+    iDwLast     : DINT;
+    lrDwTx      : LREAL;
+    lrDwTy      : LREAL;
+    lrDwTz      : LREAL;
+    lrDwD       : LREAL;
+    lrDwE0      : LREAL;
+    udiDwAt     : UDINT;
+    udiDwSettle : UDINT;
+    udiDwK      : UDINT;
+    iDwB        : INT;
     // Stop trace (GVL.Tr*): ring of the last 128 cycles, staged trace.
     fbStSet     : SM3_Robotics.SMC_GroupReadSetPosition;
     arRgC       : ARRAY[0..127, 0..2] OF REAL;
@@ -859,6 +872,61 @@ IF xStMovPrev AND NOT xStMoving AND (iStCap < 0) AND AxisGroupSM.ArmPositionVali
         arTgA[iTrK, 1] := arRgA[(iRg + 28 + iTrK) MOD 128, 1];
         arTgA[iTrK, 2] := arRgA[(iRg + 28 + iTrK) MOD 128, 2];
     END_FOR;
+END_IF;
+// Every stop, also the 10-15 ms PnP dwells (GVL.Dw*): distance of the
+// actual TCP to the commanded TCP at the stop, every stopped cycle.
+IF xStMovPrev AND NOT xStMoving AND AxisGroupSM.ArmPositionValid THEN
+    xDwOn := TRUE;
+    iDwN := 0;
+    iDwLast := 0;
+    lrDwTx := fbStSet.Position.c.X;
+    lrDwTy := fbStSet.Position.c.Y;
+    lrDwTz := fbStSet.Position.c.Z;
+    udiDwAt := udiNow;
+END_IF;
+IF xDwOn THEN
+    IF xStMoving OR NOT AxisGroupSM.ArmPositionValid OR (iDwN >= 60000) THEN
+        IF iDwN > 0 THEN
+            udiDwK := GVL.DwN MOD 4096;
+            IF iDwLast >= iDwN THEN
+                udiDwSettle := 16#FFFFFFFF;
+                iDwB := 8;
+            ELSE
+                udiDwSettle := DINT_TO_UDINT(iDwLast) * DINT_TO_UDINT(AxisGroupSM.BusPeriod);
+                IF udiDwSettle < 1 THEN iDwB := 0;
+                ELSIF udiDwSettle < 2 THEN iDwB := 1;
+                ELSIF udiDwSettle < 5 THEN iDwB := 2;
+                ELSIF udiDwSettle < 10 THEN iDwB := 3;
+                ELSIF udiDwSettle < 15 THEN iDwB := 4;
+                ELSIF udiDwSettle < 20 THEN iDwB := 5;
+                ELSIF udiDwSettle < 50 THEN iDwB := 6;
+                ELSE iDwB := 7;
+                END_IF;
+            END_IF;
+            GVL.DwAtMs[udiDwK] := udiDwAt;
+            GVL.DwDwellMs[udiDwK] := DINT_TO_UDINT(iDwN) * DINT_TO_UDINT(AxisGroupSM.BusPeriod);
+            GVL.DwSettleMs[udiDwK] := udiDwSettle;
+            GVL.DwErr0Um[udiDwK] := LREAL_TO_UDINT(lrDwE0 * 1000.0);
+            GVL.DwErrLeaveUm[udiDwK] := LREAL_TO_UDINT(lrDwD * 1000.0);
+            GVL.DwHist[iDwB] := GVL.DwHist[iDwB] + 1;
+            IF GVL.DwErrLeaveUm[udiDwK] > GVL.DwErrLeaveMaxUm THEN
+                GVL.DwErrLeaveMaxUm := GVL.DwErrLeaveUm[udiDwK];
+            END_IF;
+            GVL.DwN := GVL.DwN + 1;
+        END_IF;
+        xDwOn := FALSE;
+    ELSE
+        lrDwD := SQRT(EXPT(AxisGroupSM.GroupActualPositionFb.Position.c.X - lrDwTx, 2)
+                      + EXPT(AxisGroupSM.GroupActualPositionFb.Position.c.Y - lrDwTy, 2)
+                      + EXPT(AxisGroupSM.GroupActualPositionFb.Position.c.Z - lrDwTz, 2));
+        IF iDwN = 0 THEN
+            lrDwE0 := lrDwD;
+        END_IF;
+        IF lrDwD > GVL.SettleTolMm THEN
+            iDwLast := iDwN + 1;
+        END_IF;
+        iDwN := iDwN + 1;
+    END_IF;
 END_IF;
 xStMovPrev := xStMoving;
 IF iStCap >= 0 THEN

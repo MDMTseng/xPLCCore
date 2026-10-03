@@ -627,6 +627,49 @@ END_IF;
                     EcEvtI := EcEvtI + 1;
                 END_WHILE;
                 MessagePackerFb.PackKvStr(ADR('ev'), ADR(EcTrStr));
+            ELSIF (CommandType = 'DWELL') THEN
+                // Every-stop log (GVL.Dw*): n = stops so far, tol mm, hist =
+                // settle time histogram (edges 1 2 5 10 15 20 50 ms, last =
+                // not settled), emax = max error when leaving (um), ev = up
+                // to 8 stops from index from:i as at_ms:dwell_ms:settle_ms:
+                // err_stop_um:err_leave_um (settle 4294967295 = not settled).
+                // reset:1 clears it.
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                IF MessageUnpackerFb.TryReadINT64('reset', 0) <> 0 THEN
+                    GVL.DwN := 0;
+                    GVL.DwErrLeaveMaxUm := 0;
+                    FOR EcObjJ := 0 TO 8 DO
+                        GVL.DwHist[EcObjJ] := 0;
+                    END_FOR;
+                END_IF;
+                EcEvtFrom := LINT_TO_UDINT(MessageUnpackerFb.TryReadINT64('from', 0));
+                MessagePackerFb.PackKvLint(ADR('n'), UDINT_TO_LINT(GVL.DwN));
+                MessagePackerFb.PackKvReal(ADR('tol'), LREAL_TO_REAL(GVL.SettleTolMm));
+                MessagePackerFb.PackKvLint(ADR('emax'), UDINT_TO_LINT(GVL.DwErrLeaveMaxUm));
+                EcTrStr := '';
+                FOR EcObjJ := 0 TO 8 DO
+                    EcTrStr := CONCAT(EcTrStr, UDINT_TO_STRING(GVL.DwHist[EcObjJ]));
+                    EcTrStr := CONCAT(EcTrStr, ',');
+                END_FOR;
+                MessagePackerFb.PackKvStr(ADR('hist'), ADR(EcTrStr));
+                EcTrStr := '';
+                EcEvtI := EcEvtFrom;
+                WHILE (EcEvtI < GVL.DwN) AND (EcEvtI < EcEvtFrom + 8) DO
+                    EcTrStr := CONCAT(EcTrStr, UDINT_TO_STRING(GVL.DwAtMs[EcEvtI MOD 4096]));
+                    EcTrStr := CONCAT(EcTrStr, ':');
+                    EcTrStr := CONCAT(EcTrStr, UDINT_TO_STRING(GVL.DwDwellMs[EcEvtI MOD 4096]));
+                    EcTrStr := CONCAT(EcTrStr, ':');
+                    EcTrStr := CONCAT(EcTrStr, UDINT_TO_STRING(GVL.DwSettleMs[EcEvtI MOD 4096]));
+                    EcTrStr := CONCAT(EcTrStr, ':');
+                    EcTrStr := CONCAT(EcTrStr, UDINT_TO_STRING(GVL.DwErr0Um[EcEvtI MOD 4096]));
+                    EcTrStr := CONCAT(EcTrStr, ':');
+                    EcTrStr := CONCAT(EcTrStr, UDINT_TO_STRING(GVL.DwErrLeaveUm[EcEvtI MOD 4096]));
+                    EcTrStr := CONCAT(EcTrStr, ',');
+                    EcEvtI := EcEvtI + 1;
+                END_WHILE;
+                MessagePackerFb.PackKvStr(ADR('ev'), ADR(EcTrStr));
             ELSIF (CommandType = 'FB_STATS') THEN
                 // Feedback shock monitor (GVL.Fb*): per drive k, fd{k} =
                 // histogram of |d2 actual position| (edges 1k 2k 5k 10k 20k
