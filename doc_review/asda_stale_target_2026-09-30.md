@@ -838,6 +838,11 @@ at stop 30 um (was 24). No gain; restored (21:40). The owner suspects a
 stiffer reducer on EAxis1, which fits the higher auto-tuned gains; a
 symmetric Z stroke comparing the three joints' torque would show it.
 
+**1 h soak** (2026-10-03 07:47-08:47, `tools/circle_soak.py --speed 30
+--minutes 60`, no drive filter): 3.6 M moving cycles per drive, late
+0.00 % on all three, torque change per cycle max 5.7 / 7.5 / 8.5 %, none
+>= 20 %, FSM Ready throughout.
+
 Jobs: `jobs/templates/set_drives_only.py` (bus without QEC, reel, EC0808,
 EasyCAT), `set_master_like_delta.py`, `dump_master_all.py`; EC0808 DC with
 `set_qec_dc.py` (SLAVES = ("EC0808DN",)). `tools/machine.py`
