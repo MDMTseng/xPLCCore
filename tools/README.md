@@ -20,13 +20,14 @@ Regenerate this file with `python tools/gen_script_index.py`.
 
 | Tool | Touches | What it does |
 |---|---|---|
-| `_burst_width_tmp.py` | moves axes |  |
 | `a_axis_test.py` | moves axes, writes PLC vars | The group's A axis on the machine (open-loop stepper on the QEC driver's second axis): rotate it through the axis group and check the commanded position, the move times and the peak speed / acceleration against the axis  |
 | `a_blend_stress.py` | moves axes | Queued, blended G1s that turn A, over and over: the move pattern the real PLC hung on right after SM3 4.20 was installed (2026-09-29, 5 queued G1s at Cor 45 with a different A each). |
 | `a_limit_step.py` | moves axes | One step of the A limit ladder on the machine (the Motors page's test from the command line, for a session where the operator reports the mark). |
 | `a_speed_compare.py` | moves axes | Motion time per part with and without A rotations, on the machine. |
 | `arrival_phases.py` | moves axes | Does motion change the frame timing? |
 | `asda_scope.py` | read-only | Find stale-target events in ASDA-Soft scope recordings (B3-E, 8 kHz). |
+| `bus_watch.py` | downloads | Watch the EtherCAT bus at standstill for dropouts (2026-10-03: frames lost for ~2.5 s now and then, even with the delta virtual and off; the reel and QEC came back in INIT / SAFE-OP). |
+| `circle_soak.py` | moves axes | Long soak of the delta (round path, square with dips, or a Z stroke), reporting every --report seconds: the drives' late % (DEM_STATS) and the torque change per cycle (FB_STATS) since the start. |
 | `comm_profile.py` | read-only | Comm task profile: where the Comm task's time goes (EC_STATS cs/cb/co/ cscan/ctask/cout/cout500 from TCP_MSGPAK_Server / PRG_EcatEspHttp stamps) next to TASK_STATS for all tasks. |
 | `dc_sweep.py` | moves axes, downloads | Sweep a DC timing setting and measure the ASDA stale-target rate per level. |
 | `dem_events.py` | read-only | Compare the timing of the three delta drives' stale-target bursts. |
@@ -50,6 +51,7 @@ Regenerate this file with `python tools/gen_script_index.py`.
 | `reel_real_test.py` | moves axes, writes PLC vars | Reel axis on the machine: power it, move it, check the cell count and the odometer against the encoder, and the tracker's stop detection on a real servo (a virtual axis has no standstill jitter). |
 | `safe_install.py` | downloads | Download the project to the PLC with every safety step (machine.safe_install): 1. |
 | `settle_test.py` | moves axes | Settling time of the delta's TCP after each stop, per drive filter setting. |
+| `soak_segments.py` | downloads | Run circle_soak.py back to back for a long soak (one stream of hours of packets is too big), optionally recovering from EtherCAT dropouts. |
 | `square_dip.py` | moves axes | Square (or line) paths for the delta through the UI's link (standalone UI with XPLC_HARNESS=1): up to Z0, then the corners of a square (+-HALF mm in X and Y at Z0) with a dip to Z DIP at each corner, back to X0 Y0 Z0. |
 | `stale_suite.py` | moves axes, downloads | After-recovery test suite for the ASDA stale-target investigation (doc_review/asda_stale_target_2026-09-30.md, sections 7c and 8). |
 | `sync_offset_sweep.py` | moves axes, downloads | SyncOffset sweep with the drive-demand metric (ASDA stale-target investigation, doc_review/asda_stale_target_2026-09-30.md section 7c). |

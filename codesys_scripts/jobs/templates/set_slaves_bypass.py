@@ -1,5 +1,5 @@
 # -*- coding: ascii -*-
-# Bypass the QEC (A axis stepper, station 1006) and the reel servo (1002)
+# Bypass the QEC (A axis stepper, station 1002) and the reel servo (1003)
 # on the EtherCAT line: disable both slaves in the device tree and make
 # their axes (EAXIS_A, SM_Drive_GenericDSP402 = A, reelpullmotor) virtual, so the PLC code and the
 # delta kinematics (SpiderR chains A) still have them. With BYPASS = False

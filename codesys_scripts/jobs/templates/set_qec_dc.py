@@ -1,7 +1,10 @@
 # -*- coding: ascii -*-
-# Turn DC on / off for the QEC stepper slave (station 1006, first on the
-# wire) and, with SLAVES, others (the reel, 1002, second). The EtherCAT master takes the first DC slave as the reference
-# clock, so with QEC's DC off the reference moves to the reel servo (1002).
+# Turn DC on / off for the QEC stepper slave and, with SLAVES, others (the
+# reel, EC0808DN). The EtherCAT master takes the first DC slave in the
+# CONFIGURED (device tree) order as the reference clock -- not the first on
+# the wire (2026-10-02, doc_review/asda_stale_target_2026-09-30.md 7l).
+# Stations since the 2026-10-02 reorder (tree = wire): EC0808DN 1001,
+# QEC 1002, reel 1003, EAxis0..2 1004..1006, EasyCAT 1007.
 # Offline edit + save; deploy with tools/safe_install.py (drives off).
 #
 #   rpc.py exec --file jobs/templates/set_qec_dc.py

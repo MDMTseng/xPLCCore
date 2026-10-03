@@ -40,10 +40,13 @@
 //     22-23  stale: SYNC0 cycles that read the same counter as the last one
 //            (the frame had not arrived yet) -- the drives' symptom (UINT, wraps)
 //     24-25  skipped: counter steps > 1 (UINT, wraps)
-//     26-27  odd SYNC0 intervals: SYNC0-to-SYNC0 (micros() in the ISR) off
-//            the SYNC0 cycle (ESC 0x09A0) by more than ODD_US (UINT, wraps)
+//     26-27  this SYNC0 interval minus the SYNC0 cycle (ESC 0x09A0), ns
+//            (INT16, saturates at +-32767; 0x8000 = none). Edges are
+//            timestamped by the MCPWM capture unit (80 MHz, 12.5 ns), so
+//            interrupt latency does not count.
 //     28-29  frame arrival: the last frame's SM0 event after its SYNC0, us
-//            (UINT, 0xFFFF = no frame in that cycle)
+//            (UINT, 0xFFFF = no frame in that cycle), from the capture
+//            timestamps too
 //     30-31  late: cycles whose frame had not arrived by the next SYNC0,
 //            last second (UINT)
 //   Arrival: INT carries SYNC0 and the output SyncManager (SM0) event (AL
@@ -71,6 +74,7 @@
 #include <SPI.h>
 #include <Wire.h>
 #include "EasyCAT.h"
+#include "driver/mcpwm.h"
 #include "stepper.h"
 
 static const uint8_t PIN_SCS = 5;
@@ -100,6 +104,9 @@ EasyCAT EASYCAT(PIN_SCS, DC_SYNC);
 static TaskHandle_t ecatTask = nullptr;
 static volatile uint32_t irqCount = 0;
 static volatile uint32_t irqUs = 0;                 // micros() at the last SYNC0
+static volatile uint32_t irqCap = 0;                // MCPWM capture (12.5 ns) at the last edge
+static int16_t syncDevNs = (int16_t)0x8000;         // inputs 26-27
+static uint32_t lastSyncCap = 0;
 
 // Bus timing probe (inputs 22-31).
 static uint32_t seqPrev = 0;
@@ -136,12 +143,14 @@ static void ecatTaskFn(void *);
 static void encTaskFn(void *);
 static TaskHandle_t encTask;
 
-static void IRAM_ATTR onEcatIrq() {
+// INT edge, timestamped by the MCPWM capture unit (CAP0 on PIN_INT).
+static bool IRAM_ATTR onEcatCap(mcpwm_unit_t, mcpwm_capture_channel_id_t, const cap_event_data_t *e, void *) {
+  irqCap = e->cap_value;
   irqUs = micros();
   irqCount++;
   BaseType_t woken = pdFALSE;
   vTaskNotifyGiveFromISR(ecatTask, &woken);
-  if (woken) portYIELD_FROM_ISR();
+  return woken == pdTRUE;
 }
 
 static bool sensorPresent = false;
@@ -346,7 +355,14 @@ void setup() {
   Serial.printf("INT idle level %d -> interrupt on %s edge\n", idle, idle ? "falling" : "rising");
   xTaskCreatePinnedToCore(encTaskFn, "enc", 4096, nullptr, configMAX_PRIORITIES - 2, &encTask, 0);
   xTaskCreatePinnedToCore(ecatTaskFn, "ecat", 4096, nullptr, configMAX_PRIORITIES - 1, &ecatTask, 1);
-  attachInterrupt(digitalPinToInterrupt(PIN_INT), onEcatIrq, idle ? FALLING : RISING);
+  mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM_CAP_0, PIN_INT);
+  mcpwm_capture_config_t cc = {};
+  cc.cap_edge = idle ? MCPWM_NEG_EDGE : MCPWM_POS_EDGE;
+  cc.cap_prescale = 1;
+  cc.capture_cb = onEcatCap;
+  cc.user_data = nullptr;
+  esp_err_t ce = mcpwm_capture_enable_channel(MCPWM_UNIT_0, MCPWM_SELECT_CAP0, &cc);
+  Serial.printf("MCPWM capture on GPIO%u: %s\n", PIN_INT, ce == ESP_OK ? "ok" : "FAILED");
 }
 
 // Encoder on core 0. The Arduino I2C driver costs hundreds of us per
@@ -403,8 +419,8 @@ static void ecatCycle() {
   in[23] = staleCount >> 8;
   in[24] = skipCount & 0xFF;
   in[25] = skipCount >> 8;
-  in[26] = oddCount & 0xFF;
-  in[27] = oddCount >> 8;
+  in[26] = (uint16_t)syncDevNs & 0xFF;
+  in[27] = (uint16_t)syncDevNs >> 8;
   in[28] = arrLast & 0xFF;
   in[29] = arrLast >> 8;
   in[30] = lateCount & 0xFF;
@@ -472,6 +488,7 @@ static void ecatTaskFn(void *) {
       continue;
     }
     uint32_t tIrq = irqUs;
+    uint32_t tCap = irqCap;
     // A frame interrupt whose event MainTask already consumed (it read the
     // outputs first) shows no bit 8: anything well before the next SYNC0 is
     // a frame too.
@@ -483,7 +500,7 @@ static void ecatTaskFn(void *) {
       EASYCAT.PeekOutputs(clr);
       frameIrqs++;
       if (!frameSinceSync) {
-        uint32_t arr = tIrq - lastSyncIrq;
+        uint32_t arr = (uint32_t)(((uint64_t)(tCap - lastSyncCap) * 125 + 5000) / 10000);   // us
         if (arr < arrMinAcc) arrMinAcc = arr;
         if (arr > arrMaxAcc) arrMaxAcc = arr;
         arrLast = arr > 65534 ? 65534 : (uint16_t)arr;
@@ -496,6 +513,13 @@ static void ecatTaskFn(void *) {
       lateAcc++;
       arrLast = 0xFFFF;
     }
+    if (synced && nomUs) {
+      int64_t dns = (int64_t)(tCap - lastSyncCap) * 25 / 2 - (int64_t)nomUs * 1000;
+      syncDevNs = dns > 32767 ? 32767 : (dns < -32767 ? -32767 : (int16_t)dns);
+    } else {
+      syncDevNs = (int16_t)0x8000;
+    }
+    lastSyncCap = tCap;
     frameSinceSync = false;
     lastSyncIrq = tIrq;
     uint32_t now = micros();

@@ -1,4 +1,4 @@
-"""Long soak of the delta on the circle-like round path, reporting every
+"""Long soak of the delta (round path, square with dips, or a Z stroke), reporting every
 --report seconds: the drives' late % (DEM_STATS) and the torque change per
 cycle (FB_STATS) since the start.
 

@@ -24,6 +24,7 @@ One-off probes live in `_archive/`. Regenerate this file with
 | `check_bus_tasks.py` | read-only | Which task drives each fieldbus master's IO? |
 | `check_devices.py` | read-only | Run with: rpc.py exec --readonly --file jobs/templates/check_devices.py For every device node in the open project, check whether its device description actually exists in THIS machine's repository. |
 | `check_status.py` | PLC session | Log in to the application and print a few TCP server / FSM status variables. |
+| `clear_biSetPos.py` | edits project | Remove the leftover manual mapping of EAxis1's Target Position PDO (ASDA_B3_E_CoE_Drive_1) to the unused variable biSetPos at %QD16, and give the channel an automatic address again (2026-10-02; noted as a leftover in doc |
 | `cold_reset.py` | PLC session, resets PLC | Cold-reset the application on the PLC, then start it again. |
 | `create_coord1_bind_methods.py` | edits project | Create the Coord1CommitBind / Coord1LatchWindowError method POUs under PROGRAM AxisGroupSM so import_all can resolve the new .st files (B3 fix, single bind-commit + single error-snapshot latch for the SYS and FlyEvent CO |
 | `create_drain_host_packets.py` | edits project | Create the DrainHostPackets method POU under PROGRAM AxisGroupSM so import_all can resolve the new .st file. |
@@ -51,6 +52,7 @@ One-off probes live in `_archive/`. Regenerate this file with
 | `download_start_virtual.py` | PLC session | FULL DOWNLOAD the current project to the controller and start it. |
 | `dump_drive_target_addr.py` | read-only | Print the IEC address (and any mapping) of each ASDA drive's Target Position / Actual Position PDO channel (manual_iec_address holds the address even when it is assigned automatically), for AT-declared read-only taps of  |
 | `dump_ethercat.py` | read-only | Dump the EtherCAT configuration of the open project. |
+| `dump_master_all.py` | read-only | Print every parameter of the EtherCAT master (defaults included) and the EtherCAT_Task settings, to compare the master setup with Delta's DIADesigner-AX one (2026-10-02: their PLC drives the same ASDA-B3-E at 1 ms withou |
 | `dump_modbus.py` | read-only | Every parameter of the Modbus devices (COM port, client, slaves, channels), for timing questions. |
 | `dump_serial.py` | read-only | Dump the serial / Modbus branch of the device tree. |
 | `dump_task_config.py` | read-only | Print the Task Configuration: every task with its type, priority, interval, watchdog, core affinity (where exposed) and the POUs it calls, plus task-related parameters of the PLC device and the EtherCAT master and SoftMo |
@@ -94,13 +96,17 @@ One-off probes live in `_archive/`. Regenerate this file with
 | `set_comm_task_period.py` | ? | Set the Comm task (TCP_MSGPAK_Server) period. |
 | `set_drive_demand_pdo.py` | edits project | Put the drive's position demand value (0x6062, what the drive's control loop actually uses) into its TxPDO, in place of the touch probe position 0x60BA (same size, unused here), so the PLC sees per cycle what the ASDA di |
 | `set_drive_sync_shift.py` | edits project | Set "DC sync0 shift time" on the three ASDA-B3-E slaves (EAxis0/1/2): their SYNC0 fires this much later than the other slaves'. |
+| `set_drives_only.py` | edits project | Drives-only bus (2026-10-02, to match Delta's own PLC test): bypass the QEC, the reel servo, the EC0808DN IO coupler and the EasyCAT, leaving the three ASDA-B3-E drives. |
 | `set_ec_sync_offset.py` | edits project, PLC session | Set the EtherCAT master's SyncOffset (% of the cycle between the frame and SYNC0), then save the project. |
 | `set_group_a_axis.py` | edits project | The axis group's A axis (SpiderR tool kinematics Kin_CAxis): SM_Drive_GenericDSP402, drive ID 7, logical device 1 = the second axis of the QEC stepper driver (M2 / "Y", where the rotation motor is wired). |
+| `set_master_like_delta.py` | edits project | Set the EtherCAT master parameters that differ from Delta's own PLC (DIADesigner-AX, AX-C12; 2026-10-02 it drove our ASDA-B3-E at 1 ms with no stale target). |
 | `set_mb_comport.py` | edits project | Set Modbus_COM's ComPort, then build. |
 | `set_mb_server_address.py` | edits project | Set SmartBowlFeeder's Modbus ServerAddress, then build. |
 | `set_modbus_bus_cycle.py` | ? | Pin the Modbus RTU branch to the Comm task. |
 | `set_modbus_enabled.py` | edits project | Enable or disable the Modbus RTU branch (Modbus_COM and everything under it: the client port and the SmartBowlFeeder slave). |
-| `set_qec_dc.py` | edits project | Turn DC on / off for the QEC stepper slave (station 1006, first on the wire). |
+| `set_qec_dc.py` | edits project | Turn DC on / off for the QEC stepper slave and, with SLAVES, others (the reel, EC0808DN). |
+| `set_slave_order.py` | edits project | Put the EtherCAT slaves in the device tree in wire order and make them non-optional, so the master addresses them by position and refuses a mismatch (2026-10-02). |
+| `set_slaves_bypass.py` | edits project | Bypass the QEC (A axis stepper, station 1002) and the reel servo (1003) on the EtherCAT line: disable both slaves in the device tree and make their axes (EAXIS_A, SM_Drive_GenericDSP402 = A, reelpullmotor) virtual, so th |
 | `set_sm3_420.py` | edits project | NOT IN USE (2026-09-30): the real PLC hangs on the first blended G1 with A as additional axis on SM3 4.20; the machine runs SM3 4.18 + Kin_CAxis. |
 | `stamp_build_info.py` | edits project | Stamp BUILD_GIT_SHA / BUILD_TS_MS in GVL.st with the current git rev and a unix-ms timestamp. |
 | `stop_then_install.py` | PLC session | Full install: download the project to the PLC and start it. |

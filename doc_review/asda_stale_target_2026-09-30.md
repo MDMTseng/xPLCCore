@@ -856,6 +856,10 @@ EasyCAT), `set_master_like_delta.py`, `dump_master_all.py`; EC0808 DC with
 `ethercat_state()` now logs out first ("Application not logged in" right
 after an install or restart).
 
+**Afterwards (2026-10-03 afternoon):** a different problem appeared: the
+bus drops for ~2.5 s now and then, the QEC and the reel come back in INIT,
+also at standstill. Separate handover: `doc_review/ethercat_dropout_2026-10-03.md`.
+
 ## 8. Next tests (before 7l; kept for the record)
 
 00. **After the power cycle** (the bus is down since the SyncOffset-60
