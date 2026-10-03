@@ -142,6 +142,12 @@ def main():
                     "/".join("%.1f" % x["tq_max"] for x in st),
                     "/".join(str(x["ge20"]) for x in st),
                     "/".join(str(x["ge50"]) for x in st), fsm))
+                try:
+                    ec = mc.sys_cmd("EC_STATS")
+                    log("        EtherCAT lost frames %d | rx errors %d | tx errors %d (since the download)" % (
+                        ec["lost"], ec["rx_err"], ec["tx_err"]))
+                except Exception:
+                    pass
                 dw = dwell_summary()
                 if dw:
                     log("        stops %d | settled before leaving %.2f %% | settle <= 15 ms %.2f %% | err leaving max %d um" % (
@@ -170,8 +176,19 @@ def main():
             home()
         finally:
             mc.fsm_to("UnInited", timeout=30)
-            mc.set_delta(real=False)
-            log("delta back to virtual")
+            try:
+                mc.set_delta(real=False)
+            except SystemExit as e:
+                # 2026-10-03: after a bus dropout the axes sit in errorstop
+                # (state 1), so drives_off() refuses; DELTA_MODE real:0
+                # re-initialises them as virtual, which clears it.
+                log("set_delta refused (%s): DELTA_MODE real:0 directly" % e)
+                mc.sys_cmd("DELTA_MODE", real=0)
+                for _ in range(40):
+                    if mc.delta_mask() == 7:
+                        break
+                    time.sleep(0.5)
+            log("delta back to virtual (mask %s, axes %s)" % (mc.delta_mask(), mc.axis_states()))
 
 
 if __name__ == "__main__":
