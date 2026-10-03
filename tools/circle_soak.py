@@ -81,9 +81,13 @@ def main():
     ap.add_argument("--minutes", type=float, default=60)
     ap.add_argument("--report", type=float, default=60)
     ap.add_argument("--cor", type=float, default=49.0, help="corner distance for --shape round")
-    ap.add_argument("--shape", choices=("round", "dip"), default="round")
+    ap.add_argument("--shape", choices=("round", "dip", "zud"), default="round",
+                    help="zud: Z 0 <-> -zstroke at X0 Y0, 10 ms at each end (low load)")
+    ap.add_argument("--zstroke", type=float, default=20.0)
     ap.add_argument("--tq-stop", type=float, default=100.0, help="stop above this torque change per cycle, %% rated")
     ap.add_argument("--dwell-log", help="CSV file for every stop")
+    ap.add_argument("--virtual", action="store_true",
+                    help="keep the delta virtual (no real motion): the bus, the PLC logs and the host link run as usual")
     ap.add_argument("--owner-ok", action="store_true")
     a = ap.parse_args()
     mc.require_owner_ok(a.owner_ok)
@@ -97,6 +101,13 @@ def main():
         laps = int(seconds / 0.3) + 50      # a lap takes >= ~0.5 s at 30 %: more than enough
         pkts = [dict(kin, type="M", cmd="G1", X=float(x), Y=float(y), Z=0.0, Cor=a.cor)
                 for _ in range(laps) for x, y in square]
+    elif a.shape == "zud":
+        laps = int(seconds / 0.1) + 50
+        pkts = []
+        for _ in range(laps):
+            for z in (-a.zstroke, 0.0):
+                pkts.append(dict(kin, type="M", cmd="G1", X=0.0, Y=0.0, Z=z, Cor=0.0))
+                pkts.append({"type": "M", "cmd": "G4", "P": 0.01})
     else:
         laps = int(seconds / 0.5) + 50      # a dip lap takes ~1 s at 70 %
         pkts = []
@@ -109,8 +120,8 @@ def main():
     mc.reconnect()
     reason = "time"
     try:
-        mc.set_delta(real=True)
-        mc.fsm_to("Ready", timeout=180)
+        mc.set_delta(real=not a.virtual)
+        mc.fsm_to("Ready", timeout=180, home=not a.virtual)
         mc.sys_cmd("FB_STATS", reset=1)
         mc.sys_cmd("DEM_STATS", reset=1)
         try:
