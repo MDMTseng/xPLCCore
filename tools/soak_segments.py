@@ -80,8 +80,19 @@ def main():
             for line in out[-3:]:
                 log("   install:", line)
             if not any("All slaves in operational" in l for l in out):
-                log("=== stopped: the bus did not come back after the re-download")
-                return
+                # 2026-10-04: the install itself went through but its last
+                # check hit the daemon's 4 h budget; ask the master again
+                # (machine.rpc restarts a retired daemon).
+                sys.path.insert(0, HERE)
+                import machine as mc
+                try:
+                    ec = mc.ethercat_state()
+                except Exception as e:
+                    ec = {"error": str(e)}
+                log("   EtherCAT asked again: %s" % ec)
+                if "operational" not in str(ec.get("LastMessage", "")):
+                    log("=== stopped: the bus did not come back after the re-download")
+                    return
             continue
         log("=== stopped after segment %d (%s, rc %s; dropouts %d)" % (seg, reason, rc, drops))
         return

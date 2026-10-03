@@ -57,6 +57,8 @@ the wire, tree = wire, no slave optional; doc_review/asda_stale_target
 | 16:32 | Z 0 <-> -20 at 10 % (6 h planned) | DWELL | **dropout at 4 min** |
 | 17:1x | standstill, delta virtual and off | DWELL | **dropout** |
 | 17:47 | standstill (`tools/bus_watch.py`) | DWELL | **dropout at 0.5 min** |
+| 17:47-21:59 | standstill watch, 4 h 12 min | DWELL | 12 dropouts, all between 17:47 and 18:51 (every 1.5-8 min), then none for 3 h; QEC and reel only every time |
+| 22:06 (10-03) | round 10 %, 3 h (`soak_segments.py --hours 3 --recover 10`) | DWELL | clean for 170 min, **dropout at 170.7 min** (00:56) |
 
 Ruled out:
 - the every-stop log (SYS DWELL) and the CSV readout: the program without
