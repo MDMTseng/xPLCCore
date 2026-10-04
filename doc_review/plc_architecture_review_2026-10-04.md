@@ -129,12 +129,35 @@ Host (tools/):
 
 ## 3. Verification
 
-- Build (import_all into the open project, 2026-10-04 16:3x): 0 errors,
-  98 warnings (the same warnings as before). Not downloaded.
-- Not yet on the machine. To verify after the download: SYS DIRECT start
-  then let the heartbeat lapse -> state 99, `enabled` false, `cw` 0x0006
-  written once (watch `TapTarget0` stays put); GA_EV 7 with the delta real
-  -> stays GroupEnabled; `EC_STATS tr:1 obj:1` -> either a complete reply
-  or a clean drop with `ReMpOverflowDropCount` +1 and the next reply intact;
-  REEL_RESUME after a manual ReelGo of several turns -> `reel_pos_lost` as
-  before.
+- Build (import_all into the open project): 0 errors, 98 warnings (the
+  same warnings as before).
+- **First download (16:44) failed to start**: the slot guard in 40c0773 had
+  `(pSlot <> 0) AND (pStart >= pSlot^.buf)` in one condition; ST evaluates
+  every operand, so the unbound packer in MsgPakInfoInit dereferenced NULL
+  in the first cycle (`GVL.AxisGroupSMScans` = 1, the EtherCAT task gone
+  from the Intewell `task` table). Nested IFs since 3e8e2b9.
+  `machine.safe_install` had passed "download done" as success; it now
+  needs "post-start state: run".
+- Second download (16:5x, 3e8e2b9): runs, 7 slaves OP, `lost` 0. Checks
+  with the delta virtual:
+  - `EC_STATS tr:1 obj:1`: no reply (dropped whole),
+    `ReMpOverflowDropCount` 0 -> 1, the next PING / TASK_STATS /
+    DEM_STATS snap answered normally. Nothing corrupted.
+  - DIRECT start while the FSM is Powered: state 99 `not_allowed`,
+    `enabled` false at once, target / cw unchanged a second later.
+  - GroupEnabling then failed with SMC 11000 (SMC_AXIS_GROUP_WRONG_STATE,
+    SMC_GroupDisable reported the same): the group was left in a state that
+    refuses Enable and Disable, most likely by the failed first download
+    (asda_stale_target doc, section 6, saw 11000 in a similar situation).
+    Cure as documented there: download again.
+- Third download (17:04, same code): UnInited -> Powered -> GroupEnabled ->
+  GA_EV 7 -> **Ready** with the virtual delta (skip-home on the drives' own
+  virtual flag works), back to UnInited, axes 0/0/0.
+- Not checked: GA_EV 7 with a real delta (needs the owner), REEL_RESUME
+  after a manual reel move, DIRECT's abort with the drive enabled.
+- Open: the PLC logger (`read_plc_log.py`) returns no entry newer than
+  2026-10-03 16:41 although downloads and errors happened since; the
+  logger may have stopped when full.
+
+Machine left: program 3e8e2b9, FSM UnInited, delta virtual and off, 7
+slaves OP.
