@@ -12,12 +12,14 @@ END_VAR
 // BindSlot and the up to 5 bytes would not fit, write nothing and flag the
 // slot (the post-write checks of the PackKv* helpers only saw the
 // overrun after the bytes were already in the next slot).
-IF (pSlot <> 0) AND (pStart >= pSlot^.buf) AND (pStart <= pSlot^.buf + pSlot^.buf_capacity) THEN
-	IF (pStart - pSlot^.buf) + 5 > TO_DINT(pSlot^.buf_capacity) THEN
-		bSlotOverflowed := TRUE;
-		pSlot^.overflowed := TRUE;
-		PackDINT := pStart;
-		RETURN;
+IF pSlot <> 0 THEN	// nested on purpose: ST's AND evaluates every operand (no short circuit)
+	IF (pStart >= pSlot^.buf) AND (pStart <= pSlot^.buf + pSlot^.buf_capacity) THEN
+		IF (pStart - pSlot^.buf) + 5 > TO_DINT(pSlot^.buf_capacity) THEN
+			bSlotOverflowed := TRUE;
+			pSlot^.overflowed := TRUE;
+			PackDINT := pStart;
+			RETURN;
+		END_IF;
 	END_IF;
 END_IF;
 // Compact signed encoding. Reader already accepts every marker below via

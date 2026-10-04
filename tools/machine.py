@@ -290,9 +290,15 @@ def safe_install(read_log=True):
     drives_off()
     lines = rpc("install", "--on-site", timeout=900)
     done = [l for l in lines if "download done" in l]
+    started = [l for l in lines if "post-start state:" in l and "run" in l.lower()]
+    failed = [l for l in lines if "EXCEPTION" in l or "did not start" in l or "install failed" in l]
     log("install:", done[0] if done else "\n".join(lines[-5:]))
-    if not done:
-        raise SystemExit("install did not complete")
+    # 2026-10-04: the download went through but the application did not
+    # start (exception in the first cycle); "download done" alone passed as
+    # success and the EtherCAT check further down was the only hint.
+    if not done or not started or failed:
+        raise SystemExit("install did not complete: %s" % "\n".join(failed or lines[-5:]))
+    log("install:", started[0])
     reconnect()
     time.sleep(3)
     ec = ethercat_state()
