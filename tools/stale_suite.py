@@ -34,7 +34,7 @@ def result(label):
     dm = mc.sys_cmd("DEM_STATS")
     e = mc.sys_cmd("EC_STATS")
     out = {"test": label, "lagnom": dm["lagnom"], "lost": e["lost"],
-           "arrival_us": [e["e_amin"], e["e_amax"], e["e_apeak"]], "easycat_stale": e["e_stale"]}
+           "arrival_us": [e.get("e_amin"), e.get("e_amax"), e.get("e_apeak")], "easycat_stale": e["e_stale"]}
     for k in range(3):
         h = [int(x) for x in dm["dl%d" % k].rstrip(",").split(",")]
         moving = sum(h[1:])

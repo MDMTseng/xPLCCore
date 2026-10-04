@@ -749,26 +749,6 @@ END_IF;
                     EcEvtI := EcEvtI + 1;
                 END_WHILE;
                 MessagePackerFb.PackKvStr(ADR('ev'), ADR(EcTrStr));
-            ELSIF (CommandType = 'ESP_ODD') THEN
-                // Odd SYNC0 intervals at the EasyCAT (GVL.OddLog*): n = events
-                // so far, cnt = the ESP32's counter, ev = up to 20 events
-                // from index from:i as ms:dev_us, comma separated.
-                ShouldReturn := TRUE;
-                CommandAck := TRUE;
-                ResponsePacketPointer^.ele_count := 0;
-                EcEvtFrom := LINT_TO_UDINT(MessageUnpackerFb.TryReadINT64('from', 0));
-                MessagePackerFb.PackKvLint(ADR('n'), UDINT_TO_LINT(GVL.OddLogN));
-                MessagePackerFb.PackKvDint(ADR('cnt'), UINT_TO_DINT(GVL.EspOddCount));
-                EcTrStr := '';
-                EcEvtI := EcEvtFrom;
-                WHILE (EcEvtI < GVL.OddLogN) AND (EcEvtI < EcEvtFrom + 20) DO
-                    EcTrStr := CONCAT(EcTrStr, UDINT_TO_STRING(GVL.OddLogMs[EcEvtI MOD 1024]));
-                    EcTrStr := CONCAT(EcTrStr, ':');
-                    EcTrStr := CONCAT(EcTrStr, INT_TO_STRING(GVL.OddLogDev[EcEvtI MOD 1024]));
-                    EcTrStr := CONCAT(EcTrStr, ',');
-                    EcEvtI := EcEvtI + 1;
-                END_WHILE;
-                MessagePackerFb.PackKvStr(ADR('ev'), ADR(EcTrStr));
             ELSIF (CommandType = 'DEM_EVT') THEN
                 // The delay-change event log of drive axis:k (GVL.DemEvt):
                 // n = events so far, ev = up to 20 entries from index from:i
@@ -996,14 +976,10 @@ END_IF;
                 MessagePackerFb.PackKvLint(ADR('tprev2'), UDINT_TO_LINT(GVL.TapEqPrev[2]));
                 MessagePackerFb.PackKvLint(ADR('tnone2'), UDINT_TO_LINT(GVL.TapEqNone[2]));
                 // EasyCAT bus timing probe: e_stale / e_skip since reset,
-                // e_amin / e_amax arrival after SYNC0 over the last second
-                // (us), e_apeak max since reset, e_late last second,
-                // e_late_sum since reset
+                // e_late last second, e_late_sum since reset (the arrival
+                // min / max moved to the per-100-ms ArrLog, SYS ESP_ARR)
                 MessagePackerFb.PackKvDint(ADR('e_stale'), UINT_TO_DINT(GVL.EspStale - GVL.EspStale0));
                 MessagePackerFb.PackKvDint(ADR('e_skip'), UINT_TO_DINT(GVL.EspSkip - GVL.EspSkip0));
-                MessagePackerFb.PackKvDint(ADR('e_amin'), UINT_TO_DINT(GVL.EspArrMinUs));
-                MessagePackerFb.PackKvDint(ADR('e_amax'), UINT_TO_DINT(GVL.EspArrMaxUs));
-                MessagePackerFb.PackKvDint(ADR('e_apeak'), UINT_TO_DINT(GVL.EspArrMaxPeak));
                 MessagePackerFb.PackKvDint(ADR('e_late'), UINT_TO_DINT(GVL.EspLate));
                 MessagePackerFb.PackKvLint(ADR('e_late_sum'), UDINT_TO_LINT(GVL.EspLateSum));
                 // e_pg / e_pd2 / e_pd2peak: EAxis0's target stream checked on the ESP32

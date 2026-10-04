@@ -287,7 +287,6 @@ IF GVL.EcProfReset THEN
         GVL.FeJumpMax[iFeK] := 0;
         GVL.FeJumpCount[iFeK] := 0;
     END_FOR;
-    GVL.EspArrMaxPeak := 0;
     GVL.EspLateSum := 0;
     GVL.EspStale0 := GVL.EspStale;
     GVL.EspSkip0 := GVL.EspSkip;
@@ -487,7 +486,6 @@ IF GVL.DemReset THEN
         GVL.DemD2Max[iProf] := 0;
         GVL.DemLate[iProf] := 0;
         GVL.DemEvtN[iProf] := 0;
-        GVL.OddLogN := 0;
         GVL.ArrLogN := 0;
         GVL.SyncLogN := 0;
         GVL.SyncOffCount[iProf] := 0;
@@ -507,9 +505,6 @@ ecat_esp_out10 := TO_USINT(SHR(GVL.EspSeq, 16) AND 16#FF);
 ecat_esp_out11 := TO_USINT(SHR(GVL.EspSeq, 24) AND 16#FF);
 GVL.EspStale := TO_UINT(ecat_esp_in22) + TO_UINT(ecat_esp_in23) * 256;
 GVL.EspSkip := TO_UINT(ecat_esp_in24) + TO_UINT(ecat_esp_in25) * 256;
-// Inputs 26-29: odd SYNC0 intervals (count, last deviation us) since the
-// 2026-10-01 firmware (were the arrival min / max); logged per event
-// (GVL.OddLog*).
 // Inputs 26-27: this SYNC0 interval minus the cycle, ns (MCPWM capture,
 // 2026-10-01 firmware); logged per 100 ms (GVL.SyncLog*).
 GVL.EspSyncDevNs := UINT_TO_INT(TO_UINT(ecat_esp_in26) + TO_UINT(ecat_esp_in27) * 256);
@@ -528,7 +523,6 @@ IF udiNow - udiSyncBucket >= 100 THEN
     iSyncMin := 32767;
     iSyncMax := -32768;
 END_IF;
-GVL.EspOddDev := 0;
 // Inputs 28-29: frame arrival after SYNC0, us; logged per 100 ms (GVL.ArrLog*).
 GVL.EspArrUs := TO_UINT(ecat_esp_in28) + TO_UINT(ecat_esp_in29) * 256;
 IF GVL.EspArrUs <> 16#FFFF THEN
@@ -546,8 +540,6 @@ IF udiNow - udiArrBucket >= 100 THEN
     uiArrMin := 16#FFFF;
     uiArrMax := 0;
 END_IF;
-GVL.EspArrMinUs := 0;
-GVL.EspArrMaxUs := 0;
 
 GVL.EspLate := TO_UINT(ecat_esp_in30) + TO_UINT(ecat_esp_in31) * 256;
 ecat_esp_out12 := TO_USINT(GVL.TapTarget0 AND 16#FF);
@@ -557,7 +549,6 @@ ecat_esp_out15 := TO_USINT(SHR(GVL.TapTarget0, 24) AND 16#FF);
 GVL.EspPosGlitch := TO_UINT(ecat_esp_in11) + TO_UINT(ecat_esp_in12) * 256;
 GVL.EspPosD2Max := (TO_UDINT(ecat_esp_in13) + TO_UDINT(ecat_esp_in14) * 256) * 16;
 GVL.EspPosD2Peak := MAX(GVL.EspPosD2Peak, GVL.EspPosD2Max);
-GVL.EspArrMaxPeak := MAX(GVL.EspArrMaxPeak, GVL.EspArrMaxUs);
 // The ESP32 publishes a new min / max / late once a second; sum late per second.
 IF udiNow - udiEspSecPrev >= 1000 THEN
     udiEspSecPrev := udiNow;

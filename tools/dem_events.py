@@ -56,27 +56,10 @@ def read(axis):
 
 
 def read_odd():
-    n = mc.sys_cmd("ESP_ODD", **{"from": 0})["n"]
-    out = []
-    i = max(0, n - 1024)
-    while i < n:
-        ev = mc.sys_cmd("ESP_ODD", **{"from": i})["ev"].rstrip(",")
-        vals = [tuple(int(x) for x in e.split(":")) for e in ev.split(",") if e]
-        if not vals:
-            break
-        out += vals
-        i += len(vals)
-    singles, pairs = [], 0
-    k = 0
-    while k < len(out):
-        ms, dev = out[k]
-        if k + 1 < len(out) and out[k + 1][0] - ms <= 2 and abs(out[k + 1][1] + dev) <= 2:
-            pairs += 1
-            k += 2
-            continue
-        singles.append((ms, dev))
-        k += 1
-    return out, singles, pairs
+    """SYS ESP_ODD was removed from the PLC on 2026-10-05: its odd-SYNC0 log
+    was never written after the ESP32 moved to the MCPWM capture (it always
+    answered n=0). Kept so the JSON keeps its shape."""
+    return [], [], 0
 
 
 def read_arr():

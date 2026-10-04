@@ -117,6 +117,24 @@ PLC (codesys_code/Application):
 Deployment: the struct field changes the memory layout, so this needs a
 full download (`tools/safe_install.py`, drives off), not an online change.
 
+Step 2 of the plan, 2026-10-05 (dead variables and constants; the GVL
+split is deferred because it renames `GVL.*` symbols that the daemon's job
+templates read):
+- Removed: `GVL.EspOddCount / EspOddDev / OddLogMs / OddLogDev / OddLogN`
+  (never written since the ESP32 moved to the MCPWM capture) and the SYS
+  `ESP_ODD` command that read them (always `n=0`; `tools/dem_events.py`
+  keeps a stub); `GVL.EspArrMinUs / EspArrMaxUs / EspArrMaxPeak` (forced
+  to 0) and the `e_amin / e_amax / e_apeak` keys of `EC_STATS` (the per-100
+  ms ArrLog replaced them; `stale_suite.py` reads them with `.get`);
+  `GVL.reMP_info_SIZE`; AxisGroupSM `GroupReadPositionFb2`, `DBG_BLOCK`,
+  `TaskInstructionBufferSize`. About 6 KB less.
+- `VAR_GLOBAL CONSTANT` (end of GVL.st): `PROTOCOL_VERSION`,
+  `MAX_SLOT_PAYLOAD`, `VIRTUAL_MOTORS_TTL`, `AXIS_SIM_TTL_MS`,
+  `BUS_RESTART_COOLDOWN_MS`, `UI_HEARTBEAT_TIMEOUT_MS`,
+  `COORD1_MODE_LINEAR / TABLE`, `COORD1_CAM_MAX_POINTS` (now also the bound
+  of the `Coord1Cam*` arrays). They can no longer be forced online.
+- Build 0 errors / 98 warnings; full download (layout change).
+
 Host (tools/):
 - `topology.py` (new): PLC host/port from codesys_env.json, slave names and
   stations in tree order, `DRIVE_STATIONS`, `DELTA_VENDOR`; used by

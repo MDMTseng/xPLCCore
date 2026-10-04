@@ -17,7 +17,6 @@ VAR_GLOBAL
 	sysinfo_buf_ridx:FB_RingBufferIndex(8);
 
 
-	reMP_info_SIZE:INT:=32;
 	// Reply-buffer slot size. Bumped from 256 to 1024 on 2026-04-27 after
 	// observing slot[6].buf_size=304 in a live snapshot (GET_MACHINE_STATE
 	// reply overflowed). At 256 a >256-byte reply silently overran into the
@@ -77,7 +76,6 @@ VAR_GLOBAL
 	bVirtualMotorsMode_Request : BOOL;
 	bVirtualMotorsMode         : BOOL;
 	fbVirtualMotorsExpire      : Standard.TON;
-	VIRTUAL_MOTORS_TTL         : TIME := T#10M;
 
 	(* --- Per-axis simulation mask (bench mode, 2026-07-08).
 	   Lets the host run the reel-pull motor REAL while the delta trio is
@@ -126,7 +124,6 @@ VAR_GLOBAL
 	AxisSimConfigMask    : BYTE := 0;
 	AxisSimConfigCaptured : BOOL := FALSE;
 	AxisSimMaskSetMs     : LINT := 0;
-	AXIS_SIM_TTL_MS      : LINT := 600000;
 
 	(* --- PC simulation without a fieldbus (CODESYS Control Win, see
 	   memory local-softplc-sim). There the EtherCAT master can never
@@ -157,7 +154,6 @@ VAR_GLOBAL
 	   FALSE (default): only when the master reports an error or the last
 	   fault was the EtherCAT master (AxisGroupManager.Update). *)
 	BusRestartOnReset      : BOOL := FALSE;
-	BUS_RESTART_COOLDOWN_MS : LINT := 30000;
 
 	(* --- Ring-buffer safety (ringbuf-bugs.md, Bundle 1).
 	   Slots in minfo_buf are 256 bytes: 1 length byte + 255 payload.
@@ -169,7 +165,6 @@ VAR_GLOBAL
 	   Both counters are diagnostic only -- sustained growth means the
 	   client is slower than the PLC can pack, or something is spamming
 	   oversized packets. *)
-	MAX_SLOT_PAYLOAD : DINT := 255;
 	OverlenDropCount : UDINT := 0;
 	(* Overlength packet NAK hand-off: the Comm task records the dropped
 	   packet's id here and the EC task sends the NAK (it is the only
@@ -432,17 +427,6 @@ VAR_GLOBAL
 	   (DemEvtN - 1) MOD 1024). SYS DEM_EVT reads it; DEM_STATS reset:1
 	   clears it. Used to compare the burst times of the three drives. *)
 	DemEvt          : ARRAY[0..2, 0..1023] OF UDINT;
-	(* Odd SYNC0 intervals seen by the EasyCAT (firmware inputs 26-29):
-	   SYNC0-to-SYNC0 off the cycle by more than 3 us, timed by the ESP32.
-	   A shift of the DC system time moves every slave's SYNC0 at once.
-	   Each new one is logged with the PLC ms and the deviation (us),
-	   ring of 1024, OddLogN counts all. SYS ESP_ODD reads it; DEM_STATS
-	   reset:1 clears it. *)
-	EspOddCount     : UINT;
-	EspOddDev       : INT;
-	OddLogMs        : ARRAY[0..1023] OF UDINT;
-	OddLogDev       : ARRAY[0..1023] OF INT;
-	OddLogN         : UDINT;
 	(* Frame arrival at the EasyCAT (end of the line): the output SM event
 	   after its SYNC0, us, timed by the ESP32's interrupts (firmware inputs
 	   28-29; 16#FFFF = no frame in that cycle). Logged as min / max per
@@ -501,10 +485,7 @@ VAR_GLOBAL
 	EspSeq          : UDINT;
 	EspStale        : UINT;
 	EspSkip         : UINT;
-	EspArrMinUs     : UINT;
-	EspArrMaxUs     : UINT;
 	EspLate         : UINT;
-	EspArrMaxPeak   : UINT;      (* max of EspArrMaxUs since EcProfReset *)
 	EspLateSum      : UDINT;     (* EspLate summed per second since EcProfReset *)
 	EspStale0       : UINT;      (* EspStale at EcProfReset *)
 	EspSkip0        : UINT;
@@ -670,7 +651,6 @@ VAR_GLOBAL
 	   most 12 moves). The lost host itself is found by the socket's idle
 	   watchdog (HostIdleTimeoutMs), which resets the connection and so
 	   runs the disconnect cleanup. *)
-	UI_HEARTBEAT_TIMEOUT_MS : LINT := 5000;
 	UiHeartbeatStaleCount   : UDINT := 0;
 	(* No byte from the host for this long: the connection is reset
 	   (FB_TcpMsgPakServer idle watchdog, GVL.IdleResetCount) and the
@@ -786,7 +766,6 @@ VAR_GLOBAL
 	   constant and the UI-side PROTOCOL_VERSION in PluginHello.tsx together
 	   whenever the wire format changes in a way old consumers can't handle.
 	   ProtocolVersionMismatchCount is the diagnostic counter. *)
-	PROTOCOL_VERSION : UDINT := 1;
 	ProtocolVersionMismatchCount : UDINT := 0;
 
 	(* TCP server stability counters (FB_TcpMsgPakServer).
@@ -936,19 +915,16 @@ VAR_GLOBAL
 	   field is editable without creating a new project object via
 	   IDE/script; trivial CASE labels read just as well. Update
 	   COORD1_MODE_* below in lockstep. *)
-	COORD1_MODE_LINEAR         : INT := 0;
-	COORD1_MODE_TABLE          : INT := 1;
 	Coord1CamMode              : INT := 0;
 	Coord1CamCount             : INT := 0;
-	Coord1CamMaster            : ARRAY [0..63] OF DINT;
-	Coord1CamX                 : ARRAY [0..63] OF REAL;
-	Coord1CamY                 : ARRAY [0..63] OF REAL;
-	Coord1CamZ                 : ARRAY [0..63] OF REAL;
+	Coord1CamMaster            : ARRAY [0..COORD1_CAM_MAX_POINTS-1] OF DINT;
+	Coord1CamX                 : ARRAY [0..COORD1_CAM_MAX_POINTS-1] OF REAL;
+	Coord1CamY                 : ARRAY [0..COORD1_CAM_MAX_POINTS-1] OF REAL;
+	Coord1CamZ                 : ARRAY [0..COORD1_CAM_MAX_POINTS-1] OF REAL;
 	Coord1ConflictNakCount     : UDINT := 0;
 	Coord1BadTableNakCount     : UDINT := 0;
 	Coord1NotBoundNakCount     : UDINT := 0;
 	Coord1BadFrameNakCount     : UDINT := 0;
-	COORD1_CAM_MAX_POINTS      : INT := 64;
 
 	(* Phase 4 step 3: tracking window + error reporting.
 	   Coord1ExitPulse: when ConveyorPulseRaw exceeds this, the active
@@ -1085,4 +1061,19 @@ VAR_GLOBAL
 	   FALSE on every cold start, set TRUE in AxisGroupSM after the
 	   first scan does the bump. *)
 	AppBootHandled : BOOL := FALSE;
+END_VAR
+
+(* Constants (2026-10-05): values the program never writes, moved out of
+   VAR_GLOBAL so that a stray write fails to compile. They can no longer
+   be forced online. Each one's description stays where it was declared. *)
+VAR_GLOBAL CONSTANT
+	VIRTUAL_MOTORS_TTL         : TIME := T#10M;
+	AXIS_SIM_TTL_MS      : LINT := 600000;
+	BUS_RESTART_COOLDOWN_MS : LINT := 30000;
+	MAX_SLOT_PAYLOAD : DINT := 255;
+	UI_HEARTBEAT_TIMEOUT_MS : LINT := 5000;
+	PROTOCOL_VERSION : UDINT := 1;
+	COORD1_MODE_LINEAR         : INT := 0;
+	COORD1_MODE_TABLE          : INT := 1;
+	COORD1_CAM_MAX_POINTS      : INT := 64;
 END_VAR

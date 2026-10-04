@@ -5,7 +5,6 @@ PROGRAM AxisGroupSM
         // 3 s), side/bottom shots, lights and a feeder refill at once; 10
         // ran out (flyevent_buffer_full, chaos seed 53, 2026-09-25).
         FlyEventBufferSize: UDINT := 32;
-        TaskInstructionBufferSize: UDINT := 10;
         FlyEventStageLimit: INT := 9;
 
         // Motion buffer fullness threshold: reject new 'M' packets when the
@@ -185,8 +184,6 @@ PROGRAM AxisGroupSM
         // CSE these but the source becomes much cleaner.
         pFly : POINTER TO FlyEventData;
 
-        // TaskInstructionBuffer: ARRAY [0..TaskInstructionBufferSize-1] OF TaskInstructionData; 
-        // TaskInstructionBuffer_ridx:FB_RingBufferIndex(TaskInstructionBufferSize);
 
 
 
@@ -202,7 +199,6 @@ PROGRAM AxisGroupSM
 
         GroupReadStatusFb: SM3_Robotics.MC_GroupReadStatus;
         GroupReadPositionFb: SM3_Robotics.SMC_GroupReadPositionInMovement;
-        GroupReadPositionFb2: SM3_Robotics.SMC_GroupReadPositionInMovement;
 
         MotionBufferSize: ULINT;
         CurrentMovementId: SMC_Movement_Id;
@@ -562,7 +558,6 @@ PROGRAM AxisGroupSM
     DbgSetCoordSeenDone     : BOOL := FALSE;
     DbgSetCoordSeenError    : BOOL := FALSE;
 
-    DBG_BLOCK : BOOL:=TRUE;
 
     // Coord1 cam-table lookup scratch (Phase 2). Reused each scan; values
     // meaningful only inside the lookup block immediately following the
