@@ -155,9 +155,21 @@ Host (tools/):
   virtual flag works), back to UnInited, axes 0/0/0.
 - Not checked: GA_EV 7 with a real delta (needs the owner), REEL_RESUME
   after a manual reel move, DIRECT's abort with the drive enabled.
-- Open: the PLC logger (`read_plc_log.py`) returns no entry newer than
-  2026-10-03 16:41 although downloads and errors happened since; the
-  logger may have stopped when full.
+- The "PLC logger returns nothing newer than 2026-10-03 16:41" scare was
+  the host's fault: `machine.save_plc_log` passed the job file as a path
+  relative to codesys_scripts while `rpc` runs in the repo root, so the
+  job never ran and the stale `plc_log_PlcLog.txt` came back every time
+  (fixed 2026-10-05: absolute path, and the call fails unless the job
+  reports `written:`; `read_plc_log.py` also died on the micro sign in
+  SoftMotion messages, now ASCII-only output). The PLC logger itself is a
+  normal 500-entry ring (CmpLog defaults).
+- 2026-10-05: UnInited held `SMC_GroupReset` / `SMC_GroupDisable` /
+  `fbResetReel` Execute TRUE every scan, which logged "GroupFBError 78:
+  there is no error to reset" every 3 s (and 2AF8 when the group was
+  already disabled), so the 500-entry ring held only minutes. They now
+  execute only with something to do (group in errorstop / not yet
+  disabled / reel in errorstop). Downloaded 01:42, FSM to Ready and back
+  fine, one such entry in the following 8 minutes instead of ~160.
 
 Machine left: program 3e8e2b9, FSM UnInited, delta virtual and off, 7
 slaves OP.

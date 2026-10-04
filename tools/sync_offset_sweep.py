@@ -28,7 +28,7 @@ def set_sync_offset(v):
     s = open(JOB).read()
     s = re.sub(r'^WANT = "\d+"', 'WANT = "%d"' % v, s, flags=re.M)
     open(JOB, "w").write(s)
-    out = mc.rpc("exec", "--file", "jobs/templates/set_ec_sync_offset.py", timeout=300)
+    out = mc.rpc("exec", "--file", os.path.join(mc.REPO, "codesys_scripts", "jobs", "templates", "set_ec_sync_offset.py"), timeout=300)
     log(" ".join(l for l in out if "SyncOffset" in l) or out[-1:])
 
 

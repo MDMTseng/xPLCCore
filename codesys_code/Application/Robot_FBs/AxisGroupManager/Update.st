@@ -81,11 +81,20 @@ CASE _eState OF
         END_IF
 
         IF(uidx=0)THEN // On Update
-            SMC_GroupDisable(AxisGroup:=_agAxisGroup, Execute:=TRUE);
-            SMC_GroupReset(AxisGroup:=_agAxisGroup, Execute:=TRUE);
+            // 2026-10-05: execute only when there is something to do. Held
+            // TRUE, the reset logged "GroupFBError 78: there is no error to
+            // reset" every 3 s and the disable "2AF8 wrong state" whenever
+            // the group was already disabled; the PLC logger (500 entries,
+            // stops when full) was full within minutes of every UnInited,
+            // which is why the 2026-10-03/04 dropouts left no log.
+            SMC_GroupReset(AxisGroup:=_agAxisGroup,
+                           Execute:=AxisGroupSM.GroupReadStatusFb.GroupErrorStop);
+            SMC_GroupDisable(AxisGroup:=_agAxisGroup,
+                             Execute:=NOT AxisGroupSM.GroupReadStatusFb.GroupDisabled
+                                      AND NOT AxisGroupSM.GroupReadStatusFb.GroupErrorStop);
 
-            // Reset the single motor
-            fbResetReel(Axis:= _axReel, Execute:=TRUE);
+            // Reset the single motor only while it is in errorstop
+            fbResetReel(Axis:= _axReel, Execute:=(_axReel.nAxisState = SMC_AXIS_STATE.errorstop));
 
             IoConfig_Globals.EtherCAT_Master_SoftMotion();
             IoConfig_Globals.EtherCAT_Master_SoftMotion.xRestart:=FALSE;

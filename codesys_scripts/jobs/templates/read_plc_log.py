@@ -35,10 +35,14 @@ OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)) if "__file__" 
 
 
 def t(v):
+    """ASCII only: the daemon captures stdout through cStringIO and the
+    file is written in text mode, and both choked on the micro sign in
+    SoftMotion's "... us" messages (UnicodeDecodeError 2026-10-04); the job
+    then died and left the previous plc_log_*.txt in place."""
     try:
-        if isinstance(v, unicode):
-            return v.encode("utf-8", "replace")
-        return str(v)
+        if not isinstance(v, unicode):
+            v = unicode(v)
+        return v.replace(u"\xb5", u"u").encode("ascii", "replace")
     except Exception:
         return "?"
 

@@ -317,8 +317,16 @@ def ethercat_state():
 def save_plc_log():
     """Read the PLC runtime log (500 entries) into
     codesys_scripts/jobs/plc_log_PlcLog.txt and return its path."""
-    rpc("exec", "--readonly", "--file", "jobs/templates/read_plc_log.py", timeout=200)
-    return os.path.join(REPO, "codesys_scripts", "jobs", "plc_log_PlcLog.txt")
+    # Absolute: rpc runs with cwd=REPO, so the old relative path was never
+    # found and every caller got the stale file back (2026-10-05).
+    job = os.path.join(REPO, "codesys_scripts", "jobs", "templates", "read_plc_log.py")
+    lines = rpc("exec", "--readonly", "--file", job, timeout=200)
+    path = os.path.join(REPO, "codesys_scripts", "jobs", "plc_log_PlcLog.txt")
+    # 2026-10-05: a failed job (it died on a non-ASCII log message) left the
+    # old file in place and this returned it as if it were fresh.
+    if not any("written:" in l for l in lines):
+        raise SystemExit("PLC log not read:\n" + "\n".join(lines[-6:]))
+    return path
 
 
 def safe_install(read_log=True):
