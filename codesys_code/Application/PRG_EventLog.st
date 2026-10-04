@@ -773,14 +773,23 @@ IF GVL.DirEnable THEN
         5:  // done: hold
             GVL.TapTarget0 := diDirTarget;
             GVL.CtlTap0 := 16#000F;
-    ELSE    // 99 aborted: disable the drive, hold
+    ELSE    // 99 aborted: disable the drive once, then leave the outputs alone
+        // (2026-10-04: this used to write target + controlword every cycle
+        // for as long as DirEnable stayed TRUE, i.e. until a host 'stop' --
+        // also after EAxis0 had gone back to a real SoftMotion drive). The
+        // state stays 99 so SYS DIRECT still reports the abort reason.
+        IF xDirAllowed THEN
+            GVL.TapTarget0 := GVL.ActualTap0;
+            GVL.CtlTap0 := 16#0006;
+        END_IF;
+        GVL.DirEnable := FALSE;
+    END_CASE;
+ELSIF (GVL.DirState <> 0) AND (GVL.DirState <> 99) THEN
+    // stop: disable the drive once, then leave the outputs alone
+    IF xDirAllowed THEN
         GVL.TapTarget0 := GVL.ActualTap0;
         GVL.CtlTap0 := 16#0006;
-    END_CASE;
-ELSIF GVL.DirState <> 0 THEN
-    // stop: disable the drive once, then leave the outputs alone
-    GVL.TapTarget0 := GVL.ActualTap0;
-    GVL.CtlTap0 := 16#0006;
+    END_IF;
     GVL.DirState := 0;
 END_IF;
 GVL.DirRunning := GVL.DirEnable AND ((GVL.DirState = 4) OR (GVL.DirState = 5));

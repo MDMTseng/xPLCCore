@@ -40,7 +40,19 @@ END_VAR
 	    pbyChar := pbyChar + 1;
 	END_FOR;
 	// -------------------------------------------------
-	
+
+	// Bound-slot guard (2026-10-04): if pStart lies in the slot bound by
+	// BindSlot and the header + string bytes would not fit, write nothing and flag the
+	// slot (the post-write checks of the PackKv* helpers only saw the
+	// overrun after the bytes were already in the next slot).
+	IF (pSlot <> 0) AND (pStart >= pSlot^.buf) AND (pStart <= pSlot^.buf + pSlot^.buf_capacity) THEN
+		IF (pStart - pSlot^.buf) + TO_DINT(nLen) + 3 > TO_DINT(pSlot^.buf_capacity) THEN
+			bSlotOverflowed := TRUE;
+			pSlot^.overflowed := TRUE;
+			PackString := pStart;
+			RETURN;
+		END_IF;
+	END_IF;
 	IF nLen <= 31 THEN
 		pStart^ := 16#A0 + UDINT_TO_BYTE(nLen);
 		pStart := pStart + 1;

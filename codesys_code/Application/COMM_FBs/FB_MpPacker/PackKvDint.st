@@ -9,7 +9,7 @@ IF bSlotOverflowed THEN PackKvDint := FALSE; RETURN; END_IF
 pSlot^.whead := PackString(pStart := pSlot^.whead, psValue := psKey);
 pSlot^.whead := PackDINT(pStart := pSlot^.whead, diValue := diVal);
 pSlot^.ele_count := pSlot^.ele_count + 1;
-IF (pSlot^.whead - pSlot^.buf) > TO_DINT(pSlot^.buf_capacity) THEN
+IF bSlotOverflowed OR ((pSlot^.whead - pSlot^.buf) > TO_DINT(pSlot^.buf_capacity)) THEN
     bSlotOverflowed := TRUE;
     PackKvDint := FALSE;
 ELSE

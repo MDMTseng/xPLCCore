@@ -11,7 +11,7 @@ IF bSlotOverflowed THEN PackKvArray := FALSE; RETURN; END_IF
 pSlot^.whead := PackString(pStart := pSlot^.whead, psValue := psKey);
 pSlot^.whead := PackArrayHeader(pStart := pSlot^.whead, uiCount := uiInnerN);
 pSlot^.ele_count := pSlot^.ele_count + 1;
-IF (pSlot^.whead - pSlot^.buf) > TO_DINT(pSlot^.buf_capacity) THEN
+IF bSlotOverflowed OR ((pSlot^.whead - pSlot^.buf) > TO_DINT(pSlot^.buf_capacity)) THEN
     bSlotOverflowed := TRUE;
     PackKvArray := FALSE;
 ELSE

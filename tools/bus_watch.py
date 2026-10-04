@@ -18,11 +18,11 @@ import sys
 import time
 
 import machine as mc
+import topology as tp
 from machine import log
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SLAVES = ["EC0808DN", "QEC_R11MP3S_V", "reel_pull_motor", "ASDA_B3_E_CoE_Drive",
-          "ASDA_B3_E_CoE_Drive_1", "ASDA_B3_E_CoE_Drive_2", "EasyCAT"]
+SLAVES = tp.SLAVE_NAMES
 SHORT = {"ETC_SLAVE_STATE.ETC_SLAVE_OPERATIONAL": "OP", "ETC_SLAVE_STATE.ETC_SLAVE_SAVEOPERATIONAL": "SAFE-OP",
          "ETC_SLAVE_STATE.ETC_SLAVE_PREOPERATIONAL": "PRE-OP", "ETC_SLAVE_STATE.ETC_SLAVE_INIT": "INIT",
          "INT#0": "0"}

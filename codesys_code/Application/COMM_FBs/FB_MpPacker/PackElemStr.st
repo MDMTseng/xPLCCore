@@ -8,7 +8,7 @@ END_VAR
 // outer key + array header (PackKvArray) already counted itself.
 IF bSlotOverflowed THEN PackElemStr := FALSE; RETURN; END_IF
 pSlot^.whead := PackString(pStart := pSlot^.whead, psValue := psVal);
-IF (pSlot^.whead - pSlot^.buf) > TO_DINT(pSlot^.buf_capacity) THEN
+IF bSlotOverflowed OR ((pSlot^.whead - pSlot^.buf) > TO_DINT(pSlot^.buf_capacity)) THEN
     bSlotOverflowed := TRUE;
     PackElemStr := FALSE;
 ELSE

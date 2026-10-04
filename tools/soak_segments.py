@@ -51,8 +51,12 @@ def main():
     argv = sys.argv[1:]
     rest = argv[argv.index("--") + 1:] if "--" in argv else []
     own = argv[:argv.index("--")] if "--" in argv else argv
-    if "--owner-ok" not in own:
-        raise SystemExit("REFUSED: pass --owner-ok (the real delta moves)")
+    # The same gate as every other tool (machine.require_owner_ok: the flag
+    # or XPLC_OWNER_OK=1); imported here, after argv is read, because
+    # machine.py swaps sys.argv while it imports run_virtual.
+    sys.path.insert(0, HERE)
+    import machine as mc
+    mc.require_owner_ok("--owner-ok" in own)
     segments = opt(own, "--segments", 3, int)
     hours = opt(own, "--hours", 0.0, float)
     recover = opt(own, "--recover", 0, int)

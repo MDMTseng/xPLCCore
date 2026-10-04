@@ -18,5 +18,6 @@ retStruct.buf:=buff;
 retStruct.useLargeElementCountField:=useLargeElementCountField;
 retStruct.ele_count:=0;
 retStruct.buf_size:=0;
+retStruct.overflowed:=FALSE;
 retStruct.whead := mpPacker.PackMapHeader(pStart := buff, uiCount := TO_UINT(0), bForceLargeField := useLargeElementCountField); // just a place holder
 MsgPakInfoInit:=retStruct;

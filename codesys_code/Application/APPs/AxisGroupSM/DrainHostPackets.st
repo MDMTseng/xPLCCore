@@ -1293,12 +1293,11 @@ END_IF;
                 // recorded travel no longer says where the tape is.
                 ReelPosDelta := reelpullmotor.fActPosition - GVL.ReelMvStopPos;
                 IF reelpullmotor.fPositionPeriod > 0 THEN
-                    WHILE ReelPosDelta > reelpullmotor.fPositionPeriod / 2 DO
-                        ReelPosDelta := ReelPosDelta - reelpullmotor.fPositionPeriod;
-                    END_WHILE;
-                    WHILE ReelPosDelta < -reelpullmotor.fPositionPeriod / 2 DO
-                        ReelPosDelta := ReelPosDelta + reelpullmotor.fPositionPeriod;
-                    END_WHILE;
+                    // Wrap into [-period/2, period/2] in one step (LREAL_TO_LINT
+                    // rounds to nearest). 2026-10-04: this was a pair of WHILE
+                    // loops, one turn per iteration and no cap, in the 1 ms task.
+                    ReelPosDelta := ReelPosDelta - reelpullmotor.fPositionPeriod
+                        * LINT_TO_LREAL(LREAL_TO_LINT(ReelPosDelta / reelpullmotor.fPositionPeriod));
                 END_IF;
                 IF GVL.ReelMvOpen AND NOT ReelTrkActive AND (ABS(ReelPosDelta) > REEL_POS_TOL_MM) THEN
                     GVL.ReelMvPosLost := TRUE;

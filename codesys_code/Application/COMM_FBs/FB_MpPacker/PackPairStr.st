@@ -10,7 +10,7 @@ END_VAR
 IF bSlotOverflowed THEN PackPairStr := FALSE; RETURN; END_IF
 pSlot^.whead := PackString(pStart := pSlot^.whead, psValue := psKey);
 pSlot^.whead := PackString(pStart := pSlot^.whead, psValue := psVal);
-IF (pSlot^.whead - pSlot^.buf) > TO_DINT(pSlot^.buf_capacity) THEN
+IF bSlotOverflowed OR ((pSlot^.whead - pSlot^.buf) > TO_DINT(pSlot^.buf_capacity)) THEN
     bSlotOverflowed := TRUE;
     PackPairStr := FALSE;
 ELSE

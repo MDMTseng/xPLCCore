@@ -66,6 +66,8 @@ def main():
         mc.sys_cmd("JOINT_STOP")
         show()
     elif a.what == "powered":
+        if not mc.is_delta_virtual():
+            mc.require_owner_ok(a.owner_ok)      # powers the real drives
         mc.fsm_to("Powered")
         log("FSM -> Powered")
         show()
@@ -78,6 +80,8 @@ def main():
             mc.require_owner_ok(a.owner_ok)
         run_move(a.axis, a.dist, a.vel, a.what == "seek")
     elif a.what in ("real", "virtual"):
+        if a.what == "real":
+            mc.require_owner_ok(a.owner_ok)      # from here on the delta is real
         mc.set_delta(a.what == "real")
         log("axes_sim_mask", mc.delta_mask())
         show()

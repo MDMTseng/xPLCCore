@@ -194,6 +194,11 @@ def main():
                 # (state 1), so drives_off() refuses; DELTA_MODE real:0
                 # re-initialises them as virtual, which clears it.
                 log("set_delta refused (%s): DELTA_MODE real:0 directly" % e)
+                # Only for axes that are off (0) or in errorstop (1): a
+                # powered or moving axis must go through drives_off().
+                st = mc.axis_states()
+                if any(s not in (0, 1) for s in st):
+                    raise SystemExit("delta axes %s not off/errorstop: not switching to virtual" % st)
                 mc.sys_cmd("DELTA_MODE", real=0)
                 for _ in range(40):
                     if mc.delta_mask() == 7:

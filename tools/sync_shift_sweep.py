@@ -24,10 +24,11 @@ import re
 import time
 
 import machine as mc
+import topology as tp
 from machine import log
 
 JOB = os.path.join(mc.REPO, "codesys_scripts", "jobs", "templates", "set_drive_sync_shift.py")
-STATIONS = (1004, 1005, 1006)    # EAxis0/1/2 since the 2026-10-02 slave reorder
+STATIONS = tuple(tp.DRIVE_STATIONS[k] for k in range(3))    # EAxis0/1/2
 
 
 def set_shift(value):
@@ -87,12 +88,19 @@ def run_z(seconds):
 
 
 def virtual():
+    """Delta back to virtual; raises if it did not happen (2026-10-04: this
+    used to return quietly after five failed tries, leaving a real delta
+    that the caller believed virtual)."""
+    err = None
     for _ in range(5):
         try:
             mc.set_delta(real=False)
             return
-        except Exception:
+        except Exception as e:
+            err = e
+            log("set_delta(virtual) failed: %s" % e)
             time.sleep(3)
+    raise SystemExit("delta NOT back to virtual (mask %s): %s" % (mc.delta_mask(), err))
 
 
 def main():

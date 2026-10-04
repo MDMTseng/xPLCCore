@@ -796,12 +796,13 @@ GVL.EcProfT0 := LTIME();
         GVL.AxisSimConfigMask := GVL.AxisSimMaskApplied;
         GVL.AxisSimConfigCaptured := TRUE;
     END_IF;
-    // Published effective mask: live drive state, with the legacy
-    // all-axes gate OR'd in for backward compatibility (the daemon-
-    // forced flag never touched drives pre-2026-07-08 and still
-    // doesn't -- it only declares the all-virtual rig state, exactly
-    // as the FORCE_SKIP gate always has).
-    GVL.AxisSimMask := GVL.AxisSimMaskApplied OR SEL(GVL.bVirtualMotorsMode, 16#00, 16#0F);
+    // Published effective mask: the live drive state only. 2026-10-04:
+    // before, the legacy all-axes gate GVL.bVirtualMotorsMode was OR'd
+    // in, so a forced flag made the host see real drives as virtual --
+    // and the host's safety checks (machine.is_delta_virtual) trust this
+    // mask. The legacy flag still feeds the desired mask below, where it
+    // is applied to the drives once a host SET_AXIS_SIM has been seen.
+    GVL.AxisSimMask := GVL.AxisSimMaskApplied;
 
     IF AxisGroupManagerFb._eState = E_RobotState.UnInited THEN
         // Request TTL: RuntimeMs deadline re-stamped on every accepted
@@ -1572,7 +1573,13 @@ END_IF;
 
     
     ProcessFlyEventsAndIo();
-    
+
+    // ProcessFlyEventsAndIo can raise EV_ERROR (Coord1 bind, coordinate
+    // transform) and Transition switches the state on the spot: do not
+    // hand a motion packet to the group in the same scan (2026-10-04).
+    IF AxisGroupManagerFb._eState <> E_RobotState.Ready THEN
+        RETURN;
+    END_IF;
 
     reelpullmotor_fActPosition:=reelpullmotor.fActPosition;
     

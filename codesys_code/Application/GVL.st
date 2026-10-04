@@ -289,8 +289,9 @@ VAR_GLOBAL
 	DiD2Max         : ARRAY[0..2] OF DINT;
 	(* Read-only taps on the process image: the Target Position PDO that
 	   SoftMotion's ASDA driver puts in the frame for EAxis0/1/2 (channel
-	   addresses from jobs/templates/dump_drive_target_addr.py). Never
-	   written by the application. *)
+	   addresses from jobs/templates/dump_drive_target_addr.py). Written
+	   by the application only in the DIRECT test (PRG_EventLog), and
+	   only while EAxis0 is virtual in SoftMotion. *)
 	TapTarget0      AT %QD46 : DINT;
 	TapTarget1      AT %QD50 : DINT;
 	TapTarget2      AT %QD54 : DINT;

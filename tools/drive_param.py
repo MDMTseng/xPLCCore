@@ -24,10 +24,11 @@ import re
 import time
 
 import machine as mc
+import topology as tp
 from machine import log
 
-STATIONS = {0: 1004, 1: 1005, 2: 1006}
-DELTA_VENDOR = 0x1DD
+STATIONS = tp.DRIVE_STATIONS
+DELTA_VENDOR = tp.DELTA_VENDOR
 _checked = set()
 BACKUP = os.path.join(mc.REPO, "codesys_scripts", "jobs", "drive_params_backup.json")
 
