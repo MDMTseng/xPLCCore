@@ -55,6 +55,9 @@ VAR_GLOBAL
 	// the corruption already happened upstream, but a non-zero count means
 	// the buf size needs raising or a reply path is unbounded.
 	ReMpOverflowDropCount : UDINT := 0;
+	// Diagnostic replies (PRG_DiagReply, Comm task) the socket would not
+	// take or that overflowed their 2 KB buffer. 2026-10-05.
+	DiagReplySendDrop : UDINT := 0;
 
 
 	(* --- MsgPack self-test harness (bypasses web UI).

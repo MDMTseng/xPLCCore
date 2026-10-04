@@ -27,6 +27,7 @@ One-off probes live in `_archive/`. Regenerate this file with
 | `clear_biSetPos.py` | edits project | Remove the leftover manual mapping of EAxis1's Target Position PDO (ASDA_B3_E_CoE_Drive_1) to the unused variable biSetPos at %QD16, and give the channel an automatic address again (2026-10-02; noted as a leftover in doc |
 | `cold_reset.py` | PLC session, resets PLC | Cold-reset the application on the PLC, then start it again. |
 | `create_coord1_bind_methods.py` | edits project | Create the Coord1CommitBind / Coord1LatchWindowError method POUs under PROGRAM AxisGroupSM so import_all can resolve the new .st files (B3 fix, single bind-commit + single error-snapshot latch for the SYS and FlyEvent CO |
+| `create_diag_reply.py` | edits project, PLC session | Create PRG_DiagReply: the read-only diagnostic SYS commands (EC_STATS, DWELL, SETTLE, DEM_*, ESP_*, FB_STATS, TASK_STATS, IO_STATE, VERSION, GET_DIAG) answered in the Comm task. |
 | `create_drain_host_packets.py` | edits project | Create the DrainHostPackets method POU under PROGRAM AxisGroupSM so import_all can resolve the new .st file. |
 | `create_ecat_esp_http.py` | edits project, PLC session | Create PRG_EcatEspHttp: a tiny HTTP status page served by the PLC itself for the EasyCAT + ESP32 + encoder slave. |
 | `create_ecat_esp_probe.py` | edits project, PLC session | Create PRG_EcatEsp: exercises the EasyCAT PRO + ESP32 slave from EtherCAT_Task. |

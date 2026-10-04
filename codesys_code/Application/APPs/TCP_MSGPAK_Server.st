@@ -66,6 +66,7 @@ VAR
 	RouteType     : STRING;
 	RouteCmd      : STRING;
 	RouteToSys    : BOOL;
+	RouteToDiag : BOOL;   // -> PRG_DiagReply (Comm task), 2026-10-05
 	CommIter      : INT;     // packets taken / replies sent this scan
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
@@ -140,14 +141,30 @@ IF fbMyServer.PKT_IDX > TMP_PKT_IDX THEN
 		RouteUnpacker.Init(ADR(fbMyServer.BUFFER_PTR[0]), DINT_TO_UDINT(fbMyServer.BUFFER_LEN));
 		RouteType := RouteUnpacker.TryReadString('type', '');
 		RouteCmd  := RouteUnpacker.TryReadString('cmd', '');
+		// Read-only diagnostics go to PRG_DiagReply here in the Comm task
+		// (2026-10-05): they used to be built in the 1 ms EtherCAT task
+		// (EC_STATS ~1 KB). The reply goes straight to the socket; the
+		// reply ring keeps its single producer.
+		RouteToDiag := (RouteType = 'SYS') AND (
+			RouteCmd = 'SETTLE_TRACE' OR RouteCmd = 'SETTLE' OR RouteCmd = 'DWELL' OR RouteCmd = 'FB_STATS' OR RouteCmd = 'ESP_SYNC' OR RouteCmd = 'ESP_ARR'
+			OR RouteCmd = 'DEM_EVT' OR RouteCmd = 'DEM_STATS' OR RouteCmd = 'EC_STATS' OR RouteCmd = 'TASK_STATS' OR RouteCmd = 'VERSION'
+			OR RouteCmd = 'GET_DIAG');
 		RouteToSys := (RouteType = 'SYS') AND (
-			RouteCmd = 'PING' OR RouteCmd = 'GA_EV' OR RouteCmd = 'GET_MACHINE_STATE'
-			OR RouteCmd = 'GET_DIAG' OR RouteCmd = 'VERSION' OR RouteCmd = 'RESET_DBG_INFO'
-			OR RouteCmd = 'SET_AXIS_SIM' OR RouteCmd = 'GET_COORD1_DEBUG' OR RouteCmd = 'EVT_MARK'
-			OR RouteCmd = 'PLAN_GET' OR RouteCmd = 'SET_OVERRIDE' OR RouteCmd = 'DI_WATCH' OR RouteCmd = 'TASK_STATS'
-			OR RouteCmd = 'AXIS_INFO' OR RouteCmd = 'IO_STATE' OR RouteCmd = 'EC_STATS' OR RouteCmd = 'DEM_STATS' OR RouteCmd = 'DRV_SDO' OR RouteCmd = 'DRV_SDO_RESULT' OR RouteCmd = 'DIRECT' OR RouteCmd = 'DEM_EVT' OR RouteCmd = 'ESP_ARR' OR RouteCmd = 'ESP_SYNC' OR RouteCmd = 'FB_STATS' OR RouteCmd = 'SETTLE' OR RouteCmd = 'DWELL' OR RouteCmd = 'SETTLE_TRACE' OR RouteCmd = 'DELTA_MODE'
-			OR RouteCmd = 'JOINT_MOVE' OR RouteCmd = 'JOINT_STOP' OR RouteCmd = 'JOINT_STATE');
-		IF RouteToSys AND (GVL.sysinfo_buf_ridx.Space() > 0) THEN
+			RouteCmd = 'PING' OR RouteCmd = 'IO_STATE' OR RouteCmd = 'GA_EV' OR RouteCmd = 'GET_MACHINE_STATE' OR RouteCmd = 'RESET_DBG_INFO' OR RouteCmd = 'SET_AXIS_SIM' OR RouteCmd = 'GET_COORD1_DEBUG'
+			OR RouteCmd = 'EVT_MARK' OR RouteCmd = 'PLAN_GET' OR RouteCmd = 'SET_OVERRIDE' OR RouteCmd = 'DI_WATCH' OR RouteCmd = 'AXIS_INFO' OR RouteCmd = 'DRV_SDO'
+			OR RouteCmd = 'DRV_SDO_RESULT' OR RouteCmd = 'DIRECT' OR RouteCmd = 'DELTA_MODE' OR RouteCmd = 'JOINT_MOVE' OR RouteCmd = 'JOINT_STOP' OR RouteCmd = 'JOINT_STATE');
+		IF RouteToDiag THEN
+			MEMUtils.MemCpy(ADR(PRG_DiagReply.ReqBuf[0]), ADR(fbMyServer.BUFFER_PTR[0]), DINT_TO_UINT(fbMyServer.BUFFER_LEN));
+			PRG_DiagReply.ReqLen := DINT_TO_UDINT(fbMyServer.BUFFER_LEN);
+			PRG_DiagReply();
+			IF PRG_DiagReply.OutLen > 0 THEN
+				IF NOT fbMyServer.Send(BUFFER_PTR := ADR(PRG_DiagReply.OutBuf[0]), BUFFER_LEN := PRG_DiagReply.OutLen) THEN
+					GVL.DiagReplySendDrop := GVL.DiagReplySendDrop + 1;
+				END_IF;
+			ELSE
+				GVL.DiagReplySendDrop := GVL.DiagReplySendDrop + 1;   // reply did not fit (Wrapup refused)
+			END_IF;
+		ELSIF RouteToSys AND (GVL.sysinfo_buf_ridx.Space() > 0) THEN
 			tmp_ptr:=ADR(GVL.sysinfo_buf[GVL.sysinfo_buf_ridx.GetHead()][0]);
 			tmp_ptr[0]:=DINT_TO_BYTE(fbMyServer.BUFFER_LEN);
 			MEMUtils.MemCpy(ADR(tmp_ptr[1]),ADR(fbMyServer.BUFFER_PTR[0]),DINT_TO_UINT(fbMyServer.BUFFER_LEN));

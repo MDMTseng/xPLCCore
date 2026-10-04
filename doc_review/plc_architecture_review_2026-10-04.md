@@ -135,6 +135,24 @@ templates read):
   of the `Coord1Cam*` arrays). They can no longer be forced online.
 - Build 0 errors / 98 warnings; full download (layout change).
 
+Step 4a, 2026-10-05 (diagnostics out of the 1 ms task):
+- New `PRG_DiagReply` (codesys_code/Application/PRG_DiagReply.st, created
+  with jobs/templates/create_diag_reply.py; not in a task of its own).
+  `TCP_MSGPAK_Server` (Comm task, 5 ms) routes these SYS commands to it and
+  sends the reply straight to the socket: `SETTLE_TRACE`, `SETTLE`,
+  `DWELL`, `FB_STATS`, `ESP_SYNC`, `ESP_ARR`, `DEM_EVT`, `DEM_STATS`,
+  `EC_STATS`, `TASK_STATS`, `VERSION`, `GET_DIAG`. The handler bodies moved
+  verbatim (own packer / unpacker instances, `AxisGroupSM.*` reads
+  qualified); DrainHostPackets lost ~570 lines. The reply ring keeps its
+  single producer; the diagnostic reply buffer is 2 KB (was a 1 KB slot).
+  `GVL.DiagReplySendDrop` counts replies the socket refused or that did
+  not fit; `PRG_DiagReply.HandledCount / UnknownCount`.
+- Stayed in the EtherCAT task: `IO_STATE` (clears `AxisGroupSM.IoChg` on
+  read: a cross-task write), `AXIS_INFO` (axis references, peak reset),
+  `GET_COORD1_DEBUG`, and everything that acts.
+- Wire format unchanged; replies may now overtake EC-task replies (ids
+  pair them anyway). Build 0 errors / 101 warnings.
+
 Host (tools/):
 - `topology.py` (new): PLC host/port from codesys_env.json, slave names and
   stations in tree order, `DRIVE_STATIONS`, `DELTA_VENDOR`; used by
