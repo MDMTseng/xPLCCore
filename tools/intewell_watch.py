@@ -13,10 +13,12 @@ import argparse
 import socket
 import time
 
+import topology as tp
+
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--host", default="192.168.1.70")
+    ap.add_argument("--host", default=tp.PLC_HOST)
     ap.add_argument("--out", default="intewell_watch.log")
     ap.add_argument("--period", type=float, default=0.7)
     a = ap.parse_args()

@@ -26,6 +26,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from plc_direct import Plc, Nak  # noqa: E402
+import topology as tp  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RPC = [sys.executable, os.path.join(REPO, "codesys_scripts", "rpc.py")]
@@ -189,7 +190,7 @@ def phase(name, seconds, p=None, loads=()):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--plc", default="192.168.1.70")
+    ap.add_argument("--plc", default=tp.PLC_HOST)
     ap.add_argument("--seconds", type=float, default=20)
     ap.add_argument("--rounds", type=int, default=0, help="instead of the phases: N rounds of full load")
     a = ap.parse_args()

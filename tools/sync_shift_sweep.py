@@ -46,13 +46,11 @@ def set_shift(value):
 
 
 def sdo_read(station, index, sub, size):
-    seq = mc.sys_cmd("DRV_SDO", station=station, index=index, sub=sub, size=size)["seq_req"]
-    for _ in range(50):
-        r = mc.sys_cmd("DRV_SDO_RESULT")
-        if not r["active"] and r["seq_res"] == seq:
-            return r["value"] if r["ok"] else "err %s" % r["sdo_err"]
-        time.sleep(0.2)
-    return "no result"
+    """machine.drive_sdo, but a failure comes back as text for the log line."""
+    try:
+        return mc.drive_sdo(station, index, sub=sub, size=size)
+    except SystemExit as e:
+        return "err %s" % e
 
 
 def run_z(seconds):

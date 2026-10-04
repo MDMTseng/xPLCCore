@@ -23,6 +23,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from plc_direct import Plc, Nak  # noqa: E402
+import topology as tp  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RPC = [sys.executable, os.path.join(REPO, "codesys_scripts", "rpc.py")]
@@ -104,7 +105,7 @@ def expect(label, a, want):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--plc", default="192.168.1.70")
+    ap.add_argument("--plc", default=tp.PLC_HOST)
     ap.add_argument("--deg-per-u", type=float, default=10.0, help="10: Kin_CAxis /10 setup; 1: A as additional axis")
     ap.add_argument("--a-offset", type=float, default=-600.0,
                     help="axis deg minus G1 A: -600 with Kin_CAxis (SetCoord1 turns the frame's A by 60 u), 0 as additional axis")

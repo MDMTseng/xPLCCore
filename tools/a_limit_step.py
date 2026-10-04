@@ -19,6 +19,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from plc_direct import Plc, Nak  # noqa: E402
+import topology as tp  # noqa: E402
 
 A = 3
 DEG_PER_U = 10.0
@@ -52,7 +53,7 @@ def to_state(p, want):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--plc", default="192.168.1.70")
+    ap.add_argument("--plc", default=tp.PLC_HOST)
     ap.add_argument("--factor", type=float, default=1.0)
     ap.add_argument("--mode", choices=("time", "all"), default="time")
     ap.add_argument("--swing", type=float, default=180.0)

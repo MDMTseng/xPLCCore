@@ -28,8 +28,6 @@ import topology as tp
 from machine import log
 
 STATIONS = tp.DRIVE_STATIONS
-DELTA_VENDOR = tp.DELTA_VENDOR
-_checked = set()
 BACKUP = os.path.join(mc.REPO, "codesys_scripts", "jobs", "drive_params_backup.json")
 
 
@@ -41,35 +39,9 @@ def obj(name):
 
 
 def sdo(station, index, value=None, size=4, sub=0):
-    if value is not None and station not in _checked:
-        # 2026-10-02: a slave reorder moved the station addresses and the
-        # old 1003 became the reel; never write a drive parameter blind.
-        vendor = sdo(station, 0x1018, sub=1)
-        if vendor != DELTA_VENDOR:
-            raise SystemExit("station %d is not a Delta drive (vendor 0x%X): no write" % (station, vendor))
-        _checked.add(station)
-    pkt = {"station": station, "index": index, "sub": sub, "size": size}
-    if value is not None:
-        pkt.update(value=int(value), write=1)
-    for _ in range(50):
-        try:
-            seq = mc.sys_cmd("DRV_SDO", **pkt)["seq_req"]
-            break
-        except RuntimeError as e:
-            if "busy" not in str(e):
-                raise
-            time.sleep(0.2)
-    else:
-        raise SystemExit("SDO channel stays busy")
-    for _ in range(50):
-        r = mc.sys_cmd("DRV_SDO_RESULT")
-        if not r["active"] and r["seq_res"] == seq:
-            if not r["ok"]:
-                raise SystemExit("SDO %s 0x%04X on %d failed: error %s" % (
-                    "write" if value is not None else "read", index, station, r["sdo_err"]))
-            return r["value"]
-        time.sleep(0.2)
-    raise SystemExit("SDO 0x%04X on %d: no result" % (index, station))
+    """machine.drive_sdo (shared with sync_shift_sweep; vendor check before
+    the first write to a station lives there since 2026-10-05)."""
+    return mc.drive_sdo(station, index, sub=sub, size=size, value=value)
 
 
 def read(name, axis):

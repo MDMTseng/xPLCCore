@@ -243,6 +243,46 @@ def set_delta(real):
     raise SystemExit("delta mode did not change (mask %s)" % delta_mask())
 
 
+_drive_checked = set()
+
+
+def drive_sdo(station, index, sub=0, size=4, value=None):
+    """One SDO read (value) or write (value given) on a slave through the
+    PLC (SYS DRV_SDO / DRV_SDO_RESULT). The first write to a station checks
+    its identity 0x1018:01 against the Delta vendor id first: a slave
+    reorder (2026-10-02) moved the station addresses and the old 1003 became
+    the reel, so no drive parameter is ever written blind. Raises on an
+    SDO error or when no result comes back."""
+    import topology as tp
+    if value is not None and station not in _drive_checked:
+        vendor = drive_sdo(station, 0x1018, sub=1)
+        if vendor != tp.DELTA_VENDOR:
+            raise SystemExit("station %d is not a Delta drive (vendor 0x%X): no write" % (station, vendor))
+        _drive_checked.add(station)
+    pkt = {"station": station, "index": index, "sub": sub, "size": size}
+    if value is not None:
+        pkt.update(value=int(value), write=1)
+    for _ in range(50):
+        try:
+            seq = sys_cmd("DRV_SDO", **pkt)["seq_req"]
+            break
+        except RuntimeError as e:
+            if "busy" not in str(e):
+                raise
+            time.sleep(0.2)
+    else:
+        raise SystemExit("SDO channel stays busy")
+    for _ in range(50):
+        r = sys_cmd("DRV_SDO_RESULT")
+        if not r["active"] and r["seq_res"] == seq:
+            if not r["ok"]:
+                raise SystemExit("SDO %s 0x%04X:%d on %d failed: error %s" % (
+                    "write" if value is not None else "read", index, sub, station, r["sdo_err"]))
+            return r["value"]
+        time.sleep(0.2)
+    raise SystemExit("SDO 0x%04X:%d on %d: no result" % (index, sub, station))
+
+
 def require_owner_ok(flag=False):
     """The real delta moves only with the owner's OK for this run."""
     if flag or os.environ.get("XPLC_OWNER_OK") == "1":

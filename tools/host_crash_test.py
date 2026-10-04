@@ -21,6 +21,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from plc_direct import Plc  # noqa: E402
+import topology as tp  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RPC = [sys.executable, os.path.join(REPO, "codesys_scripts", "rpc.py")]
@@ -52,7 +53,7 @@ def pingable(host):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--plc", default="192.168.1.70")
+    ap.add_argument("--plc", default=tp.PLC_HOST)
     ap.add_argument("--nic", default="以太网")
     ap.add_argument("--down", type=float, default=90)
     ap.add_argument("--traffic", action="store_true",

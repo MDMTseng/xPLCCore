@@ -19,6 +19,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from plc_direct import Plc, Nak  # noqa: E402
+import topology as tp  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SLOW = {"F": 50, "ACC": 1000, "DEA": 1000, "JERK": 20000}
@@ -77,7 +78,7 @@ def daemon_write(sym, val):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--plc", default="192.168.1.70")
+    ap.add_argument("--plc", default=tp.PLC_HOST)
     ap.add_argument("--fault", action="store_true")
     ap.add_argument("--steps", type=int, default=25, help="single production cells for the drift check")
     a = ap.parse_args()

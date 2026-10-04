@@ -20,6 +20,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from plc_direct import Plc, Nak  # noqa: E402
+import topology as tp  # noqa: E402
 
 PIN = 1 << 9      # CAM_Side_Light0: harmless if it ever fired
 FAILS = []
@@ -72,7 +73,7 @@ def trigger_errs(p, event_id, wait_s):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--plc", default="192.168.1.70")
+    ap.add_argument("--plc", default=tp.PLC_HOST)
     a = ap.parse_args()
     with Plc(a.plc) as p:
         if (p.sys("GET_MACHINE_STATE").get("axes_sim_mask", 0) & 7) != 7:

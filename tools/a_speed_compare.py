@@ -21,6 +21,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from plc_direct import Plc, Nak  # noqa: E402
+import topology as tp  # noqa: E402
 
 SAFE_Z = 12.0
 INSP = (15.618, 10.330, 1.1 + 3.4)
@@ -118,7 +119,7 @@ def run(p, parts, with_a):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--plc", default="192.168.1.70")
+    ap.add_argument("--plc", default=tp.PLC_HOST)
     ap.add_argument("--parts", type=int, default=20)
     ap.add_argument("--label", default="")
     ap.add_argument("--held-only", action="store_true",
