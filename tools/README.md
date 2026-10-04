@@ -51,9 +51,11 @@ Regenerate this file with `python tools/gen_script_index.py`.
 | `reel_real_test.py` | moves axes, writes PLC vars | Reel axis on the machine: power it, move it, check the cell count and the odometer against the encoder, and the tracker's stop detection on a real servo (a virtual axis has no standstill jitter). |
 | `safe_install.py` | downloads | Download the project to the PLC with every safety step (machine.safe_install): 1. |
 | `settle_test.py` | moves axes | Settling time of the delta's TCP after each stop, per drive filter setting. |
-| `soak_segments.py` | downloads | Run circle_soak.py back to back for a long soak (one stream of hours of packets is too big), optionally recovering from EtherCAT dropouts. |
+| `soak_segments.py` | moves axes, downloads | Run circle_soak.py back to back for a long soak (one stream of hours of packets is too big), optionally recovering from EtherCAT dropouts. |
 | `square_dip.py` | moves axes | Square (or line) paths for the delta through the UI's link (standalone UI with XPLC_HARNESS=1): up to Z0, then the corners of a square (+-HALF mm in X and Y at Z0) with a dip to Z DIP at each corner, back to X0 Y0 Z0. |
 | `stale_suite.py` | moves axes, downloads | After-recovery test suite for the ASDA stale-target investigation (doc_review/asda_stale_target_2026-09-30.md, sections 7c and 8). |
 | `sync_offset_sweep.py` | moves axes, downloads | SyncOffset sweep with the drive-demand metric (ASDA stale-target investigation, doc_review/asda_stale_target_2026-09-30.md section 7c). |
 | `sync_shift_sweep.py` | moves axes, downloads | Sweep the ASDA drives' "DC sync0 shift time" and measure the stale-target rate at each level (the drives' SYNC0 fires this much later than the other slaves'; the frame then has more time before the drives' SYNC0). |
+| `topology.py` | read-only | The machine's EtherCAT topology and PLC address, in one place for the host tools. |
 | `trace_stops.py` | moves axes | Position traces around a stop, per drive parameter set, plotted together. |
+| `xplc.py` | moves axes, writes PLC vars | One client for the PLC's msgpack API, with two interchangeable transports. |

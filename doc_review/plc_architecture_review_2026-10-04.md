@@ -120,7 +120,21 @@ full download (`tools/safe_install.py`, drives off), not an online change.
 Host (tools/):
 - `topology.py` (new): PLC host/port from codesys_env.json, slave names and
   stations in tree order, `DRIVE_STATIONS`, `DELTA_VENDOR`; used by
-  drive_param, sync_shift_sweep, bus_watch.
+  drive_param, sync_shift_sweep, bus_watch, and (2026-10-05) as the `--plc`
+  default of the ten plc_direct tools.
+- `xplc.py` (new, 2026-10-05): `xplc.Machine(transport)` with `UiRelay`
+  (the UI's link, default) and `Direct` (own socket, plc_direct) transports;
+  typed errors from the PLC's err text in one place (`Nak`, `Busy`,
+  `BlockTimeout`, `NotReady`, `LinkDown`, `ReplyTimeout`, all RuntimeError);
+  typed helpers (fsm_to, set_delta, drives_off, ec_stats, dwell, dem_stats,
+  drive_sdo). `machine.py`'s link functions delegate to one
+  `Machine(UiRelay())`; its other functions are unchanged. Next: move the
+  plc_direct tools to `Machine(Direct())` one at a time (note `Plc.sys(cmd,
+  timeout=)` vs `Machine.sys(cmd, timeout_ms=)`), then fold machine.py's
+  FSM/delta helpers into Machine.
+- `machine.drive_sdo` (2026-10-05): the one SDO read/write path with the
+  Delta vendor check before the first write to a station; drive_param and
+  sync_shift_sweep use it.
 - `sync_shift_sweep.virtual()` raises when the delta did not go virtual.
 - `joint_bench real` and `powered` (with a real delta) need `--owner-ok`.
 - `soak_segments` uses `machine.require_owner_ok` (flag or `XPLC_OWNER_OK`).
