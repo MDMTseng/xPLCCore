@@ -27,10 +27,12 @@ import time
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(_HERE)
-sys.path.insert(0, os.path.join(_HERE, "sim"))
-_argv, sys.argv = sys.argv, sys.argv[:1]     # run_virtual parses nothing at import
-import run_virtual as _rv  # noqa: E402
-sys.argv = _argv
+import xplc  # noqa: E402
+
+# The link: one xplc.Machine through the UI's PLC link. Its typed errors
+# (xplc.PlcError, a RuntimeError) carry the PLC's err text, so the callers
+# that match on "busy" / "block_timeout" keep working (2026-10-05).
+_M = xplc.Machine(xplc.UiRelay())
 
 PY = sys.executable
 RPC = os.path.join(REPO, "codesys_scripts", "rpc.py")
@@ -47,45 +49,28 @@ def log(*a):
 # ---- the link ---------------------------------------------------------
 
 def push(action, payload=None, timeout=30.0):
-    return _rv.push(action, payload or {}, timeout=timeout)
+    """Any harness action through the UI (streams, connect/disconnect)."""
+    return _M.t.push(action, payload or {}, timeout=timeout)
 
 
 def plc(pkt, timeout_ms=5000):
-    """One packet through the UI; returns the reply (NAK raises). A dropped
-    UI link ("PLC not connected") is re-established once and retried."""
-    try:
-        return push("plc_send", {"pkt": pkt, "timeoutMs": timeout_ms}, timeout=timeout_ms / 1000 + 5)
-    except RuntimeError as e:
-        if "not connected" not in str(e):
-            raise
-        reconnect()
-        return push("plc_send", {"pkt": pkt, "timeoutMs": timeout_ms}, timeout=timeout_ms / 1000 + 5)
+    """One packet through the UI; returns the reply (a NAK raises xplc.Nak).
+    A dropped UI link is re-established once and the packet sent again."""
+    return _M.send(pkt, timeout_ms)
 
 
 def sys_cmd(cmd, timeout_ms=5000, **kw):
-    return plc(dict(kw, type="SYS", cmd=cmd), timeout_ms)
+    return _M.sys(cmd, timeout_ms, **kw)
 
 
 def m_cmd(cmd, timeout_ms=5000, **kw):
-    return plc(dict(kw, type="M", cmd=cmd), timeout_ms)
+    return _M.m(cmd, timeout_ms, **kw)
 
 
 def reconnect(tries=20):
     """Make sure the UI's PLC link is up (it does not always come back by
     itself after a download)."""
-    for _ in range(tries):
-        try:
-            push("plc_send", {"pkt": {"type": "SYS", "cmd": "PING"}, "timeoutMs": 3000}, timeout=8)
-            return
-        except Exception:
-            try:
-                push("disconnect_tcp", timeout=20)
-                time.sleep(2)
-                push("connect_tcp", timeout=20)
-                time.sleep(2)
-            except Exception:
-                time.sleep(3)
-    raise SystemExit("the UI's link to the PLC did not come back")
+    _M.t.reconnect(tries)
 
 
 SUPERVISOR = os.path.join(REPO, "codesys_scripts", "supervisor.py")
