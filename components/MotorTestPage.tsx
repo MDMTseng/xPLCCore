@@ -80,6 +80,10 @@ export const MotorTestPage: React.FC<{ COMCtrlObj: COMCtrlObj; active?: boolean 
     const i = infos[A_AXIS] ?? await readAxis(send, A_AXIS);
     const l = aLimits(f, i);
     if (!l) throw new Error('A limits unknown');
+    // x factors above 1 raise the limits past the downloaded ones: the
+    // PLC wants its maintenance gate for that (2026-10-05); this button is
+    // the operator's intent. It closes after 10 min, on disconnect or Error.
+    if (f > 1) await send({ type: 'SYS', cmd: 'MAINT_ARM', ttl_s: 600 });
     await applyLimits(send, A_AXIS, toAxisUnits(MOTORS[A_AXIS], l));
     addLog(`x${f}: v ${fmt(l.v)} deg/s (${fmt(l.v / 6)} rpm), a ${fmt(l.a)} deg/s², j ${fmt(l.j)} deg/s³`);
     const res = await runATest(send, { amplitude: SWING, cycles: CYCLES }, addLog);

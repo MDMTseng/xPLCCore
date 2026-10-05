@@ -89,6 +89,7 @@ IF PrevClientActive AND NOT TCP_MSGPAK_Server.fbMyServer.CLIENT.xActive THEN
     END_WHILE;
     RetryMotionCommandCooldown := 0;
     FlushFlyEvents(notify := FALSE);
+    GVL.MaintArmUntilMs := 0;      // maintenance ends with the session
 END_IF;
 PrevClientActive := TCP_MSGPAK_Server.fbMyServer.CLIENT.xActive;
 
@@ -106,6 +107,9 @@ IF (PendingStChgFromState >= 0) THEN
         MessagePackerFb.PackKvStr(ADR('st_str'), ADR(StateString));
         MessagePackerFb.PackKvDint(ADR('from'), PendingStChgFromState);
         MessagePackerFb.PackKvLint(ADR('runtime_ms'), RuntimeMs);
+        // fault record (2026-10-05): fault_seq changes on every Error entry
+        MessagePackerFb.PackKvLint(ADR('fault_seq'), UDINT_TO_LINT(GVL.FaultSeq));
+        MessagePackerFb.PackKvStr(ADR('fault_src'), ADR(GVL.FaultSource));
         CommitReplySlotEvent();
         GVL.StateChangeEventCount := GVL.StateChangeEventCount + 1;
         PendingStChgFromState := -1;

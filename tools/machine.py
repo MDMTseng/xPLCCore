@@ -59,8 +59,30 @@ def plc(pkt, timeout_ms=5000):
     return _M.send(pkt, timeout_ms)
 
 
+_owner_ok = False     # set by require_owner_ok for this process
+
+
+def maint_arm(ttl_s=600):
+    """Open the PLC's maintenance gate for ttl_s seconds (SYS MAINT_ARM,
+    2026-10-05; also closes on disconnect and on Error)."""
+    r = _M.sys("MAINT_ARM", ttl_s=int(ttl_s))
+    log("PLC maintenance gate armed for %d s" % ttl_s)
+    return r
+
+
 def sys_cmd(cmd, timeout_ms=5000, **kw):
-    return _M.sys(cmd, timeout_ms, **kw)
+    """One SYS command. If the PLC refuses it behind its maintenance gate
+    (DIRECT, DRV_SDO write, DELTA_MODE real, JOINT_MOVE on a real axis,
+    SET_AXIS_LIMITS above the downloaded limits) and this run has the
+    owner's OK (require_owner_ok), the gate is armed and the command sent
+    once more; without the OK the refusal stands."""
+    try:
+        return _M.sys(cmd, timeout_ms, **kw)
+    except xplc.MaintNotArmed:
+        if not _owner_ok:
+            raise
+        maint_arm()
+        return _M.sys(cmd, timeout_ms, **kw)
 
 
 def m_cmd(cmd, timeout_ms=5000, **kw):
@@ -171,7 +193,9 @@ def fsm_to(want, home=True, timeout=120):
                   "GroupEnabled": EV_HOME_GO if home else EV_HOME_SKIP}.get(st)
         if ev is not None:
             try:
-                sys_cmd("GA_EV", ev=ev)
+                # expect_st: refused (state_changed) if the FSM moved on
+                # since the read above; the loop then reads it again.
+                sys_cmd("GA_EV", ev=ev, expect_st=r.get("st", -1))
             except Exception:
                 pass
         time.sleep(0.5)
@@ -270,7 +294,9 @@ def drive_sdo(station, index, sub=0, size=4, value=None):
 
 def require_owner_ok(flag=False):
     """The real delta moves only with the owner's OK for this run."""
+    global _owner_ok
     if flag or os.environ.get("XPLC_OWNER_OK") == "1":
+        _owner_ok = True
         return
     raise SystemExit("REFUSED: this moves the real delta. Get the owner's OK for this run, "
                      "then pass --owner-ok (or set XPLC_OWNER_OK=1).")

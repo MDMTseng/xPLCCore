@@ -114,6 +114,14 @@ FOR Index := 0 TO TO_INT(FlyEventBufferSize - 1) DO
             MessagePackerFb.PackKvLint(ADR('event_id'),   TO_LINT(pFly^.EventId));
             CommitReplySlotEvent();
         END_IF;
+        // A WAIT_FOR_TRIGGER_MOTION_PROGRESS still waiting for this trigger
+        // gets its NAK now (2026-10-05 review: only the event went out, the
+        // waiting id stayed unanswered until the host's own timeout).
+        IF (pFly^.ActionType = FlyEventActType.ACK_SRC_ID) AND TryAcquireReplySlot(ADR(GVL.ReMpDropCount_Reply)) THEN
+            MessagePackerFb.PackKvStr(ADR('err'), ADR('trigger_timeout'));
+            MessagePackerFb.PackKvLint(ADR('event_id'), TO_LINT(pFly^.EventId));
+            CommitReplySlotAck(pFly^.SourceCommandId, FALSE);
+        END_IF;
 
 
         pFly^.ActionType := FlyEventActType.NOP;
@@ -265,7 +273,7 @@ GroupWaitFb(
 );
 
 IF (RetryMotionCommandCooldown > 0) THEN
-    RetryMotionCommandCooldown := RetryMotionCommandCooldown - BusPeriod;
+    RetryMotionCommandCooldown := MAX(0, RetryMotionCommandCooldown - BusPeriod);
 END_IF;
 
 

@@ -68,6 +68,7 @@ VAR
 	RouteToSys    : BOOL;
 	RouteToDiag : BOOL;   // -> PRG_DiagReply (Comm task), 2026-10-05
 	CommIter      : INT;     // packets taken / replies sent this scan
+	CommGapNow    : LINT;    // ms since the last Comm run (GVL.CommGap*)
 END_VAR
 (* =========== IMPLEMENTATION =========== *)
 // Comm task profile (GVL.Comm*): last scan's task time vs its POU span
@@ -100,6 +101,21 @@ END_IF
 // Up to GVL.CommPacketsPerScan packets per scan: the FB exposes one packet
 // per call, so it is called again while the last call produced one and
 // both rings still have room. Bytes already in its buffer need no new read.
+// Comm task gaps (GVL.CommGap*, 2026-10-05 flow control review), on the
+// EtherCAT task's ms clock: a Comm task that does not run delays every
+// reply, and the host's stream with it.
+IF GVL.CommPrevRunMs > 0 THEN
+    CommGapNow := AxisGroupSM.RuntimeMs - GVL.CommPrevRunMs;
+    IF CommGapNow > GVL.CommGapMaxMs THEN
+        GVL.CommGapMaxMs := CommGapNow;
+        GVL.CommGapMaxAtMs := AxisGroupSM.RuntimeMs;
+    END_IF;
+    IF CommGapNow > 20 THEN
+        GVL.CommGapsOver20 := GVL.CommGapsOver20 + 1;
+    END_IF;
+END_IF;
+GVL.CommPrevRunMs := AxisGroupSM.RuntimeMs;
+
 FOR CommIter := 1 TO MAX(1, GVL.CommPacketsPerScan) DO
 fbMyServer(
     ENABLE:= bEnableServer,
@@ -152,7 +168,8 @@ IF fbMyServer.PKT_IDX > TMP_PKT_IDX THEN
 		RouteToSys := (RouteType = 'SYS') AND (
 			RouteCmd = 'PING' OR RouteCmd = 'IO_STATE' OR RouteCmd = 'GA_EV' OR RouteCmd = 'GET_MACHINE_STATE' OR RouteCmd = 'RESET_DBG_INFO' OR RouteCmd = 'SET_AXIS_SIM' OR RouteCmd = 'GET_COORD1_DEBUG'
 			OR RouteCmd = 'EVT_MARK' OR RouteCmd = 'PLAN_GET' OR RouteCmd = 'SET_OVERRIDE' OR RouteCmd = 'DI_WATCH' OR RouteCmd = 'AXIS_INFO' OR RouteCmd = 'DRV_SDO'
-			OR RouteCmd = 'DRV_SDO_RESULT' OR RouteCmd = 'DIRECT' OR RouteCmd = 'DELTA_MODE' OR RouteCmd = 'JOINT_MOVE' OR RouteCmd = 'JOINT_STOP' OR RouteCmd = 'JOINT_STATE');
+			OR RouteCmd = 'DRV_SDO_RESULT' OR RouteCmd = 'DIRECT' OR RouteCmd = 'DELTA_MODE' OR RouteCmd = 'JOINT_MOVE' OR RouteCmd = 'JOINT_STOP' OR RouteCmd = 'JOINT_STATE'
+			OR RouteCmd = 'MAINT_ARM');
 		IF RouteToDiag THEN
 			MEMUtils.MemCpy(ADR(PRG_DiagReply.ReqBuf[0]), ADR(fbMyServer.BUFFER_PTR[0]), DINT_TO_UINT(fbMyServer.BUFFER_LEN));
 			PRG_DiagReply.ReqLen := DINT_TO_UDINT(fbMyServer.BUFFER_LEN);

@@ -56,6 +56,9 @@ GVL.ServerLongIdleCount          := 0;
 
 // Supervisor / FSM counters.
 GVL.UiHeartbeatStaleCount        := 0;
+GVL.CommGapMaxMs                 := 0;
+GVL.CommGapMaxAtMs               := 0;
+GVL.CommGapsOver20               := 0;
 GVL.GroupErrorStopTripCount      := 0;
 GVL.StateChangeEventCount        := 0;
 GVL.SelfReentryCount             := 0;

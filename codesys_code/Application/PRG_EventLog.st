@@ -106,6 +106,7 @@ VAR
     uiDwBuf     : UINT;     // moves queued at the stop (GVL.DwBuf)
     uiDwQ       : UINT;     // host packets waiting at the stop (GVL.DwHostQ)
     iDwCool     : INT;      // retry cooldown at the stop (GVL.DwCoolMs)
+    udiDwSince  : UDINT;    // ms since the last motion accept (GVL.DwSinceAccMs)
     udiDwSettle : UDINT;
     udiDwK      : UDINT;
     iDwB        : INT;
@@ -719,16 +720,19 @@ IF GVL.DirEnable AND (GVL.DirState <> 99) THEN
 END_IF;
 IF GVL.DirEnable THEN
     CASE GVL.DirState OF
-        0:  // start: target = actual, fault reset if needed
+        0:  // start: target = actual. A drive in fault is NOT reset here
+            // (2026-10-05 review: it also cleared a fault an E-stop left);
+            // the test ends and the fault is cleared by a person.
             GVL.TapTarget0 := GVL.ActualTap0;
+            GVL.DirCycles := 0;
             IF (GVL.StatusTap0 AND 16#0008) <> 0 THEN
-                GVL.CtlTap0 := 16#0080;
+                GVL.DirReason := 'drive_in_fault';
+                GVL.DirState := 99;
             ELSE
                 GVL.CtlTap0 := 16#0006;
+                GVL.DirReason := '';
+                GVL.DirState := 1;
             END_IF;
-            GVL.DirCycles := 0;
-            GVL.DirReason := '';
-            GVL.DirState := 1;
         1:  // shutdown -> ready to switch on
             GVL.TapTarget0 := GVL.ActualTap0;
             GVL.CtlTap0 := 16#0006;
@@ -752,7 +756,7 @@ IF GVL.DirEnable THEN
             END_IF;
         4:  // constant step up DirTravelInc, then back
             diDirTarget := diDirTarget + iDirDir * GVL.DirStepInc;
-            IF (iDirDir > 0) AND (diDirTarget - diDirStart >= MIN(GVL.DirTravelInc, GVL.DirTravelMax)) THEN
+            IF (iDirDir > 0) AND (diDirTarget - diDirStart >= MIN(GVL.DirTravelInc, GVL.DirTravelMax, GVL.DIR_TRAVEL_MAX)) THEN
                 iDirDir := -1;
             ELSIF (iDirDir < 0) AND (diDirTarget <= diDirStart) THEN
                 diDirTarget := diDirStart;
@@ -891,6 +895,7 @@ IF xStMovPrev AND NOT xStMoving AND AxisGroupSM.ArmPositionValid THEN
     uiDwBuf := ULINT_TO_UINT(MIN(AxisGroupSM.MotionBufferSize, 65535));
     uiDwQ := GVL.minfo_buf_ridx.Size();
     iDwCool := DINT_TO_INT(LIMIT(-32768, AxisGroupSM.RetryMotionCommandCooldown, 32767));
+    udiDwSince := LINT_TO_UDINT(LIMIT(0, AxisGroupSM.RuntimeMs - GVL.LastMotionAcceptMs, 4000000000));
 END_IF;
 IF xDwOn THEN
     IF xStMoving OR NOT AxisGroupSM.ArmPositionValid OR (iDwN >= 60000) THEN
@@ -922,6 +927,7 @@ IF xDwOn THEN
             GVL.DwHostQ[udiDwK] := uiDwQ;
             GVL.DwCoolMs[udiDwK] := iDwCool;
             GVL.DwZUm[udiDwK] := LREAL_TO_DINT(lrDwTz * 1000.0);
+            GVL.DwSinceAccMs[udiDwK] := udiDwSince;
             GVL.DwHist[iDwB] := GVL.DwHist[iDwB] + 1;
             IF GVL.DwErrLeaveUm[udiDwK] > GVL.DwErrLeaveMaxUm THEN
                 GVL.DwErrLeaveMaxUm := GVL.DwErrLeaveUm[udiDwK];

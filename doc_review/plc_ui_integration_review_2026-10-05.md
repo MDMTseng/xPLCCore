@@ -124,3 +124,30 @@ The owner asked for sim-only testing for now (2026-10-05), so PLC changes go to 
 | docs | protocol.md: connection loss, reply tail, events (COORD_SET both edges, HEARTBEAT, COORD1_ERROR), unknown-command errors, GET_DIGITAL_INPUT `state`, trigger TTL; TS `DigitalInputReply.state` |
 
 Sim results: 15 min triangle (3 872 stops, no unplanned stop; every stop with 11-12 moves queued, 7-10 packets waiting, cooldown 0; acks 250-520 ms = back-pressure), 3 min with the new timing (reply gap max 130 ms, UI loop lag max 2 ms); deploy.py and safe_install end to end (bus check fails as expected: no EtherCAT on the sim). The sim needs `GVL.SimNoFieldbus := TRUE` after each download to reach Ready.
+
+## 5. Step 2 done (PLC change set, 2026-10-05, on the local soft PLC only)
+
+Not downloaded to the machine (it waits for a power cycle, and the owner's
+go). Changes:
+
+| Finding | Change |
+|---|---|
+| #1, #2, #5 authority | `SYS MAINT_ARM {ttl_s}` maintenance gate (GVL.MaintArmUntilMs; closes after the TTL, on disconnect and on Error entry; counted). Behind it: DIRECT start, DRV_SDO write, DELTA_MODE real, JOINT_MOVE on a real axis, SET_AXIS_LIMITS above the downloaded limits (lowering stays free). Host: `machine.sys_cmd` arms it only in a run with the owner's OK; the UI arms it from the path test's Real button (after "site is clear") and the motor test's x2 / x4 runs; drive_param write / restore now needs `--owner-ok`. Not an authentication -- transport auth stays a step 3 item |
+| #1 DIRECT | step / following error / travel clamped to `DIR_STEP_MAX` (1 deg/s) / `DIR_MAXFE_MAX` (1 deg) / `DIR_TRAVEL_MAX` (3 deg) constants; a drive in fault is no longer reset automatically (the test ends `drive_in_fault`) |
+| P2 cooldown | gate `<= 0`, the countdown stops at 0 |
+| #13 strings | DWELL stops adding rows after 180 characters, SETTLE after 220; both reply `next`; DWELL's evq covers exactly the same stops |
+| #10 deadlines | a trigger's TTL expiry also NAKs the waiting WAIT_FOR_TRIGGER id (`trigger_timeout`) |
+| P2 error cause | fault record: FaultSeq / FaultSource / FaultId / FaultAtMs at every Error entry, kept past the reset; in ST_CHG, GET_MACHINE_STATE, GA_EV |
+| #7 stale events | `GA_EV {ev, expect_st}`: refused `state_changed` if the FSM moved on; sent by machine.fsm_to, the Welcome / Operation init loops and the path test's walk |
+| #11 pauses | per stop `since_acc_ms` = ms since a motion packet was last accepted (5th evq field, CSV column `since_acc_ms`); Comm task gap max / time / count > 20 ms in GET_DIAG |
+
+Sim checks: every gated command refused unarmed and accepted armed; the gate
+closed on disconnect; GA_EV with a wrong expect_st refused; fault_seq 0 ->
+1 on an Error and kept after the reset; a WAIT_FOR_TRIGGER with a 300 ms TTL
+NAKed `trigger_timeout` after 1.3 s (it used to wait for the host's 5 s);
+2 min triangle with 560 stops, rows continuous, since_acc_ms 0-50 ms;
+comm gap max 17 ms on Windows.
+
+Left for later: `seq` stamped at send time (needs the reply bytes rewritten
+in the Comm task), accept timestamps in every motion ack, a motion-queue-
+empty event (the per-stop fields cover the pause diagnosis).

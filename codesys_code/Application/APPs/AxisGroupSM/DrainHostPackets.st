@@ -12,6 +12,13 @@ VAR
 
     // GA_EV ev field raw read (code review fix #7). Same scope reasoning.
     GaEvRaw : LINT;
+    // GA_EV expect_st (2026-10-05): the state the sender decided on.
+    GaEvExpect : LINT;
+    GaEvStale  : BOOL;
+    // MAINT_ARM / maintenance-gated commands (2026-10-05).
+    MaintTtlS  : LINT;
+    MaintArmed : BOOL;
+    LimV, LimA, LimD, LimJ : REAL;
 
     // SET_AXIS_SIM mask raw read. -1 sentinel = missing key.
     AxisSimMaskRaw : LINT;
@@ -192,7 +199,18 @@ END_IF;
                     // lied about the count. Pass GaEvRaw direct so the
                     // edge-detect mechanism stays scoped to VisuEventControl
                     // (its original owner) and TCP events bypass it cleanly.
-                    IF GaEvRaw <> 0 THEN
+                    // expect_st (2026-10-05 review, state ownership): the
+                    // state the sender read before deciding on this event.
+                    // If the FSM has moved on, the event is refused
+                    // (state_changed) instead of being applied to a state it
+                    // was not meant for (e.g. a second Init loop's HOME_GO
+                    // arriving after Ready).
+                    GaEvExpect := MessageUnpackerFb.TryReadINT64('expect_st', -1);
+                    GaEvStale := (GaEvRaw <> 0) AND (GaEvExpect >= 0)
+                                 AND (GaEvExpect <> TO_LINT(AxisGroupManagerFb._eState));
+                    IF GaEvStale THEN
+                        CommandAck := FALSE;
+                    ELSIF GaEvRaw <> 0 THEN
                         AxisGroupManagerFb.TRANSITION(
                             eEvent := TO_UDINT(GaEvRaw)
                         );
@@ -211,7 +229,29 @@ END_IF;
                     // since the last EV_RESET -> UnInited cycle.
                     MessagePackerFb.PackKvStr(ADR('err_src'), ADR(GVL.LastErrorSource));
                     MessagePackerFb.PackKvDint(ADR('err_id'), TO_DINT(GVL.LastErrorID));
+                    MessagePackerFb.PackKvLint(ADR('fault_seq'), UDINT_TO_LINT(GVL.FaultSeq));
+                    IF GaEvStale THEN
+                        MessagePackerFb.PackKvStr(ADR('err'), ADR('state_changed'));
+                    END_IF;
                 END_IF
+            ELSIF (CommandType = 'MAINT_ARM') THEN
+                // Maintenance gate (GVL.MaintArmUntilMs): ttl_s 1..600 arms
+                // it for that long, 0 disarms. Reply: armed, left_ms.
+                ShouldReturn := TRUE;
+                CommandAck := TRUE;
+                ResponsePacketPointer^.ele_count := 0;
+                MaintTtlS := MessageUnpackerFb.TryReadINT64('ttl_s', -1);
+                IF (MaintTtlS < 0) OR (MaintTtlS > GVL.MAINT_TTL_MAX_S) THEN
+                    CommandAck := FALSE;
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('bad_ttl'));
+                ELSIF MaintTtlS = 0 THEN
+                    GVL.MaintArmUntilMs := 0;
+                ELSE
+                    GVL.MaintArmUntilMs := RuntimeMs + MaintTtlS * 1000;
+                    GVL.MaintArmCount := GVL.MaintArmCount + 1;
+                END_IF;
+                MessagePackerFb.PackKvBool(ADR('armed'), RuntimeMs < GVL.MaintArmUntilMs);
+                MessagePackerFb.PackKvLint(ADR('left_ms'), MAX(0, GVL.MaintArmUntilMs - RuntimeMs));
             ELSIF (CommandType = 'PING') THEN
                 // A3: UI heartbeat. Stamp last-seen and bump counter; reply with runtime.
                 // Track worst-case PING-to-PING gap (PLC clock) for comm-jitter
@@ -257,6 +297,10 @@ END_IF;
                 MessagePackerFb.PackKvLint(ADR('movement_id'), TO_LINT(GroupReadPositionFb.MovementId));
                 MessagePackerFb.PackKvLint(ADR('runtime_ms'), RuntimeMs);
                 MessagePackerFb.PackKvBool(ADR('coord_set'), GVL.CoordSystemConfigured);
+                MessagePackerFb.PackKvLint(ADR('fault_seq'), UDINT_TO_LINT(GVL.FaultSeq));
+                MessagePackerFb.PackKvStr(ADR('fault_src'), ADR(GVL.FaultSource));
+                MessagePackerFb.PackKvDint(ADR('fault_id'), TO_DINT(GVL.FaultId));
+                MessagePackerFb.PackKvLint(ADR('maint_left_ms'), MAX(0, GVL.MaintArmUntilMs - RuntimeMs));
                 MessagePackerFb.PackKvDint(ADR('axes_err_mask'), TO_DINT(AxesErrMask));
                 // 'axes_state' raw pack (multi-line OR-expression awkward
                 // for PackKvDint signature). +1 manually.
@@ -441,6 +485,9 @@ END_IF;
                     MessagePackerFb.PackKvStr(ADR('err'), ADR('bad_axis'));
                 ELSIF AxisGroupManagerFb._eState <> E_RobotState.Powered THEN
                     MessagePackerFb.PackKvStr(ADR('err'), ADR('not_powered'));
+                ELSIF (NOT PeakAxis[AxInfoIdx]^.bVirtual) AND (RuntimeMs >= GVL.MaintArmUntilMs) THEN
+                    GVL.MaintRefusedCount := GVL.MaintRefusedCount + 1;
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('maint_not_armed'));
                 ELSIF (JtState[AxInfoIdx] = 1) OR JtHaltExec[AxInfoIdx] OR JtExec[AxInfoIdx] THEN
                     MessagePackerFb.PackKvStr(ADR('err'), ADR('busy'));
                 ELSIF (ABS(MessageUnpackerFb.TryReadREAL('dist', 0)) > 90) OR (MessageUnpackerFb.TryReadREAL('dist', 0) = 0) THEN
@@ -518,6 +565,11 @@ END_IF;
                     IF (GVL.SdoReqStation < 1001) OR (GVL.SdoReqStation > 1010) OR (GVL.SdoReqIndex = 0) THEN
                         CommandAck := FALSE;
                         MessagePackerFb.PackKvStr(ADR('err'), ADR('bad_args'));
+                    ELSIF GVL.SdoReqWrite AND (RuntimeMs >= GVL.MaintArmUntilMs) THEN
+                        // writes reach the drives' EEPROM: maintenance only
+                        CommandAck := FALSE;
+                        GVL.MaintRefusedCount := GVL.MaintRefusedCount + 1;
+                        MessagePackerFb.PackKvStr(ADR('err'), ADR('maint_not_armed'));
                     ELSE
                         GVL.SdoReqSeq := GVL.SdoReqSeq + 1;
                         GVL.SdoReqActive := TRUE;
@@ -545,10 +597,18 @@ END_IF;
                 ResponsePacketPointer^.ele_count := 0;
                 IF MessageUnpackerFb.TryReadINT64('stop', 0) <> 0 THEN
                     GVL.DirEnable := FALSE;
+                ELSIF (MessageUnpackerFb.TryReadINT64('start', 0) <> 0) AND (RuntimeMs >= GVL.MaintArmUntilMs) THEN
+                    // it drives EAxis0 directly, also in the "delta
+                    // virtual" state: maintenance only (2026-10-05 review)
+                    CommandAck := FALSE;
+                    GVL.MaintRefusedCount := GVL.MaintRefusedCount + 1;
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('maint_not_armed'));
                 ELSIF MessageUnpackerFb.TryReadINT64('start', 0) <> 0 THEN
-                    GVL.DirStepInc := LINT_TO_DINT(MessageUnpackerFb.TryReadINT64('step', 145));
-                    GVL.DirTravelInc := LINT_TO_DINT(MessageUnpackerFb.TryReadINT64('travel', 2167057));
-                    GVL.DirMaxFe := LINT_TO_DINT(MessageUnpackerFb.TryReadINT64('maxfe', 722352));
+                    // clamped to the GVL constants (the client's values were
+                    // taken as they came, 2026-10-05 review)
+                    GVL.DirStepInc := LIMIT(1, LINT_TO_DINT(MessageUnpackerFb.TryReadINT64('step', 145)), GVL.DIR_STEP_MAX);
+                    GVL.DirTravelInc := LIMIT(1, LINT_TO_DINT(MessageUnpackerFb.TryReadINT64('travel', 2167057)), GVL.DIR_TRAVEL_MAX);
+                    GVL.DirMaxFe := LIMIT(1, LINT_TO_DINT(MessageUnpackerFb.TryReadINT64('maxfe', 722352)), GVL.DIR_MAXFE_MAX);
                     GVL.DirHbMs := LINT_TO_UDINT(RuntimeMs);
                     GVL.DirState := 0;
                     GVL.DirEnable := TRUE;
@@ -636,6 +696,15 @@ END_IF;
                     ELSIF (MessageUnpackerFb.TryReadREAL('v', 1) <= 0) OR (MessageUnpackerFb.TryReadREAL('a', 1) <= 0)
                           OR (MessageUnpackerFb.TryReadREAL('d', 1) <= 0) OR (MessageUnpackerFb.TryReadREAL('j', 1) <= 0) THEN
                         MessagePackerFb.PackKvStr(ADR('err'), ADR('bad_value'));
+                    ELSIF (RuntimeMs >= GVL.MaintArmUntilMs) AND (
+                          (MessageUnpackerFb.TryReadREAL('v', 0) > LREAL_TO_REAL(AxCfgV[AxInfoIdx]))
+                          OR (MessageUnpackerFb.TryReadREAL('a', 0) > LREAL_TO_REAL(AxCfgA[AxInfoIdx]))
+                          OR (MessageUnpackerFb.TryReadREAL('d', 0) > LREAL_TO_REAL(AxCfgD[AxInfoIdx]))
+                          OR (MessageUnpackerFb.TryReadREAL('j', 0) > LREAL_TO_REAL(AxCfgJ[AxInfoIdx]))) THEN
+                        // lowering is free; above the downloaded limits only
+                        // in maintenance (2026-10-05 review)
+                        GVL.MaintRefusedCount := GVL.MaintRefusedCount + 1;
+                        MessagePackerFb.PackKvStr(ADR('err'), ADR('maint_not_armed'));
                     ELSE
                         pAx^.fSWMaxVelocity := MessageUnpackerFb.TryReadREAL('v', LREAL_TO_REAL(pAx^.fSWMaxVelocity));
                         pAx^.fSWMaxAcceleration := MessageUnpackerFb.TryReadREAL('a', LREAL_TO_REAL(pAx^.fSWMaxAcceleration));
@@ -932,6 +1001,10 @@ END_IF;
                 ELSIF (AxisSimMaskRaw = 1) AND (MessageUnpackerFb.TryReadINT64('site_clear', 0) <> 1) THEN
                     CommandAck := FALSE;
                     MessagePackerFb.PackKvStr(ADR('err'), ADR('site_clear_required'));
+                ELSIF (AxisSimMaskRaw = 1) AND (RuntimeMs >= GVL.MaintArmUntilMs) THEN
+                    CommandAck := FALSE;
+                    GVL.MaintRefusedCount := GVL.MaintRefusedCount + 1;
+                    MessagePackerFb.PackKvStr(ADR('err'), ADR('maint_not_armed'));
                 ELSIF (AxisSimMaskRaw = 1) AND GVL.bVirtualMotorsMode THEN
                     CommandAck := FALSE;
                     MessagePackerFb.PackKvStr(ADR('err'), ADR('virtual_motors_mode_on'));

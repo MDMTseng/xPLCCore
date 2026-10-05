@@ -375,6 +375,37 @@ VAR_GLOBAL
 	DwHostQ         : ARRAY[0..4095] OF UINT;
 	DwCoolMs        : ARRAY[0..4095] OF INT;
 	DwZUm           : ARRAY[0..4095] OF DINT;
+	(* DwSinceAccMs: ms since a motion packet was last accepted into
+	   SoftMotion (GVL.LastMotionAcceptMs, G1 / G4), at the first stopped
+	   cycle: a long one = the PLC was not fed (2026-10-05). *)
+	DwSinceAccMs    : ARRAY[0..4095] OF UDINT;
+	LastMotionAcceptMs : LINT;
+	(* Maintenance gate (2026-10-05 integration review, safety): SYS
+	   MAINT_ARM {ttl_s 1..600} arms it, {ttl_s:0} disarms; it also drops on
+	   host disconnect and on Error entry. Needed by DIRECT start, DRV_SDO
+	   write, SET_AXIS_LIMITS above the downloaded limits, DELTA_MODE real and
+	   JOINT_MOVE on a real axis (NAK maint_not_armed). Not an
+	   authentication -- any client can arm it -- but nothing reaches these by
+	   accident any more, and every arm is counted. *)
+	MaintArmUntilMs   : LINT := 0;
+	MaintArmCount     : UDINT;
+	MaintRefusedCount : UDINT;
+	(* Fault record (2026-10-05): every Error entry bumps FaultSeq and keeps
+	   its cause in FaultSource / FaultId / FaultAtMs. Unlike
+	   LastErrorSource it survives the reset to UnInited, so the cause is
+	   not lost when any client resets first. In ST_CHG and
+	   GET_MACHINE_STATE. *)
+	FaultSeq    : UDINT;
+	FaultSource : STRING(40);
+	FaultId     : DWORD;
+	FaultAtMs   : LINT;
+	(* Comm task gaps (2026-10-05, flow control review): the longest time
+	   between two Comm task runs, ms on the EtherCAT task's clock, when it
+	   happened, and how many gaps exceeded 20 ms. GET_DIAG. *)
+	CommPrevRunMs  : LINT;
+	CommGapMaxMs   : LINT;
+	CommGapMaxAtMs : LINT;
+	CommGapsOver20 : UDINT;
 	DwN             : UDINT;
 	DwHist          : ARRAY[0..8] OF UDINT;
 	DwErrLeaveMaxUm : UDINT;
@@ -1092,4 +1123,10 @@ VAR_GLOBAL CONSTANT
 	COORD1_MODE_LINEAR         : INT := 0;
 	COORD1_MODE_TABLE          : INT := 1;
 	COORD1_CAM_MAX_POINTS      : INT := 64;
+	(* DIRECT drive test caps (2026-10-05 review): the client's step,
+	   following-error limit and travel are clamped to these. *)
+	DIR_STEP_MAX   : DINT := 1445;      (* 1 deg/s at 1 ms (1444705 PUU per deg) *)
+	DIR_MAXFE_MAX  : DINT := 1444705;   (* 1 deg *)
+	DIR_TRAVEL_MAX : DINT := 4334115;   (* 3 deg *)
+	MAINT_TTL_MAX_S : LINT := 600;
 END_VAR

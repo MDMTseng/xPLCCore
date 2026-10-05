@@ -60,7 +60,12 @@ def main():
     ap.add_argument("what", choices=("read", "write", "restore"))
     ap.add_argument("args", nargs="*")
     ap.add_argument("--axes", type=int, nargs="+", default=[0, 1, 2])
+    ap.add_argument("--owner-ok", action="store_true",
+                    help="write / restore change drive parameters (EEPROM); the PLC also needs its "
+                         "maintenance gate for them, armed here with this OK (2026-10-05)")
     a = ap.parse_args()
+    if a.what != "read":
+        mc.require_owner_ok(a.owner_ok)
     mc.reconnect()
     if a.what == "read":
         for name in a.args:

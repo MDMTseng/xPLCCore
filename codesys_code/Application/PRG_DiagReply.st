@@ -34,6 +34,7 @@ VAR
     EcTrI   : INT;
     EcEvtFrom : UDINT;
     EcEvtI  : UDINT;
+    EcEvtTo : UDINT;    // DWELL: end of the stops in ev (2026-10-05)
     // TASK_STATS scratch.
     TsH     : __XWORD;        // RTS_IEC_HANDLE
     TsR     : UDINT;          // RTS_IEC_RESULT, 0 = ERR_OK
@@ -112,7 +113,8 @@ ShouldReturn := FALSE;
         MessagePackerFb.PackKvReal(ADR('tol'), LREAL_TO_REAL(GVL.SettleTolMm));
         EcTrStr := '';
         EcEvtI := EcEvtFrom;
-        WHILE (EcEvtI < GVL.SettleN) AND (EcEvtI < EcEvtFrom + 20) DO
+        // rows <= 33 characters: none after 220, so STRING(255) is never cut
+        WHILE (EcEvtI < GVL.SettleN) AND (EcEvtI < EcEvtFrom + 20) AND (LEN(EcTrStr) <= 220) DO
             EcTrStr := CONCAT(EcTrStr, UDINT_TO_STRING(GVL.SettleAtMs[EcEvtI MOD 256]));
             EcTrStr := CONCAT(EcTrStr, ':');
             EcTrStr := CONCAT(EcTrStr, UDINT_TO_STRING(GVL.SettleMs[EcEvtI MOD 256]));
@@ -122,6 +124,7 @@ ShouldReturn := FALSE;
             EcEvtI := EcEvtI + 1;
         END_WHILE;
         MessagePackerFb.PackKvStr(ADR('ev'), ADR(EcTrStr));
+        MessagePackerFb.PackKvLint(ADR('next'), UDINT_TO_LINT(EcEvtI));
     ELSIF (CommandType = 'DWELL') THEN
         // Every-stop log (GVL.Dw*): n = stops so far, tol mm, hist =
         // settle time histogram (edges 1 2 5 10 15 20 50 ms, last =
@@ -129,8 +132,9 @@ ShouldReturn := FALSE;
         // to 8 stops from index from:i as at_ms:dwell_ms:settle_ms:
         // err_stop_um:err_leave_um:err_5ms_um:err_10ms_um (settle 4294967295
         // = not settled; fields 6 and 7 since 2026-10-05); evq = the same
-        // stops as buf:hostq:cool_ms:z_um (GVL.DwBuf / DwHostQ / DwCoolMs /
-        // DwZUm, 2026-10-05; a separate string so ev stays within 255).
+        // stops as buf:hostq:cool_ms:z_um:since_acc_ms (GVL.DwBuf / DwHostQ /
+        // DwCoolMs / DwZUm / DwSinceAccMs, 2026-10-05; a separate string so ev
+        // stays within 255).
         // reset:1 clears it.
         ShouldReturn := TRUE;
         CommandAck := TRUE;
@@ -154,7 +158,10 @@ ShouldReturn := FALSE;
         MessagePackerFb.PackKvStr(ADR('hist'), ADR(EcTrStr));
         EcTrStr := '';
         EcEvtI := EcEvtFrom;
-        WHILE (EcEvtI < GVL.DwN) AND (EcEvtI < EcEvtFrom + 8) DO
+        // At most 8 stops, and none that could be cut: a row is <= ~60
+        // characters, so no new row after 180 (STRING(255), 2026-10-05
+        // review). evq covers the same stops; next = the index to ask next.
+        WHILE (EcEvtI < GVL.DwN) AND (EcEvtI < EcEvtFrom + 8) AND (LEN(EcTrStr) <= 180) DO
             EcTrStr := CONCAT(EcTrStr, UDINT_TO_STRING(GVL.DwAtMs[EcEvtI MOD 4096]));
             EcTrStr := CONCAT(EcTrStr, ':');
             EcTrStr := CONCAT(EcTrStr, UDINT_TO_STRING(GVL.DwDwellMs[EcEvtI MOD 4096]));
@@ -172,9 +179,11 @@ ShouldReturn := FALSE;
             EcEvtI := EcEvtI + 1;
         END_WHILE;
         MessagePackerFb.PackKvStr(ADR('ev'), ADR(EcTrStr));
+        MessagePackerFb.PackKvLint(ADR('next'), UDINT_TO_LINT(EcEvtI));
+        EcEvtTo := EcEvtI;
         EcTrStr := '';
         EcEvtI := EcEvtFrom;
-        WHILE (EcEvtI < GVL.DwN) AND (EcEvtI < EcEvtFrom + 8) DO
+        WHILE EcEvtI < EcEvtTo DO
             EcTrStr := CONCAT(EcTrStr, UINT_TO_STRING(GVL.DwBuf[EcEvtI MOD 4096]));
             EcTrStr := CONCAT(EcTrStr, ':');
             EcTrStr := CONCAT(EcTrStr, UINT_TO_STRING(GVL.DwHostQ[EcEvtI MOD 4096]));
@@ -182,6 +191,8 @@ ShouldReturn := FALSE;
             EcTrStr := CONCAT(EcTrStr, INT_TO_STRING(GVL.DwCoolMs[EcEvtI MOD 4096]));
             EcTrStr := CONCAT(EcTrStr, ':');
             EcTrStr := CONCAT(EcTrStr, DINT_TO_STRING(GVL.DwZUm[EcEvtI MOD 4096]));
+            EcTrStr := CONCAT(EcTrStr, ':');
+            EcTrStr := CONCAT(EcTrStr, UDINT_TO_STRING(GVL.DwSinceAccMs[EcEvtI MOD 4096]));
             EcTrStr := CONCAT(EcTrStr, ',');
             EcEvtI := EcEvtI + 1;
         END_WHILE;
@@ -624,6 +635,13 @@ ShouldReturn := FALSE;
         MessagePackerFb.PackKvStr(ADR('bind_addr'), ADR(TCP_MSGPAK_Server.ipServerAddress.ipAddress));
         MessagePackerFb.PackKvDint(ADR('ui_ping_count'), TO_DINT(GVL.UiPingCount));
         MessagePackerFb.PackKvDint(ADR('ui_hb_stale_count'), TO_DINT(GVL.UiHeartbeatStaleCount));
+        MessagePackerFb.PackKvLint(ADR('comm_gap_max_ms'), GVL.CommGapMaxMs);
+        MessagePackerFb.PackKvLint(ADR('comm_gap_max_at_ms'), GVL.CommGapMaxAtMs);
+        MessagePackerFb.PackKvLint(ADR('comm_gaps_over_20ms'), UDINT_TO_LINT(GVL.CommGapsOver20));
+        MessagePackerFb.PackKvLint(ADR('diag_send_drop'), UDINT_TO_LINT(GVL.DiagReplySendDrop));
+        MessagePackerFb.PackKvLint(ADR('maint_arm_count'), UDINT_TO_LINT(GVL.MaintArmCount));
+        MessagePackerFb.PackKvLint(ADR('maint_refused'), UDINT_TO_LINT(GVL.MaintRefusedCount));
+        MessagePackerFb.PackKvLint(ADR('fault_seq'), UDINT_TO_LINT(GVL.FaultSeq));
         MessagePackerFb.PackKvDint(ADR('group_error_stop_trips'), TO_DINT(GVL.GroupErrorStopTripCount));
         MessagePackerFb.PackKvDint(ADR('ping_max_gap_ms'), TO_DINT(GVL.PingMaxGapMs));
         MessagePackerFb.PackKvLint(ADR('last_ui_ping_ms'), GVL.LastUiPingMs);

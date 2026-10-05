@@ -1,6 +1,8 @@
 (* =========== IMPLEMENTATION =========== *)
 
-    IF (RetryMotionCommandCooldown = 0 AND PacketType = 'M' AND GVL.minfo_buf_ridx.Size() > 0 AND MotionBufferSize < MOTION_BUFFER_THRESHOLD) THEN
+    // <= 0 (2026-10-05 review): the countdown steps by BusPeriod and can
+    // pass below 0 at a bus period > 1 ms; '= 0' then stopped motion for good.
+    IF (RetryMotionCommandCooldown <= 0 AND PacketType = 'M' AND GVL.minfo_buf_ridx.Size() > 0 AND MotionBufferSize < MOTION_BUFFER_THRESHOLD) THEN
         ShouldReturn := FALSE;
         CommandAck := FALSE;
 
@@ -131,6 +133,7 @@
 
                 IF (GroupWaitFb.CommandAccepted) THEN
                     GVL.minfo_buf_ridx.ConsumeTail();
+                    GVL.LastMotionAcceptMs := RuntimeMs;
 
                     MessagePackerFb.PackKvLint(ADR('movement_id'), TO_LINT(GroupWaitFb.MovementId));
 
@@ -809,6 +812,7 @@ ELSIF (CommandType = 'WAIT_FOR_TRIGGER_MOTION_PROGRESS') THEN
 
             IF (MoveLinearAbsoluteFb.CommandAccepted) THEN
                 GVL.minfo_buf_ridx.ConsumeTail();
+                GVL.LastMotionAcceptMs := RuntimeMs;
 
                 MessagePackerFb.PackKvLint(ADR('movement_id'), TO_LINT(MoveLinearAbsoluteFb.MovementId));
 

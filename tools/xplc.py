@@ -69,9 +69,15 @@ class ReplyTimeout(PlcError):
     """The PLC did not answer in time (also a dropped-whole reply)."""
 
 
+class MaintNotArmed(Nak):
+    """The PLC's maintenance gate is closed (SYS MAINT_ARM, 2026-10-05)."""
+
+
 def classify(cmd, err, reply=None):
     """The Nak subclass for an `err` text (one place for the PLC's strings)."""
     e = str(err)
+    if "maint_not_armed" in e:
+        return MaintNotArmed(cmd, e, reply)
     if "busy" in e:
         return Busy(cmd, e, reply)
     if "block_timeout" in e or "timeout" in e and "wait" in e.lower():

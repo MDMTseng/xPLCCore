@@ -31,6 +31,7 @@ export const MiscControlsPage: React.FC<{
   const [isJoggingModalOpen, setIsJoggingModalOpen] = useState(false);
   const init_plc_motion = useCallback(async (loop_count: number = 20, delay_ms: number = 500,latest_state_cb:(status_str:string, err_src:string, err_id:number)=>void) => {
     let event: EventOrdinal = Event.NONE;
+    let expectSt: number | undefined = undefined;
     let Counter = 0;
     while (true) {//feed event to enter ready state
       Counter += 1;
@@ -39,10 +40,19 @@ export const MiscControlsPage: React.FC<{
         return;
       }
 
-      let retInfo = await COMCtrlObj.sendTcpMsgPack(cmd.GA_EV(event)) as any;
+      let retInfo: any;
+      try {
+        // expect_st: the event was decided on that state (lib/fsmLock note)
+        retInfo = await COMCtrlObj.sendTcpMsgPack(cmd.GA_EV(event, expectSt)) as any;
+      } catch (e: any) {
+        if (!/state_changed/.test(String(e?.message ?? e))) throw e;
+        event = Event.NONE;          // the FSM moved on: read it again
+        continue;
+      }
       event = Event.NONE;
       console.log(retInfo)
       let status_str = retInfo['st_str'];
+      expectSt = typeof retInfo['st'] === 'number' ? retInfo['st'] : undefined;
       // err_src/err_id: published by the PLC on every SYS/GA_EV reply; cleared
       // on UnInited entry, so capture it the scan we see it.
       const err_src: string = retInfo['err_src'] ?? '';

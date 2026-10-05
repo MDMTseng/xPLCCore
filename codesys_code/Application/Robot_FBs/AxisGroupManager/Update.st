@@ -232,6 +232,12 @@ CASE _eState OF
         IF(uidx=-1)THEN
             GroupPower_Flag := FALSE;
             bReelPowerReq   := GVL.ReelMoveInFlight;
+            // Fault record (2026-10-05): kept past the reset to UnInited.
+            GVL.FaultSeq    := GVL.FaultSeq + 1;
+            GVL.FaultSource := GVL.LastErrorSource;
+            GVL.FaultId     := GVL.LastErrorID;
+            GVL.FaultAtMs   := AxisGroupSM.RuntimeMs;
+            GVL.MaintArmUntilMs := 0;      // an Error ends maintenance
 
             // PH#6: clear the coord-system gate on Error entry too, not
             // just on UnInited. Without this, a Ready -> Error -> Ready

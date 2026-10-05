@@ -649,7 +649,15 @@ export const cmd = {
   GetMachineState: () => env<MachineState>({ type: 'SYS', cmd: 'GET_MACHINE_STATE' }),
   GetDiag: () => env<DiagSnapshot>({ type: 'SYS', cmd: 'GET_DIAG' }),
   ResetDbgInfo: () => env<AckReply>({ type: 'SYS', cmd: 'RESET_DBG_INFO' }),
-  GA_EV: (ev: number) => env<GaEvReply>({ type: 'SYS', cmd: 'GA_EV', ev }),
+  // expect_st (2026-10-05): the state the event was decided on; the PLC
+  // refuses the event with err 'state_changed' if the FSM has moved on.
+  GA_EV: (ev: number, expect_st?: number) => env<GaEvReply>({
+    type: 'SYS', cmd: 'GA_EV', ev, ...(ev !== 0 && expect_st !== undefined ? { expect_st } : {}),
+  }),
+  // Maintenance gate (2026-10-05): DIRECT, DRV_SDO write, DELTA_MODE real,
+  // JOINT_MOVE on a real axis and axis limits above the downloaded ones
+  // need it. ttl_s 1..600; 0 disarms. Also drops on disconnect and Error.
+  MaintArm: (ttl_s: number) => env<AckReply & { armed: boolean; left_ms: number }>({ type: 'SYS', cmd: 'MAINT_ARM', ttl_s }),
   // Per-axis simulation mask (bench mode). bit0-2 = EAxis0/1/2 (delta),
   // bit3 = reelpullmotor; 1 = simulated. Honored ONLY in UnInited
   // (NAK err='not_uninited' otherwise). Reply echoes the effective mask.

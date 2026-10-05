@@ -129,19 +129,20 @@ def dwell_read(frm, fh):
         if not rows:
             break
         # evq (2026-10-05): why it stopped, the same stops in the same order:
-        # moves queued, host packets waiting, retry cooldown ms, commanded Z um.
+        # moves queued, host packets waiting, retry cooldown ms, commanded Z um,
+        # ms since a motion packet was last accepted (5th, 2026-10-05).
         if "evq" in rep:
-            evq = _rows(rep.get("evq"), (4,))
+            evq = _rows(rep.get("evq"), (4, 5))
             rows = rows[:len(evq)]
             if not rows:
                 break
         else:
-            evq = [["", "", "", ""]] * len(rows)          # an older PLC program
+            evq = [["", "", "", "", ""]] * len(rows)      # an older PLC program
         for r, q in zip(rows, evq):
-            fh.write("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n" % (
+            fh.write("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n" % (
                 r[0], r[1], "" if int(r[2]) == NOT_SETTLED else r[2], r[3], r[4],
                 r[5] if len(r) > 5 else "", r[6] if len(r) > 6 else "",     # err 5 / 10 ms after the stop
-                q[0], q[1], q[2], q[3]))
+                q[0], q[1], q[2], q[3], q[4] if len(q) > 4 else ""))
         i += len(rows)
     fh.flush()
     return i
@@ -212,7 +213,7 @@ def main():
             pass
         fh = open(a.dwell_log, "a") if a.dwell_log else None
         if fh:
-            fh.write("at_ms,dwell_ms,settle_ms,err_stop_um,err_leave_um,err_5ms_um,err_10ms_um,buf,hostq,cool_ms,z_um\n")
+            fh.write("at_ms,dwell_ms,settle_ms,err_stop_um,err_leave_um,err_5ms_um,err_10ms_um,buf,hostq,cool_ms,z_um,since_acc_ms\n")
         dw_next = 0
         # Host timing (2026-10-05): the UI's stream reports slow acks and
         # send gaps in its own ms; map them onto the PLC clock of the dwell

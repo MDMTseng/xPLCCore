@@ -99,12 +99,14 @@ export const PathTestPanel: React.FC<{
       await withFsmLock('Motors path test', async () => {
       const end = Date.now() + 120000;
       for (;;) {
-        const st = String((await send({ type: 'SYS', cmd: 'GA_EV', ev: 0 }))?.st_str ?? '');
+        const rep: any = await send({ type: 'SYS', cmd: 'GA_EV', ev: 0 });
+        const st = String(rep?.st_str ?? '');
         setFsm(st);
         if (st === 'Ready') break;
         if (Date.now() > end) throw new Error(`FSM did not reach Ready (${st})`);
         const ev = ({ UnInited: EV.POWER_ON, Powered: EV.GROUP_ENABLE, GroupEnabled: EV.HOME_GO, Error: EV.RESET } as Record<string, number>)[st];
-        if (ev !== undefined) { try { await send({ type: 'SYS', cmd: 'GA_EV', ev }); } catch { /* shows in the state */ } }
+        // expect_st: refused (state_changed) if the FSM moved on meanwhile
+        if (ev !== undefined) { try { await send({ type: 'SYS', cmd: 'GA_EV', ev, expect_st: rep?.st }); } catch { /* shows in the state */ } }
         await delay(400);
       }
       });
@@ -141,7 +143,13 @@ export const PathTestPanel: React.FC<{
     try {
       await toUnInited();
       const pkt: any = { type: 'SYS', cmd: 'DELTA_MODE', real: wantReal ? 1 : 0 };
-      if (wantReal) pkt.site_clear = 1;
+      if (wantReal) {
+        pkt.site_clear = 1;
+        // the PLC's maintenance gate (2026-10-05): the ticked "site is
+        // clear" box is the operator's intent; it closes again after
+        // 10 min, on disconnect or on Error
+        await send({ type: 'SYS', cmd: 'MAINT_ARM', ttl_s: 600 });
+      }
       for (let i = 0; ; i++) {
         try { await send(pkt); break; }
         catch (e: any) {
