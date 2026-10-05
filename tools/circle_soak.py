@@ -65,11 +65,12 @@ def dwell_read(frm, fh):
     i = max(frm, n - 4000)
     while i < n:
         ev = mc.sys_cmd("DWELL", **{"from": i})["ev"].rstrip(",")
-        rows = [e.split(":") for e in ev.split(",") if e.count(":") == 4 and all(e.split(":"))]
+        rows = [e.split(":") for e in ev.split(",") if e.count(":") in (4, 5) and all(e.split(":"))]
         if not rows:
             break
         for r in rows:
-            fh.write("%s,%s,%s,%s,%s\n" % (r[0], r[1], "" if int(r[2]) == NOT_SETTLED else r[2], r[3], r[4]))
+            fh.write("%s,%s,%s,%s,%s,%s\n" % (r[0], r[1], "" if int(r[2]) == NOT_SETTLED else r[2], r[3], r[4],
+                                          r[5] if len(r) > 5 else ""))   # err 5 ms after the stop, 2026-10-05
         i += len(rows)
     fh.flush()
     return i
@@ -130,7 +131,7 @@ def main():
             pass
         fh = open(a.dwell_log, "a") if a.dwell_log else None
         if fh:
-            fh.write("at_ms,dwell_ms,settle_ms,err_stop_um,err_leave_um\n")
+            fh.write("at_ms,dwell_ms,settle_ms,err_stop_um,err_leave_um,err_5ms_um\n")
         dw_next = 0
         mc.push("plc_stream_start", {"pkts": pkts, "timeoutMs": 30000})
         log("soak started: %s %.0f %% for %.0f min, %d packets" % (a.shape, a.speed, a.minutes, len(pkts)))

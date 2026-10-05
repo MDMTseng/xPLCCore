@@ -354,13 +354,15 @@ VAR_GLOBAL
 	   stop, logged when the motion leaves: DwAtMs stop time, DwDwellMs how
 	   long it stayed, DwSettleMs time until the actual TCP is within
 	   SettleTolMm of the target for good (16#FFFFFFFF: not within when it
-	   left), DwErr0Um / DwErrLeaveUm distance at the stop / when leaving.
+	   left), DwErr0Um / DwErr5Um / DwErrLeaveUm distance at the stop / 5 ms
+	   after it (or at the last stopped cycle of a shorter stop) / when leaving.
 	   Ring of 4096, DwN counts all. DwHist: settle time histogram, edges
 	   1 2 5 10 15 20 50 ms, last bin = not settled; DwErrLeaveMaxUm. *)
 	DwAtMs          : ARRAY[0..4095] OF UDINT;
 	DwDwellMs       : ARRAY[0..4095] OF UDINT;
 	DwSettleMs      : ARRAY[0..4095] OF UDINT;
 	DwErr0Um        : ARRAY[0..4095] OF UDINT;
+	DwErr5Um        : ARRAY[0..4095] OF UDINT;
 	DwErrLeaveUm    : ARRAY[0..4095] OF UDINT;
 	DwN             : UDINT;
 	DwHist          : ARRAY[0..8] OF UDINT;

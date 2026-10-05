@@ -127,7 +127,8 @@ ShouldReturn := FALSE;
         // settle time histogram (edges 1 2 5 10 15 20 50 ms, last =
         // not settled), emax = max error when leaving (um), ev = up
         // to 8 stops from index from:i as at_ms:dwell_ms:settle_ms:
-        // err_stop_um:err_leave_um (settle 4294967295 = not settled).
+        // err_stop_um:err_leave_um:err_5ms_um (settle 4294967295 = not
+        // settled; the 6th field since 2026-10-05).
         // reset:1 clears it.
         ShouldReturn := TRUE;
         CommandAck := TRUE;
@@ -161,6 +162,8 @@ ShouldReturn := FALSE;
             EcTrStr := CONCAT(EcTrStr, UDINT_TO_STRING(GVL.DwErr0Um[EcEvtI MOD 4096]));
             EcTrStr := CONCAT(EcTrStr, ':');
             EcTrStr := CONCAT(EcTrStr, UDINT_TO_STRING(GVL.DwErrLeaveUm[EcEvtI MOD 4096]));
+            EcTrStr := CONCAT(EcTrStr, ':');
+            EcTrStr := CONCAT(EcTrStr, UDINT_TO_STRING(GVL.DwErr5Um[EcEvtI MOD 4096]));
             EcTrStr := CONCAT(EcTrStr, ',');
             EcEvtI := EcEvtI + 1;
         END_WHILE;
