@@ -65,12 +65,12 @@ def dwell_read(frm, fh):
     i = max(frm, n - 4000)
     while i < n:
         ev = mc.sys_cmd("DWELL", **{"from": i})["ev"].rstrip(",")
-        rows = [e.split(":") for e in ev.split(",") if e.count(":") in (4, 5) and all(e.split(":"))]
+        rows = [e.split(":") for e in ev.split(",") if e.count(":") in (4, 5, 6) and all(e.split(":"))]
         if not rows:
             break
         for r in rows:
-            fh.write("%s,%s,%s,%s,%s,%s\n" % (r[0], r[1], "" if int(r[2]) == NOT_SETTLED else r[2], r[3], r[4],
-                                          r[5] if len(r) > 5 else ""))   # err 5 ms after the stop, 2026-10-05
+            fh.write("%s,%s,%s,%s,%s,%s,%s\n" % (r[0], r[1], "" if int(r[2]) == NOT_SETTLED else r[2], r[3], r[4],
+                                             r[5] if len(r) > 5 else "", r[6] if len(r) > 6 else ""))   # err 5 / 10 ms after the stop
         i += len(rows)
     fh.flush()
     return i
@@ -82,7 +82,7 @@ def main():
     ap.add_argument("--minutes", type=float, default=60)
     ap.add_argument("--report", type=float, default=60)
     ap.add_argument("--cor", type=float, default=49.0, help="corner distance for --shape round")
-    ap.add_argument("--shape", choices=("round", "dip", "zud"), default="round",
+    ap.add_argument("--shape", choices=("round", "dip", "zud", "tri"), default="round",
                     help="zud: Z 0 <-> -zstroke at X0 Y0, 10 ms at each end (low load)")
     ap.add_argument("--zstroke", type=float, default=20.0)
     ap.add_argument("--tq-stop", type=float, default=100.0, help="stop above this torque change per cycle, %% rated")
@@ -110,10 +110,19 @@ def main():
                 pkts.append(dict(kin, type="M", cmd="G1", X=0.0, Y=0.0, Z=z, Cor=0.0))
                 pkts.append({"type": "M", "cmd": "G4", "P": 0.01})
     else:
+        # dip: the square with a dip to Z -15 at each corner. tri (2026-10-05,
+        # owner): the same dips at the corners of an equilateral triangle
+        # whose vertices lie on the three arm directions (0 / 120 / 240 deg,
+        # radius 70.7 mm = the square's corner radius), so every arm sees the
+        # same load pattern and the three drives can be compared directly.
+        import math
+        corners = square if a.shape == "dip" else tuple(
+            (round(50 * math.sqrt(2) * math.cos(math.radians(120 * k)), 3),
+             round(50 * math.sqrt(2) * math.sin(math.radians(120 * k)), 3)) for k in range(3))
         laps = int(seconds / 0.5) + 50      # a dip lap takes ~1 s at 70 %
         pkts = []
         for _ in range(laps):
-            for x, y in square:
+            for x, y in corners:
                 pkts.append(dict(kin, type="M", cmd="G1", X=float(x), Y=float(y), Z=0.0, Cor=14.0))
                 pkts.append(dict(kin, type="M", cmd="G1", X=float(x), Y=float(y), Z=-15.0, Cor=14.0))
                 pkts.append({"type": "M", "cmd": "G4", "P": 0.01})
@@ -131,7 +140,7 @@ def main():
             pass
         fh = open(a.dwell_log, "a") if a.dwell_log else None
         if fh:
-            fh.write("at_ms,dwell_ms,settle_ms,err_stop_um,err_leave_um,err_5ms_um\n")
+            fh.write("at_ms,dwell_ms,settle_ms,err_stop_um,err_leave_um,err_5ms_um,err_10ms_um\n")
         dw_next = 0
         mc.push("plc_stream_start", {"pkts": pkts, "timeoutMs": 30000})
         log("soak started: %s %.0f %% for %.0f min, %d packets" % (a.shape, a.speed, a.minutes, len(pkts)))

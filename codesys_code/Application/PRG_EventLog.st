@@ -101,6 +101,7 @@ VAR
     lrDwD       : LREAL;
     lrDwE0      : LREAL;
     lrDwE5      : LREAL;    // error 5 ms after the stop
+    lrDwE10     : LREAL;    // error 10 ms after the stop
     udiDwAt     : UDINT;
     udiDwSettle : UDINT;
     udiDwK      : UDINT;
@@ -909,6 +910,7 @@ IF xDwOn THEN
             GVL.DwSettleMs[udiDwK] := udiDwSettle;
             GVL.DwErr0Um[udiDwK] := LREAL_TO_UDINT(lrDwE0 * 1000.0);
             GVL.DwErr5Um[udiDwK] := LREAL_TO_UDINT(lrDwE5 * 1000.0);
+            GVL.DwErr10Um[udiDwK] := LREAL_TO_UDINT(lrDwE10 * 1000.0);
             GVL.DwErrLeaveUm[udiDwK] := LREAL_TO_UDINT(lrDwD * 1000.0);
             GVL.DwHist[iDwB] := GVL.DwHist[iDwB] + 1;
             IF GVL.DwErrLeaveUm[udiDwK] > GVL.DwErrLeaveMaxUm THEN
@@ -928,6 +930,9 @@ IF xDwOn THEN
         // stopped cycle when the stop is shorter), 2026-10-05.
         IF DINT_TO_UDINT(iDwN) * DINT_TO_UDINT(AxisGroupSM.BusPeriod) <= 5 THEN
             lrDwE5 := lrDwD;
+        END_IF;
+        IF DINT_TO_UDINT(iDwN) * DINT_TO_UDINT(AxisGroupSM.BusPeriod) <= 10 THEN
+            lrDwE10 := lrDwD;
         END_IF;
         IF lrDwD > GVL.SettleTolMm THEN
             iDwLast := iDwN + 1;
