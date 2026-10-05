@@ -59,6 +59,15 @@ the wire, tree = wire, no slave optional; doc_review/asda_stale_target
 | 17:47 | standstill (`tools/bus_watch.py`) | DWELL | **dropout at 0.5 min** |
 | 17:47-21:59 | standstill watch, 4 h 12 min | DWELL | 12 dropouts, all between 17:47 and 18:51 (every 1.5-8 min), then none for 3 h; QEC and reel only every time |
 | 22:06 (10-03) | round 10 %, 3 h (`soak_segments.py --hours 3 --recover 10`) | DWELL | clean for 170 min, **dropout at 170.7 min** (00:56) |
+| 03:47 (10-05) | Z 0 <-> -20 at 10 %, 6 h (`soak_segments.py --hours 6 --recover 10`) | fe5028a (diag in Comm task) | **clean for 323.8 min**, dropout at 09:10 in the 6th segment; stopped by hand at 09:13, the owner found the QEC wiring loose |
+
+The 2026-10-05 dropout, with the PLC log readable again (section 3): the
+master's `Frames Lost` stayed **0**; `Drive=0xB: ETC device is no longer in
+mode operational`, then every 2 s `watchdog for opmode expired. Address:
+1002` (the QEC) with `unexpected working counters: number of slaves has
+changed` until the re-download. So that one was the QEC leaving the bus
+(its link), not a frame loss on the line. The owner found the QEC wiring
+unstable and is fixing it (09:13).
 
 Ruled out:
 - the every-stop log (SYS DWELL) and the CSV readout: the program without
