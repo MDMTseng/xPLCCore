@@ -1,6 +1,7 @@
 # EtherCAT dropouts with the QEC and reel resetting (2026-10-03)
 
-Status: **open, hardware**. Since the afternoon of 2026-10-03 the bus
+Status: **solved 2026-10-05: loose QEC wiring** (section 2: 9.5 h of
+motion clean after the fix). Original report: since the afternoon of 2026-10-03 the bus
 loses all frames for ~2.5 s now and then: the servos lose DC sync and go
 to errorstop if they are enabled, and the QEC (station 1002) and the reel
 servo (1003) come back in INIT / SAFE-OP, as if they had rebooted. It
@@ -69,9 +70,27 @@ After the QEC wiring fix (2026-10-05 09:30, re-download):
 | 09:52 | square dip 70 %, 59 min | clean (10-03 dropped twice at 14.9 min in this condition) |
 | 10:53 | square dip 70 %, 12 min (stopped by hand) | clean |
 | 11:06 | triangle 70 % (`--shape tri`), 2 h, with dwell CSV | **clean, 0 dropouts**, 33,166 stops |
+| 13:17 | triangle 70 %, 6 h (`soak_segments.py --hours 6 --recover 10`, 6 segments) | **clean, 0 dropouts**, 98,714 stops; `lost` / rx / tx errors 0 at the end |
 
-3 h 31 min of motion, `lost` 0 throughout: the QEC wiring was the cause
-of at least the 09:10 dropout, and so far of all of them.
+9 h 31 min of motion after the fix, `lost` 0 throughout (before it, the
+longest clean run was 323.8 min and most dropped within 0.5-30 min): the
+QEC wiring was the cause of the dropouts. Status: **solved**, unless one
+comes back.
+
+6 h triangle (`soak_logs/tri6h_1005.log`, `dwell_tri6h.csv`): stop error
+mean 23.2-23.6 um and +10 ms 5.6-6.3 um in every 15-min window, flat. The
++5 ms mean rose slowly from 9.2 (first minute) to 10.2 um (last hour): the
+share of stops in the upper mode of the bimodal +5 ms distribution went from
+58 % to 66 % within the first hour and then stayed, while the upper mode
+itself moved up (median 10 -> 12 um) steadily over the 6 h. The residual
+oscillation at 5 ms grows a little as the machine warms; it has died out
+by 10 ms either way. EAxis0's rate of torque steps >= 20 % rated fell from
+~112-118 to ~95 per 10k moving cycles in the last two hours (EAxis1 / 2
+flat), also consistent with warming. 4 stops of 1-3 ms (not the planned
+10 ms dwell; likely the exact stop at the top of the Cor 0 rise held for 1-3
+cycles) carry the arrival error in all four columns (max 33 um); ~1 unplanned
+pause of 40-877 ms per 10 min (queue ran dry or a G4 retry; not yet told
+apart).
 
 Triangle stop errors (33,166 stops, um): at arrival mean 23.3 (17-30),
 +5 ms 9.3 (3-13), +10 ms 5.8 (1-11), leaving 5.8. The three corners (one per
