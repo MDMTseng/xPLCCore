@@ -8,6 +8,7 @@ import { delay } from '../utils/async';
 import { t, type UILang } from '../i18n';
 import { cmd, Event, type EventOrdinal } from '../lib/protocol';
 import { withFsmLock } from '../lib/fsmLock';
+import { homingEvent } from '../lib/homing';
 
 export const MiscControlsPage: React.FC<{
   COMCtrlObj:COMCtrlObj,
@@ -63,7 +64,11 @@ export const MiscControlsPage: React.FC<{
       }
 
       if (status_str == "GroupEnabled") {
-        event = Event.HOME_GO
+        // A virtual delta (the local soft PLC, virtual-delta runs) cannot
+        // home: skip it, as the PLC allows exactly then (lib/homing.ts).
+        const h = await homingEvent(COMCtrlObj.sendTcpMsgPack);
+        event = h.ev as EventOrdinal;
+        if (h.skip) latest_state_cb("GroupEnabled：delta 為虛擬，跳過 homing / virtual delta, homing skipped", err_src, err_id);
       }
 
       if (status_str == "Ready") {

@@ -24,6 +24,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { buildPath, kinAt, lapsFor, parseStats, type AxisStats, type PathKind } from '../lib/pathTests';
 import { streamPackets, type StreamState } from '../lib/stream';
 import { withFsmLock } from '../lib/fsmLock';
+import { homingEvent } from '../lib/homing';
 import type { Send } from '../lib/motors';
 import { useHarnessAction } from '../harness/registry';
 
@@ -104,7 +105,10 @@ export const PathTestPanel: React.FC<{
         setFsm(st);
         if (st === 'Ready') break;
         if (Date.now() > end) throw new Error(`FSM did not reach Ready (${st})`);
-        const ev = ({ UnInited: EV.POWER_ON, Powered: EV.GROUP_ENABLE, GroupEnabled: EV.HOME_GO, Error: EV.RESET } as Record<string, number>)[st];
+        // GroupEnabled: homing, or the skip when the PLC reports the delta
+        // virtual (lib/homing.ts)
+        const ev = st === 'GroupEnabled' ? (await homingEvent(send)).ev
+          : ({ UnInited: EV.POWER_ON, Powered: EV.GROUP_ENABLE, Error: EV.RESET } as Record<string, number>)[st];
         // expect_st: refused (state_changed) if the FSM moved on meanwhile
         if (ev !== undefined) { try { await send({ type: 'SYS', cmd: 'GA_EV', ev, expect_st: rep?.st }); } catch { /* shows in the state */ } }
         await delay(400);

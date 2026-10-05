@@ -5,6 +5,7 @@ import { t, type UILang } from '../i18n';
 import { useHarnessAction } from '../harness/registry';
 import { cmd, Event, validateReply, type EventOrdinal } from '../lib/protocol';
 import { withFsmLock } from '../lib/fsmLock';
+import { homingEvent } from '../lib/homing';
 
 import { Divider } from 'antd';
 
@@ -211,7 +212,11 @@ export const OperationPage: React.FC<{
       }
 
       if (status_str == "GroupEnabled") {
-        event = Event.HOME_GO
+        // A virtual delta (the local soft PLC, virtual-delta runs) cannot
+        // home: skip it, as the PLC allows exactly then (lib/homing.ts).
+        const h = await homingEvent(COMCtrlObj.sendTcpMsgPack);
+        event = h.ev as EventOrdinal;
+        if (h.skip) latest_state_cb("GroupEnabled：delta 為虛擬，跳過 homing / virtual delta, homing skipped", err_src, err_id);
       }
 
       if (status_str == "Ready") {
