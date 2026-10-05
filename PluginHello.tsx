@@ -7,7 +7,7 @@ import type { COMCtrlObj } from './types';
 import { useTcpStringConnection } from './hooks/useTcpStringConnection';
 import { t, type UILang } from './i18n';
 import { hasHarnessAction, dispatchHarnessAction, listHarnessActions, registerHarnessAction, unregisterHarnessAction } from './harness/registry';
-import { cmd, validateReply } from './lib/protocol';
+import { cmd, validateReply, encodePacket, MAX_HOST_PACKET_BYTES } from './lib/protocol';
 import { VISION } from './lib/production/params';
 
 // Bump when shipping changes to the TCP/msgpack dispatcher or PLC protocol.
@@ -646,7 +646,21 @@ export const PluginHello: React.FC<{
 
 
       if (data.protocol_version === undefined) data.protocol_version = PROTOCOL_VERSION;
-      const packed = encode(data) as Uint8Array;
+      const packed = encodePacket(data);
+      // 2026-10-05: refuse here what the PLC would NAK `packet_too_long`
+      // (or worse, cut): one ring slot holds 255 bytes of msgpack.
+      if (packed.length > MAX_HOST_PACKET_BYTES) {
+        const msg = `packet_too_long: ${packed.length} B > ${MAX_HOST_PACKET_BYTES} B (cmd=${data?.cmd ?? data?.type})`;
+        const pend = data.id !== undefined ? _this.RX_lookup[data.id] : undefined;
+        if (pend) {
+          if (pend.timer) clearTimeout(pend.timer);
+          delete _this.RX_lookup[data.id];
+          try { pend.reject(new Error(msg)); } catch { }
+        }
+        console.error(msg);
+        setTcpReceivedMessages(prev => [...prev, msg]);
+        return promise ?? false;
+      }
       // Write binary MsgPack payload using Buffer from runtime
       const buf = BufferCtor ? BufferCtor.from(packed) : packed;
       tcpSocketRef.current.write(buf);

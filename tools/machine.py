@@ -314,28 +314,108 @@ def save_plc_log():
     return path
 
 
+TEMPLATES = os.path.join(REPO, "codesys_scripts", "jobs", "templates")
+
+
+def run_job(template, label, plc="keep", params=None, timeout=600):
+    """Run jobs/templates/<template> through the daemon with `params`
+    (name -> value) set after its `import time` line; returns output lines."""
+    with open(os.path.join(TEMPLATES, template), encoding="utf-8") as f:
+        code = f.read()
+    if params:
+        head = "".join("%s = %r\n" % kv for kv in params.items())
+        code = code.replace("import time\n", "import time\n" + head, 1)
+    tmp = os.path.join(REPO, "codesys_scripts", "jobs", "_job_%s.py" % label)
+    with open(tmp, "w", encoding="ascii") as f:
+        f.write(code)
+    return rpc("exec", "--plc", plc, "--label", label, "--file", tmp, timeout=timeout)
+
+
+def download_and_start(max_download=45.0, settle=5.0, bus_wait=30.0, say=None):
+    """The one download implementation (tools/deploy.py step 7 and
+    safe_install): download, wait `settle` s, start, wait for the EtherCAT
+    master in the same session (jobs/templates/download_wait_start.py). A
+    download slower than `max_download` s is NOT started (2026-10-05: the
+    two downloads after which EtherCAT never came up took 83.5 s and 92 s;
+    good ones 15-32 s). Raises SystemExit with the machine's state on any
+    failure; never downloads twice."""
+    say = say or log
+    lines = run_job("download_wait_start.py", "download", "download",
+                    {"MAX_DOWNLOAD_S": max_download, "SETTLE_S": settle, "BUS_WAIT_S": bus_wait}, timeout=900)
+    for l in lines:
+        if any(k in l for k in ("download done", "post-start", "ethercat:", "DOWNLOAD SLOW", "EXCEPTION", "Error")):
+            say("   |", l)
+    if any("DOWNLOAD SLOW" in l for l in lines):
+        raise SystemExit("download slower than %.0f s: NOT started (new code on the PLC, app stopped). "
+                         "Ask the owner before anything else." % max_download)
+    if not any("download done" in l for l in lines):
+        raise SystemExit("download did not complete:\n" + "\n".join(lines[-6:]))
+    if not any("post-start state:" in l and "run" in l.lower() for l in lines):
+        raise SystemExit("application did not start:\n" + "\n".join(lines[-6:]))
+    if not any("ethercat: UP" in l for l in lines):
+        raise SystemExit("EtherCAT did not come up after the start. Save the PLC log; do NOT download "
+                         "again without the owner.")
+    try:
+        sys.path.insert(0, os.path.join(REPO, "codesys_scripts"))
+        import layout_check
+        layout_check.save_baseline(layout_check.scan_disk(), "download")
+    except Exception as e:
+        say("layout baseline not saved: %s" % e)
+    return lines
+
+
+def save_incident(tag, extra=None):
+    """Evidence before any recovery step (2026-10-05 review): the PLC log
+    (500 entries, overwritten by a re-download), EC_STATS, the machine
+    state and `extra`, into codesys_scripts/jobs/incidents/<time>_<tag>/.
+    Returns the folder; each part is best effort."""
+    import json
+    import shutil
+    d = os.path.join(REPO, "codesys_scripts", "jobs", "incidents", time.strftime("%Y%m%d-%H%M%S_") + tag)
+    os.makedirs(d, exist_ok=True)
+    notes = {}
+    try:
+        shutil.copy(save_plc_log(), os.path.join(d, "PlcLog.txt"))
+    except BaseException as e:      # save_plc_log raises SystemExit
+        notes["plc_log"] = str(e)
+    for name, fn in (("ec_stats", lambda: sys_cmd("EC_STATS")), ("machine_state", lambda: sys_cmd("GET_MACHINE_STATE")),
+                     ("ethercat_master", ethercat_state)):
+        try:
+            notes[name] = fn()
+        except BaseException as e:
+            notes[name] = "unreadable: %s" % e
+    if extra:
+        notes.update(extra)
+    with open(os.path.join(d, "notes.json"), "w", encoding="utf-8") as f:
+        json.dump(notes, f, indent=1, default=str)
+    return d
+
+
 def safe_install(read_log=True):
     """Download the project with every safety step: (PLC log) -> delta
-    powered off, checked -> rpc install --on-site -> relink the UI ->
-    EtherCAT up. The delta comes back virtual (project default)."""
+    powered off, checked -> download, wait, start, EtherCAT up (one
+    session, download_and_start) -> relink the UI. The delta comes back
+    virtual (project default). For code changes on disk prefer
+    tools/deploy.py (Error state + reset before the download)."""
     if read_log:
         log("PLC log saved:", save_plc_log())
     drives_off()
-    lines = rpc("install", "--on-site", timeout=900)
-    done = [l for l in lines if "download done" in l]
-    started = [l for l in lines if "post-start state:" in l and "run" in l.lower()]
-    failed = [l for l in lines if "EXCEPTION" in l or "did not start" in l or "install failed" in l]
-    log("install:", done[0] if done else "\n".join(lines[-5:]))
-    # 2026-10-04: the download went through but the application did not
-    # start (exception in the first cycle); "download done" alone passed as
-    # success and the EtherCAT check further down was the only hint.
-    if not done or not started or failed:
-        raise SystemExit("install did not complete: %s" % "\n".join(failed or lines[-5:]))
-    log("install:", started[0])
+    # Nothing talks to the PLC while it changes (tools/deploy.py step 4).
+    try:
+        push("disconnect_tcp", timeout=20)
+        time.sleep(2)
+    except Exception as e:
+        log("UI link not closed: %s" % e)
+    try:
+        download_and_start()
+    finally:
+        # relink also after a failure, so the state can be read
+        try:
+            push("connect_tcp", timeout=20)
+            time.sleep(2)
+        except Exception:
+            pass
     reconnect()
-    time.sleep(3)
     ec = ethercat_state()
     log("EtherCAT:", ec)
-    if "TRUE" not in ec.get("xConfigFinished", ""):
-        raise SystemExit("EtherCAT not up after the download -- save the PLC log before retrying")
     return ec

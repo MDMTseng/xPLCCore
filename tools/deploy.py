@@ -78,16 +78,8 @@ def fail(why, state):
 
 
 def job(template, label, plc, params=None, timeout=600):
-    """Run a job template through the daemon, parameters prepended."""
-    with open(os.path.join(TEMPLATES, template), encoding="utf-8") as f:
-        code = f.read()
-    if params:
-        head = "".join("%s = %r\n" % kv for kv in params.items())
-        code = code.replace("import time\n", "import time\n" + head, 1)
-    tmp = os.path.join(LOGDIR, "_%s.py" % label)
-    with open(tmp, "w", encoding="ascii") as f:
-        f.write(code)
-    lines = mc.rpc("exec", "--plc", plc, "--label", label, "--file", tmp, timeout=timeout)
+    """Run a job template through the daemon (machine.run_job), log its output."""
+    lines = mc.run_job(template, label, plc, params, timeout=timeout)
     for l in lines:
         say("   |", l)
     return lines

@@ -22,6 +22,17 @@ HOST = "127.0.0.1"
 PORT = 8127
 
 
+def _token() -> str:
+    """remote_harness.py's start-up token (needed by /push since 2026-10-05)."""
+    import os
+    try:
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "jobs", "harness_token"), encoding="ascii") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("action")
@@ -47,7 +58,7 @@ def main() -> int:
     req = urllib.request.Request(
         f"http://{HOST}:{PORT}/push",
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "X-Harness-Token": _token()},
         method="POST",
     )
     try:

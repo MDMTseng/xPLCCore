@@ -105,3 +105,22 @@ The owner asked for sim-only testing for now (2026-10-05), so PLC changes go to 
 1. Host only, no PLC download: bus_watch (owner gate, evidence first, no auto-download); harness token / JSON only / Origin check; UI `plcReady` derived from the PLC, one guarded `walkToReady()`, no polling from hidden tabs; resume blocked after a PLC fault; `isUnknownCommand` fixed; encoded-size guard + test per command; Python retry only for idempotent commands; strict DWELL parsing; host timing reworked (PLC timestamps come in step 2); doc fixes.
 2. One PLC change set (sim first): DIRECT / DRV_SDO write / SET_AXIS_LIMITS behind a maintenance gate with constant caps; cooldown `<= 0`; `seq` stamped at send; DWELL / SETTLE strings capped with a `next` index; trigger TTL NAKs the waiting id; first-fault record + `fault_seq` in ST_CHG; `GA_EV expect_st`; accept / receive timestamps in motion acks; Comm gap metric; motion-queue-empty event.
 3. Design work: protocol.yaml + generator; operating modes; MachineView store + link supervisor + HELLO; time- or credit-based flow control; generated sim.
+
+## 4. Step 1 done (host only, 2026-10-05, verified on the local soft PLC)
+
+| Finding | Change |
+|---|---|
+| #3 bus_watch | `--owner-ok`; dropouts also from master xError / xConfigFinished and slave states (not lost frames only); evidence first (`machine.save_incident`: PLC log, EC_STATS, machine state, master, slaves into `codesys_scripts/jobs/incidents/`), then STOP; re-download only with `--recover N` |
+| one download path | `machine.download_and_start` (job `download_wait_start.py`: download, wait, start, xConfigFinished in the same session, > 45 s download not started) used by `safe_install` and `tools/deploy.py`; `safe_install` closes the UI link during the download and relinks even after a failure |
+| #4 harness | per-start token (`codesys_scripts/jobs/harness_token`, header `X-Harness-Token`) for /push and /status; Origin must be the UI's; Host must be loopback; POST must be application/json; CORS echoes the UI origin only. run_virtual.push and remote_ctrl send the token |
+| P2 Python retry | `xplc.Machine.send` resends after a LinkDown only read-only commands (`Machine.idempotent`); others raise after the link repair |
+| #13 DWELL parsing | `circle_soak` drops the last row of a string near 255 chars (re-read next query) and pairs ev / evq row by row |
+| #11 host timing | `lib/stream.ts`: reply gaps, UI event-loop lag, send gaps while the window had room (per-reply latency is ~430 ms by design and no signal); `circle_soak` logs and files them |
+| #9 TAPE_CYCLE size | `tin` and a zero `motion_progress` left out (PLC defaults), TAPE_CYCLE encoded float32 (`encodePacket`; the PLC reads REAL anyway); `sendTcpMsgPack` refuses > 255 B before sending; `lib/packetSize.test.ts` |
+| P2 old-PLC fallback | `isUnknownCommand` matches `unknown_cmd` / `unknown SYS cmd` only |
+| #6 resume | holds carry a kind; ">" (and harness `resume_cycle`) refuse after a PLC fault or a failed command: STOP then RUN |
+| #7 FSM walks | `lib/fsmLock.ts`: one walk at a time (Welcome / Operation init, path test), none during a production run; `plcReady` follows the PLC's state (ControlPage reconcile) |
+| P2 hidden tabs | Operation / Recovery / Binding poll only while shown |
+| docs | protocol.md: connection loss, reply tail, events (COORD_SET both edges, HEARTBEAT, COORD1_ERROR), unknown-command errors, GET_DIGITAL_INPUT `state`, trigger TTL; TS `DigitalInputReply.state` |
+
+Sim results: 15 min triangle (3 872 stops, no unplanned stop; every stop with 11-12 moves queued, 7-10 packets waiting, cooldown 0; acks 250-520 ms = back-pressure), 3 min with the new timing (reply gap max 130 ms, UI loop lag max 2 ms); deploy.py and safe_install end to end (bus check fails as expected: no EtherCAT on the sim). The sim needs `GVL.SimNoFieldbus := TRUE` after each download to reach Ready.

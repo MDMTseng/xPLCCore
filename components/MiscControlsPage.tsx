@@ -7,6 +7,7 @@ import type { COMCtrlObj } from '../types';
 import { delay } from '../utils/async';
 import { t, type UILang } from '../i18n';
 import { cmd, Event, type EventOrdinal } from '../lib/protocol';
+import { withFsmLock } from '../lib/fsmLock';
 
 export const MiscControlsPage: React.FC<{
   COMCtrlObj:COMCtrlObj,
@@ -169,13 +170,19 @@ export const MiscControlsPage: React.FC<{
             }}
             onClick={async () => {
               setPlcLastError(null);
-              let ret = await init_plc_motion(30, 500, (status_str: string, err_src: string, err_id: number) => {
-                console.log(status_str, err_src, err_id);
-                setPlcMotionStatus(status_str);
-                // Latch the last non-empty error so it stays visible after the
-                // auto EV_RESET clears GVL.LastErrorSource on UnInited entry.
-                if (err_src) setPlcLastError({ src: err_src, id: err_id });
-              });
+              let ret: any;
+              try {
+                ret = await withFsmLock('Welcome init', () => init_plc_motion(30, 500, (status_str: string, err_src: string, err_id: number) => {
+                  console.log(status_str, err_src, err_id);
+                  setPlcMotionStatus(status_str);
+                  // Latch the last non-empty error so it stays visible after the
+                  // auto EV_RESET clears GVL.LastErrorSource on UnInited entry.
+                  if (err_src) setPlcLastError({ src: err_src, id: err_id });
+                }));
+              } catch (e: any) {
+                setPlcMotionStatus(String(e?.message ?? e));
+                return;
+              }
               if (ret === true) {
                 onPlcReadyChange?.(true);
               }

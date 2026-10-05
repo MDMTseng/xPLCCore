@@ -15,12 +15,24 @@ HTTP endpoints (bind 127.0.0.1 only):
                              timeout). Otherwise returns instr_id right away.
   GET  /status               Queue/result snapshot for debugging.
 
-This is a *development* tool -- no auth, no TLS; only binds to loopback.
+A development tool, loopback only, but hardened (2026-10-05 review: with
+`Access-Control-Allow-Origin: *` and no token, any web page open in a
+browser on this PC could POST /push and send raw PLC packets):
+  - /push and /status need the header X-Harness-Token, a random token made
+    at start and written to codesys_scripts/jobs/harness_token (drivers read
+    it there: tools/sim/run_virtual.harness_token());
+  - a request carrying an Origin header must come from the UI
+    (XPLC_UI_ORIGINS, default http://localhost:5199 and
+    http://127.0.0.1:5199); CORS echoes only those;
+  - the Host header must be the loopback address (DNS rebinding);
+  - POST bodies must be application/json (no preflight-free text/plain).
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import secrets
 import queue
 import threading
 import time
@@ -88,6 +100,11 @@ class Harness:
 
 state = Harness()
 
+TOKEN = secrets.token_hex(16)
+TOKEN_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "jobs", "harness_token")
+UI_ORIGINS = set(o.strip() for o in os.environ.get(
+    "XPLC_UI_ORIGINS", "http://localhost:5199,http://127.0.0.1:5199").split(",") if o.strip())
+
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: Any) -> None:
@@ -99,17 +116,43 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        # UI is served from a different dev origin; CORS gets us past that.
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        # The UI is served from another origin (Vite :5199): CORS for it only.
+        origin = self.headers.get("Origin")
+        if origin in UI_ORIGINS:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
         self.wfile.write(body)
 
+    def _refused(self, need_token: bool) -> bool:
+        """True (and answered 403) when this request may not go on."""
+        host = (self.headers.get("Host") or "").split(":")[0]
+        if host not in ("127.0.0.1", "localhost"):
+            self._send_json({"err": "bad host"}, status=403)
+            return True
+        origin = self.headers.get("Origin")
+        if origin is not None and origin not in UI_ORIGINS:
+            self._send_json({"err": "origin not allowed"}, status=403)
+            return True
+        if need_token and not secrets.compare_digest(self.headers.get("X-Harness-Token") or "", TOKEN):
+            self._send_json({"err": "missing or wrong X-Harness-Token (codesys_scripts/jobs/harness_token)"},
+                            status=403)
+            return True
+        if self.command == "POST" and not (self.headers.get("Content-Type") or "").startswith("application/json"):
+            self._send_json({"err": "Content-Type must be application/json"}, status=415)
+            return True
+        return False
+
     def do_OPTIONS(self) -> None:  # noqa: N802
+        if self._refused(need_token=False):
+            return
         self._send_json({})
 
     def do_GET(self) -> None:  # noqa: N802
+        if self._refused(need_token=self.path.startswith("/status")):
+            return
         if self.path.startswith("/poll"):
             # Short poll (UI is already on a timer, no need to long-poll).
             instr = state.next_instr(timeout=0.0)
@@ -125,6 +168,8 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"err": "unknown path"}, status=404)
 
     def do_POST(self) -> None:  # noqa: N802
+        if self._refused(need_token=self.path.startswith("/push")):
+            return
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b""
         try:
@@ -175,6 +220,9 @@ def main() -> int:
     args = ap.parse_args()
 
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
+    with open(TOKEN_FILE, "w", encoding="ascii") as f:
+        f.write(TOKEN)
+    print(f"token written to {TOKEN_FILE}", flush=True)
     print(f"remote_harness up at http://{args.host}:{args.port}", flush=True)
     print("  UI polls:  GET  /poll", flush=True)
     print("  UI posts:  POST /result", flush=True)

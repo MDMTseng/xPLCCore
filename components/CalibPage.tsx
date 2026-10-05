@@ -18,6 +18,7 @@ import { runAbortTest } from '../lib/production/abortTest';
 import { runJogTest } from '../lib/jogTest';
 import { finishTapeMove, emptyNozzle } from '../lib/production/recovery';
 import { InputMonitor, TAPE_SENSOR_PINS, checkTapeSensors, type DiEvent } from '../lib/production/inputs';
+import { registerRunProbe } from '../lib/fsmLock';
 import type { PlanState } from '../lib/protocol';
 
 
@@ -141,7 +142,13 @@ export const CalibPage: React.FC<{
     isRunning?: boolean;
     run_cycle_stop?: boolean;
     visionTimeouts?: number;      // vision replies timed out in a row (waitForCheckData)
-    current_error?: { errorString: string; raw?: any; fc?: any } | undefined;
+    // kind (2026-10-05 integration review): what raised the hold. 'sensor'
+    // (tape / material checks) may be resumed with ">" once fixed; 'command'
+    // (a PLC NAK, link) and 'plc' (the PLC left Ready) may not: the PLC
+    // zeroes its modal pose when it leaves Ready and flushes triggers and
+    // waits, so continuing mid-cycle sends partial moves to the wrong place.
+    // Only STOP, then RUN (which resyncs everything) gets out of those.
+    current_error?: { errorString: string; raw?: any; fc?: any; kind?: 'sensor' | 'command' | 'plc' } | undefined;
     BurnRunning?: boolean;
     BurnRunningStopTrigger?: boolean;
     runButtonEl?: HTMLElement | null;
@@ -177,6 +184,8 @@ export const CalibPage: React.FC<{
     [k: string]: any;
   };
   const _this = useRef<RunCtx>({}).current;
+  // No FSM walk (Init buttons) while a production run is on (lib/fsmLock).
+  useEffect(() => { registerRunProbe(() => _this.isRunning === true); }, []);
   const sendTcpMsgPack = COMCtrlObj.sendTcpMsgPack;
   // Host mark in the PLC event log: fire-and-forget (no reply awaited, no
   // throw) so timing marks can never disturb the cycle.
@@ -767,6 +776,14 @@ export const CalibPage: React.FC<{
   // for commands the cycle does not wait on: a NAK (e.g.
   // flyevent_buffer_full, so a camera never fires) used to be lost; it now
   // raises current_error and the cycle holds at the next checkpoint.
+  // Why ">" may not resume the held run, or undefined (see current_error.kind).
+  function resumeBlocked():string|undefined{
+    const k=_this.current_error?.kind;
+    if(k==='plc'||k==='command')
+      return "PLC 故障或指令失敗後不能用 > 繼續，請按 STOP 再 RUN / after a PLC fault or a failed command only STOP then RUN: "+_this.current_error?.errorString;
+    return undefined;
+  }
+
   function makeMachine(){
     const send=(pkt:any, ...rest:any[]):Promise<any>=>{
       const r=(sendTcpMsgPack as any)(pkt, ...rest);
@@ -775,7 +792,7 @@ export const CalibPage: React.FC<{
     };
     const failed=(pkt:any,e:any)=>{
       console.error("command failed",pkt?.cmd,e?.message??e);
-      if(_this.current_error==undefined) _this.current_error={errorString:"PLC 指令失敗 ("+(pkt?.cmd??"?")+"): "+(e?.message??e)};
+      if(_this.current_error==undefined) _this.current_error={errorString:"PLC 指令失敗 ("+(pkt?.cmd??"?")+"): "+(e?.message??e), kind:'command'};
     };
     const sendNoWait=(pkt:any):void=>{ send(pkt).catch((e:any)=>failed(pkt,e)); };
     const window=createSendWindow((pkt)=>send(pkt), MOTION.MAX_IN_FLIGHT, failed);
@@ -796,9 +813,14 @@ export const CalibPage: React.FC<{
   }
 
   // A NAK for a command this PLC program does not know (older build).
+  // An older PLC program that lacks the command: 'unknown_cmd' (motion
+  // ring, ProcessMotionPacket) or 'unknown SYS cmd' (DrainHostPackets,
+  // PRG_DiagReply). 2026-10-05 review: the old pattern missed the SYS text
+  // and matched any NAK without an err string ("nak (id=...)"), so a real
+  // failure of PLAN_GET / REEL_RESUME silently skipped tape recovery.
   function isUnknownCommand(e:any):boolean{
     const m=String(e?.message??e);
-    return /unknown_cmd|^nak \(/.test(m);
+    return /\bunknown_cmd\b|\bunknown SYS cmd\b/.test(m);
   }
 
   // Path feed test (lib/production/pathTest.ts): stream short G1 moves
@@ -1038,9 +1060,9 @@ export const CalibPage: React.FC<{
               if(/group_not_ready/.test(why)){
                 // The read is refused because the PLC left Ready: that is
                 // the fault to report, not the read.
-                _this.current_error={errorString:"PLC 故障停止（伺服 / 匯流排 / 緊停），請排除後重新初始化 / PLC left Ready (group_not_ready)"};
+                _this.current_error={errorString:"PLC 故障停止（伺服 / 匯流排 / 緊停），請排除後重新初始化 / PLC left Ready (group_not_ready)", kind:'plc'};
               }else if(readFailures>=WATCHDOG.READ_FAILURE_LIMIT){
-                _this.current_error={errorString:"輸入讀取失敗 (input read failed): "+why};
+                _this.current_error={errorString:"輸入讀取失敗 (input read failed): "+why, kind:'command'};
               }
               await delay(WATCHDOG.POLL_MS);
               continue;
@@ -1056,7 +1078,9 @@ export const CalibPage: React.FC<{
             latestInputObj={raw};
             _this.latestInputs={raw,fc:_this.latestInputs?.fc??new Array(16).fill(0)};
             if(v.errors.length>0){
-              _this.current_error={errorString:v.errors.join(',')+',',raw};
+              // never downgrade a PLC / command hold to a resumable one
+              if(_this.current_error==undefined || _this.current_error.kind==='sensor')
+                _this.current_error={errorString:v.errors.join(',')+',',raw, kind:'sensor'};
               console.log("current_error",_this.current_error);
             }
           }
@@ -1452,6 +1476,8 @@ export const CalibPage: React.FC<{
   }, [tossPauseMode]);
 
   useHarnessAction('resume_cycle', async () => {
+    const blocked = resumeBlocked();
+    if (blocked) return { resumed: false, reason: 'not_resumable', detail: blocked };
     let curTime = Date.now();
     while (_this.current_error != undefined) {
       _this.current_error = undefined;
@@ -2422,7 +2448,11 @@ export const CalibPage: React.FC<{
       
       <button //disabled={stepMode==false && tossPauseMode==false} 
         onClick={async() =>{
-        
+        const blocked=resumeBlocked();
+        if(blocked){
+          setRunningState(blocked);
+          return;
+        }
         let curTime=Date.now();
         while(_this.current_error!=undefined){
           _this.current_error=undefined;

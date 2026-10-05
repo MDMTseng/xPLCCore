@@ -37,3 +37,10 @@ Thumbs.db
 *.swp
 __pycache__/
 standalone/data/
+
+# 2026-10-05: harness start-up token, deploy / incident evidence, job temp files
+codesys_scripts/jobs/harness_token
+codesys_scripts/jobs/deploy_logs/
+codesys_scripts/jobs/incidents/
+codesys_scripts/jobs/_job_*.py
+codesys_scripts/jobs/deployed_fp.json

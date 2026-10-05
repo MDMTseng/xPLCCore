@@ -46,7 +46,7 @@ export type TapeStepOptions = {
 let topShotEventId = TAPE.TOP_SHOT_EVENT_ID_BASE;
 
 /** Pin sequence for the two top shots: [delay_ms, mask, state] triples. */
-function topShotSequence(): number[] {
+export function topShotSequence(): number[] {
   const side = bit(IO_PINS.O.CAM_Top_SideLight) | bit(IO_PINS.O.CAM_Top);
   const front = bit(IO_PINS.O.CAM_Top_Light0) | bit(IO_PINS.O.CAM_Top);
   return [

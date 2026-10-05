@@ -23,6 +23,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { buildPath, kinAt, lapsFor, parseStats, type AxisStats, type PathKind } from '../lib/pathTests';
 import { streamPackets, type StreamState } from '../lib/stream';
+import { withFsmLock } from '../lib/fsmLock';
 import type { Send } from '../lib/motors';
 import { useHarnessAction } from '../harness/registry';
 
@@ -95,6 +96,7 @@ export const PathTestPanel: React.FC<{
   const toReady = async () => {
     setRunning('homing');
     try {
+      await withFsmLock('Motors path test', async () => {
       const end = Date.now() + 120000;
       for (;;) {
         const st = String((await send({ type: 'SYS', cmd: 'GA_EV', ev: 0 }))?.st_str ?? '');
@@ -105,6 +107,7 @@ export const PathTestPanel: React.FC<{
         if (ev !== undefined) { try { await send({ type: 'SYS', cmd: 'GA_EV', ev }); } catch { /* shows in the state */ } }
         await delay(400);
       }
+      });
       log('FSM Ready');
     } catch (e: any) {
       log(`to Ready failed: ${e?.message ?? e}`);

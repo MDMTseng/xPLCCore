@@ -4,6 +4,7 @@ import { delay } from '../utils/async';
 import { t, type UILang } from '../i18n';
 import { useHarnessAction } from '../harness/registry';
 import { cmd, Event, validateReply, type EventOrdinal } from '../lib/protocol';
+import { withFsmLock } from '../lib/fsmLock';
 
 import { Divider } from 'antd';
 
@@ -38,6 +39,7 @@ export const OperationPage: React.FC<{
   lib_path: string,
   UI_path: string,
   uiLang: UILang,
+  active?: boolean,
 }> = ({
 
   COMCtrlObj,
@@ -45,6 +47,7 @@ export const OperationPage: React.FC<{
   lib_path,
   UI_path,
   uiLang,
+  active = true,
 
 }) => {
   const [plcMotionStatus, setPlcMotionStatus] = useState("None");
@@ -146,10 +149,14 @@ export const OperationPage: React.FC<{
   // a live view of queue depth + commanded pose. We don't gate on
   // plcMotionStatus -- the PLC answers in any state, and we want the queue
   // visible even before Ready (e.g. catching a stuck buffer post-recovery).
+  // Only while the tab is shown (2026-10-05 review: hidden tabs stay
+  // mounted; their pollers added ~5 requests/s to the PLC link).
+  const activeRef = useRef(active);
+  activeRef.current = active;
   useEffect(() => {
     let cancelled = false;
     const tick = async () => {
-      if (cancelled) return;
+      if (cancelled || !activeRef.current) return;
       await refreshMachineState();
       try {
         const reply: any = await COMCtrlObj.sendTcpMsgPack(cmd.ReadLatestCmdLocation());
@@ -249,13 +256,13 @@ export const OperationPage: React.FC<{
     setCoordSet(null);
     setAxesErrId(null);
     setAxesErrMask(null);
-    const ret = await init_plc_motion(loopCount, delayMs, (status_str: string, err_src: string, err_id: number) => {
+    const ret = await withFsmLock('Operation init (harness)', () => init_plc_motion(loopCount, delayMs, (status_str: string, err_src: string, err_id: number) => {
       setPlcMotionStatus(status_str);
       if (err_src) {
         setPlcLastError({ src: err_src, id: err_id });
         fetchAxesErr();
       }
-    });
+    }));
     if (ret === true) refreshMachineState();
     return { reached_ready: ret === true };
   }, [init_plc_motion, refreshMachineState]);
@@ -509,16 +516,22 @@ export const OperationPage: React.FC<{
               setPlcLastError(null);
               setAxesErrId(null);
               setAxesErrMask(null);
-              let ret = await init_plc_motion(20, 500, (status_str: string, err_src: string, err_id: number) => {
-                console.log(status_str, err_src, err_id);
-                setPlcMotionStatus(status_str);
-                // Latch the last non-empty error so it stays visible after the
-                // auto EV_RESET clears GVL.LastErrorSource on UnInited entry.
-                if (err_src) {
-        setPlcLastError({ src: err_src, id: err_id });
-        fetchAxesErr();
-      }
-              });
+              let ret: any;
+              try {
+                ret = await withFsmLock('Operation init', () => init_plc_motion(20, 500, (status_str: string, err_src: string, err_id: number) => {
+                  console.log(status_str, err_src, err_id);
+                  setPlcMotionStatus(status_str);
+                  // Latch the last non-empty error so it stays visible after the
+                  // auto EV_RESET clears GVL.LastErrorSource on UnInited entry.
+                  if (err_src) {
+                    setPlcLastError({ src: err_src, id: err_id });
+                    fetchAxesErr();
+                  }
+                }));
+              } catch (e: any) {
+                setPlcMotionStatus(String(e?.message ?? e));
+                return;
+              }
               console.log(ret);
             }}
           >

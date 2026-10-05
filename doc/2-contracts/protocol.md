@@ -19,12 +19,19 @@ Cross-refs:
 
 - **TCP** to PLC `:8125`, no length framing — one MessagePack value per
   send (the PLC level-parser frames on map nesting).
-- **No TLS, no auth.** Trusted LAN only.
+- **No TLS, no auth.** Trusted LAN only. Any client on the LAN that takes
+  the single slot can drive the machine (2026-10-05 integration review,
+  safety P0; doc_review/plc_ui_integration_review_2026-10-05.md).
 - **Single connection.** `udiMaxConnections := 1` on the PLC; second
   client gets connection refused until idle-watchdog reclaims (~7 s).
-- **Connection-loss recovery:** PLC supervisor trips Error after 5 s of
-  silence (W1 A3); renderer reconnects automatically and refetches
-  `GET_MACHINE_STATE`.
+- **Connection loss** (corrected 2026-10-05): the PLC does NOT go to
+  Error on silence. With motion queued it only counts the silent spell
+  (`UiHeartbeatStaleCount`, `ui_hb_stale_count`); the socket's idle
+  watchdog (`HostIdleTimeoutMs`, 5 s) resets the link, the disconnect
+  cleanup drops unprocessed packets, waits and the TAPE sequence, and
+  motion already accepted (at most 12 moves) runs to its end. The renderer
+  does NOT reconnect by itself: the operator clicks Disconnect / Connect;
+  on connect it fetches `GET_MACHINE_STATE`.
 
 ## Envelope
 
@@ -47,17 +54,21 @@ Three shapes:
 
 1. **Reply** (ack or NAK to a previous outbound `id`):
    ```
-   { id, ack, runtime_ms, ...payload }     // ack=true: payload is per-command
-   { id, ack:false, err, runtime_ms, ... } // ack=false: err is short string
+   { ...payload, id, ack, seq }            // ack=true: payload is per-command
+   { err, ...payload, id, ack:false, seq } // ack=false: err is short string
    ```
-   Renderer routes by `id` to the awaiting promise.
+   Renderer routes by `id` to the awaiting promise. The tail is `id`,
+   `ack`, `seq` only; `runtime_ms` is in a reply only where the command
+   packs it (PING, GET_MACHINE_STATE, GET_DIAG...). `seq` is not usable
+   for gap detection yet: it is incremented from two tasks and the
+   diagnostic replies bypass the reply ring (review 2026-10-05, P1).
 
 2. **Server-push event** (unsolicited, no `id`):
    ```
    { kind:'event', name, runtime_ms, ...payload }
    ```
-   `name` is one of `ST_CHG`, `COORD_SET`, `MOVE_DONE` (see §"Push
-   events"). Renderer dispatches a `window` `CustomEvent('plc:event')`.
+   `name` is one of `ST_CHG`, `COORD_SET`, `MOVE_DONE`, `DI`,
+   `TRIGGER_ERR`, `COORD1_ERROR`, `HEARTBEAT` (see §"Push events"). Renderer dispatches a `window` `CustomEvent('plc:event')`.
 
 3. **Reconnect snapshot** (from `SYS/GET_MACHINE_STATE`, technically a
    reply but treated specially): cached in `lastMachineSnapshotRef` and
@@ -79,7 +90,7 @@ Three shapes:
 | `missing_type_field` | Outbound packet without `type` (or unrecognised). |
 | `protocol_version_mismatch` | Outbound `protocol_version` ≠ PLC's. Reply also includes `err_got`. |
 | `group_error_stop` / `group_read_status_error` | MC group FB reported error before move accept. |
-| _generic_ `ack:false` (no `err`) | Catch-all (e.g. fly-event buffer full, unknown cmd). |
+| `unknown_cmd` / `unknown SYS cmd` | The command is not in this PLC program: `unknown_cmd` on the motion path (ProcessMotionPacket), `unknown SYS cmd` on the SYS / diagnostic paths. The renderer's "older PLC program" fallback matches exactly these two (CalibPage `isUnknownCommand`). |
 
 ---
 
@@ -103,9 +114,9 @@ parameters.
 | `WAIT_FOR_REEL_STOP` / `BLOCK_FOR_REEL_STOP` | `timeout_ms?` (LINT, ms) | `{ack:true}` | Wait until the **reel axis** is idle (it is NOT in the delta group, so `WAIT_FOR_MOTION_STOP` doesn't cover it): `reelGoRequest*` OR `reelMoveRelative*.Busy` all FALSE. Lets the host `await` a `ReelGo` without polling `reel_pos`, while arm moves keep running. `0`/absent = no timeout; NAK `block_timeout` on expiry. **Deferred reply, not a queue barrier** (since 2026-09-24): the PLC takes the wait off the inbound queue at once and replies when it resolves, so commands sent after it -- G1 included -- run meanwhile; `await` the reply before sending what must follow. One pending wait per kind (motion / reel / input); another of the same kind NAKs `wait_busy`. A wait still pending when the FSM leaves Ready NAKs `group_not_ready`; one pending when the host disconnects is dropped without a reply. |
 | `TAPE_CYCLE` | `motion_id_offset`, `motion_progress` (trigger, relative to the last accepted move); `Distance` (reel, 0 = no advance), `F?` `ACC?` `DEA?` `JERK?`; `tx` `ty` `tz` `td` `tin` (shot gate sphere, `tin`=0: fire on leaving); `pin_op_seq`; `event_id`; `ttl_ms?` (shot gate, default 3000); `timeout_ms?` (sequence, default 6000) | `{ack:true, wait_ms, reel_ms}` when the shots are armed | The tape step as one command, sequenced on the PLC task: wait for the trigger move, advance the reel and wait for it to stop, then arm the `pin_op_seq` shots as a DistanceTrigger fly event. Deferred reply (not a queue barrier); one at a time. NAK `tape_busy`, `flyevent_buffer_full`, `tape_timeout`, `reel_busy`, `group_not_ready` (with `state`: 1 waiting for the move, 2 waiting for the reel, 3 arming). |
 | `BLOCK_FOR_DIGITAL_INPUT` | `pin` (uint), `state` (uint), `group?` (uint), `timeout_ms?` (LINT) | `{ack:true}` | Wait for the digital input bits in `pin` (byte `group`) to match `state`. `0`/absent `timeout_ms` = **30 s ceiling** (never waits forever); NAK `block_timeout` on expiry. **Deferred reply, not a queue barrier** (since 2026-09-24): the PLC takes the wait off the inbound queue at once and replies when it resolves, so commands sent after it -- G1 included -- run meanwhile; `await` the reply before sending what must follow. One pending wait per kind (motion / reel / input); another of the same kind NAKs `wait_busy`. A wait still pending when the FSM leaves Ready NAKs `group_not_ready`; one pending when the host disconnects is dropped without a reply. **No `WAIT_FOR_DIGITAL_INPUT` alias.** |
-| `WAIT_FOR_TRIGGER_MOTION_PROGRESS` | `motion_id?` (uint, defaults to last accepted), `motion_id_offset?` (int), `motion_progress` (REAL), `ttl_ms?` | *(deferred)* `{ack:true}` via `ACK_SRC_ID` when the trigger fires | Renderer-side await of a fly-event firing point. No immediate reply on successful registration. NAK `flyevent_reject` when refused (e.g. resolved `motion_id`=0), NAK `flyevent_buffer_full` when `FlyEventAvailableCount <= 3`, NAK `TRIGGER_TIMEOUT_ERR` if the referenced motion never fires the trigger. |
+| `WAIT_FOR_TRIGGER_MOTION_PROGRESS` | `motion_id?` (uint, defaults to last accepted), `motion_id_offset?` (int), `motion_progress` (REAL), `ttl_ms?` | *(deferred)* `{ack:true}` via `ACK_SRC_ID` when the trigger fires | Renderer-side await of a fly-event firing point. No immediate reply on successful registration. NAK `flyevent_reject` when refused (e.g. resolved `motion_id`=0), NAK `flyevent_buffer_full` when `FlyEventAvailableCount <= 3`, If the trigger's TTL expires the PLC only pushes `TRIGGER_ERR` (error_code 100); it does NOT NAK this waiting id (corrected 2026-10-05; review P1: the host's own 5 s timeout ends the wait, and the PLC TTL is 10 s / speed override). `FLUSH` does NAK it (`flushed`). |
 | `READ_LATEST_CMD_LOCATION` | — | `{X, Y, Z, A, ...}` | Last commanded Cartesian pose (post-coord-transform). |
-| `GET_DIGITAL_INPUT` | `group?` | `{value}` | Current digital input word. Returns 0 when `HECAT_1616` unwired. |
+| `GET_DIGITAL_INPUT` | `group?` (ignored: the read is commented out in the PLC) | `{state}` | Current digital input word. Returns 0 when `HECAT_1616` unwired. |
 | `getDigitalInputFlipCount` | — | `{...flip_counts}` | Accumulated edge counts per pin. |
 | `RESET_DBG_INFO` | — | `{ack:true}` | M-side branch. Only fires when FSM=Ready (use the SYS variant if you need the unconditional path). Both branches delegate to the same `ResetDiagCounters()` — one canonical list, no drift. |
 
@@ -113,7 +124,7 @@ parameters.
 
 | `cmd` | Params | Reply on ack | Notes |
 |---|---|---|---|
-| `PING` | — | `{pong:true, runtime_ms}` | Heartbeat. Stamps `GVL.LastUiPingMs`, bumps `UiPingCount`. Sent by `PluginHello` every 1 s; PLC trips Error after 5 s of silence. |
+| `PING` | — | `{pong:true, runtime_ms}` | Heartbeat. Stamps `GVL.LastUiPingMs`, bumps `UiPingCount`. Sent by `PluginHello` every 1 s when nothing else was sent. The PLC does not trip Error on silence (see Transport). |
 | `GET_MACHINE_STATE` | — | `{st, st_str, err_src, err_id, motion_buffer_size, movement_id, last_completed_movement_id, runtime_ms, coord_set, axes_err_mask, axes_state, axes_err_id, axes_labels, axes_sim_mask, reel_pos, scratchpad:{...}, boot_epoch_now}` | Pure read; doesn't touch FSM. Renderer fires automatically on every `tcpConnected` false→true. `axes_err_mask`: bit 0–3 = `EAxis0/1/2/reelpullmotor.bError`. `axes_state`: byte 0–3 = each axis's `nAxisState` ordinal. `axes_err_id`: 4-element msgpack array of `uiDriveInterfaceError` per axis (DS402 drive-interface fault code; same ordering as the mask bits); 0 = no fault. `reel_pos`: REAL, `reelpullmotor.fActPosition` in axis-scaled user units (modulo 200); `reel_odo_counts` / `reel_odo_jumps` / `reel_counts_per_mm` / `reel_counts_per_turn`: the reel odometer -- the reel encoder in counts since the PLC booted (per-scan differences of the drive's raw position, so unwrapped and immune to the 32-bit counter wrap), never reset -- the position resets left out of it, and the numbers to convert: mm = counts / reel_counts_per_mm (-256 here: the counts run down as the tape goes forward), one reel turn = reel_counts_per_turn (51200 = 200 mm); renderer derives carrier-tape cell number — see [decisions_2026-06-22.md §4 (1)](../../doc_review/decisions_2026-06-22.md). `scratchpad`: nested map `{schema_version, plan_id, plan_index, intent_kind, intent_movement_id, last_vision_pulse, boot_epoch}` — host-owned resume cursor, PLC opaque (§4 (2)). `boot_epoch_now`: current PLC boot counter; mismatch vs `scratchpad.boot_epoch` ⇒ stale cursor. `last_completed_movement_id`: latched at MOVE_DONE emit; distinct from `movement_id` (which bumps when a move *starts*) — resume reconcile must compare `scratchpad.intent_movement_id` against this one. See [implementation_review §2](../../doc_review/implementation_review_2026-06-22.md). `axes_sim_mask`: effective per-axis simulation mask (see `SET_AXIS_SIM` below); bit order matches `axes_labels`. |
 | `SCRATCHPAD_WRITE` | `plan_id`, `plan_index`, `intent_kind`, `intent_movement_id`, `last_vision_pulse` (all DINT/UDINT) | `{ack:true}` | Writes the host-owned resume cursor. v1 wire contract: caller sends ALL five fields per write (no partial updates — buys nothing because the host writes the whole cursor before each unrecoverable action anyway). PLC stamps `schema_version=1` and `boot_epoch=GVL.BootEpochCount` on every write so subsequent reads are validatable. NAK `partial_scratchpad` if any of the five fields is missing or negative; NAK `scratchpad_range` if a value exceeds its round-trippable width (2³¹-1; 255 for `intent_kind`) — rejected writes leave the stored cursor untouched. See [decisions §4 (2)](../../doc_review/decisions_2026-06-22.md). |
 | `GET_DIAG` | — | `{runtime_ms, sm_scans, remp_overflow_drop, remp_drop, remp_drop_reply, remp_drop_trig, overlen_drop, send_stall_drop, pending_stchg_drop, pending_movedone_drop, group_not_ready_nak, missing_type_nak, coord_not_cfg_nak, proto_mismatch_nak, unknown_cmd_nak, flyevent_reject_nak, flyevent_full_nak, idle_reset, read_err_reset, parser_err_reset, write_err_reset, client_connect_count, server_long_idle_count, server_active, bind_addr, ui_ping_count, ui_hb_stale_count, group_error_stop_trips, ping_max_gap_ms, last_ui_ping_ms, st_chg_event_count, self_reentry, dupe_cmd, io_cmd_count, io_trig_count, flyevent_avail}` | Comm-stability counter dump for `DiagPanel`. Pure read. Every counter here is cleared by `RESET_DBG_INFO`; non-counters (`runtime_ms`, `sm_scans`, `server_active`, `bind_addr`, `last_ui_ping_ms`, `flyevent_avail`) are not. |
@@ -136,10 +147,12 @@ parameters.
 | `name` | Payload | Fired when |
 |---|---|---|
 | `ST_CHG` | `{st, st_str, from, runtime_ms}` | FSM `_eState` changes (including supervisor-triggered transitions like Ready→Error on heartbeat stale). |
-| `COORD_SET` | `{runtime_ms}` | `GVL.CoordSystemConfigured` FALSE→TRUE (i.e. first `SetCoord0`/`SetCoord1` after UnInited). |
+| `COORD_SET` | `{value}` | `GVL.CoordSystemConfigured` changes, both edges: `value:true` on the first `SetCoord0`/`SetCoord1` (or the automatic apply on Ready entry), `value:false` when it is cleared (UnInited / Error entry). |
 | `MOVE_DONE` | `{movement_id, runtime_ms}` | `MotionBufferSize` transitions >0 → 0 with a fresh `LastAcceptedMovementId` ("queue drained") — **only while FSM=Ready and the group is healthy**. An error/abort flush (EV_ERROR, GroupErrorStop, read-FB error) emits no MOVE_DONE and does not advance `last_completed_movement_id`, so the §4(2) resume reconcile correctly sees aborted moves as unfinished. |
 | `DI` | `{pin, state, flips, high_ms, max_high_ms, max_low_ms, t_first, reel_odo_counts, t}` | A pin registered with `DI_WATCH` changed (see there). `state`: level now; `flips`: changes since the pin's last event; `high_ms`: time high since then; `max_high_ms`/`max_low_ms`: longest run at each level that ended since then or is still going; `t_first`/`reel_odo_counts`: PLC `RuntimeMs` and the reel odometer (counts) at the first of those changes; `t`: `RuntimeMs` at the push. |
 | `TRIGGER_ERR` | `{error_code, src_id, event_id}` | A registered FlyEvent's trigger errored instead of firing — currently only TTL expiry (`error_code`=100 `TRIGGER_TIMEOUT_ERR`), including the B2c invalid-position decay path. `event_id` echoes the M4 registration. Added 2026-07-08 — the packet previously carried no `kind`/`name` and the renderer dropped it, so a timed-out pin op was invisible to the UI. |
+| `COORD1_ERROR` | `{event_id, ref_pulse, exit_pulse, pulse_at_err, movement_id, mv_progress, arm_x, arm_y, ...}` | A belt-follow (COORD1) bind or window fault; the FSM goes to Error with it. |
+| `HEARTBEAT` | `{runtime_ms, remp_drop_count}` | Every 500 ms (`HEARTBEAT_INTERVAL_MS`), so a client can see a dead PLC socket without its own PING. The renderer ignores it today (review 2026-10-05). |
 
 Renderer subscribes via `window.addEventListener('plc:event', ...)` and
 filters on `e.detail.name`.

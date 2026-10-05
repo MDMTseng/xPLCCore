@@ -68,6 +68,13 @@ export const ControlPage: React.FC<{
       if (st === 'Error') reason = 'plc_error';
       else if (st !== 'Ready') reason = 'plc_not_ready';
       else if (hasCoord && payload.coord_set !== true) reason = 'coord_not_configured';
+      // plcReady follows the PLC (2026-10-05 review: it was a latch set by
+      // the Welcome init and cleared only by its "Enter Error" button, so
+      // after a fault the Ready-only tabs stayed open, and a Ready reached
+      // another way kept them locked). ST_CHG carries no coord_set: a Ready
+      // from it does not unlock; the next snapshot does.
+      if (reason) setPlcReady(false);
+      else if (hasCoord) setPlcReady(true);
       if (reason) {
         const currentTab = tabRef.current;
         const needsReady = TAB_REQUIRES_READY[currentTab] ?? false;
@@ -235,16 +242,16 @@ export const ControlPage: React.FC<{
             <CalibPage COMCtrlObj={COMCtrlObj} env_path={env_path} lib_path={lib_path} UI_path={UI_path} uiLang={uiLang} />
           </div>
           <div style={{ display: tab === "Operation" ? "block" : "none" }}>
-            <OperationPage COMCtrlObj={COMCtrlObj} env_path={env_path} lib_path={lib_path} UI_path={UI_path} uiLang={uiLang} />
+            <OperationPage COMCtrlObj={COMCtrlObj} env_path={env_path} lib_path={lib_path} UI_path={UI_path} uiLang={uiLang} active={tab === "Operation"} />
           </div>
           <div style={{ display: tab === "Recovery" ? "block" : "none" }}>
-            <RecoveryDemoPage COMCtrlObj={COMCtrlObj} />
+            <RecoveryDemoPage COMCtrlObj={COMCtrlObj} active={tab === "Recovery"} />
           </div>
           <div style={{ display: tab === "Motors" ? "block" : "none" }}>
             <MotorTestPage COMCtrlObj={COMCtrlObj} active={tab === "Motors"} />
           </div>
           <div style={{ display: tab === "Binding" ? "block" : "none" }}>
-            <BindingTestPage COMCtrlObj={COMCtrlObj} />
+            <BindingTestPage COMCtrlObj={COMCtrlObj} active={tab === "Binding"} />
           </div>
         </section>
       </div>

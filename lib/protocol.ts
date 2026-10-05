@@ -7,6 +7,22 @@
 // `id` and `protocol_version` are stamped by sendTcpMsgPack; do not set
 // them here.
 
+import { encode } from '@msgpack/msgpack';
+
+/** The PLC keeps each host packet in one 256-byte ring slot: 1 length byte
+ *  + at most 255 bytes of msgpack (GVL.MAX_SLOT_PAYLOAD,
+ *  TCP_MSGPAK_Server). A longer packet is NAKed `packet_too_long`. */
+export const MAX_HOST_PACKET_BYTES = 255;
+
+/** Commands whose float fields need no float64 (the PLC decodes float32,
+ *  FB_MpUnpacker.TryReadREAL 16#CA), encoded with float32 to fit the slot. */
+const FLOAT32_CMDS = new Set(['TAPE_CYCLE']);
+
+/** The wire bytes of a packet (id and protocol_version already stamped). */
+export function encodePacket(data: object): Uint8Array {
+  return encode(data, FLOAT32_CMDS.has(String((data as { cmd?: unknown })?.cmd)) ? { forceFloat32: true } : undefined);
+}
+
 export type PacketType = 'M' | 'SYS';
 
 // Phantom reply-type carrier. The `R` parameter is never set at runtime;
@@ -46,9 +62,10 @@ export interface LocationReply {
   [k: string]: unknown;
 }
 
+// The PLC packs `state` (ProcessMotionPacket GET_DIGITAL_INPUT); `raw` was
+// never sent (2026-10-05 review).
 export interface DigitalInputReply {
-  raw: number;
-  group?: number;
+  state: number;
   [k: string]: unknown;
 }
 
@@ -536,11 +553,15 @@ export const cmd = {
     event_id: a.event_id,
   }),
   ReelGo: (a: ReelGoArgs) => env<AckReply>({ type: 'M', cmd: 'ReelGo', ...compact(a) }),
+  // 2026-10-05: ~251 B of the PLC's 255 B packet slot (integration review).
+  // tin and a zero motion_progress are left out (the PLC defaults both to
+  // 0) and the packet is encoded with float32 (encodePacket): trigger
+  // geometry and progress need no float64.
   TapeCycle: (a: TapeCycleArgs) => env<AckReply>({
     type: 'M', cmd: 'TAPE_CYCLE',
-    motion_id_offset: a.motion_id_offset, motion_progress: a.motion_progress,
+    motion_id_offset: a.motion_id_offset, ...(a.motion_progress ? { motion_progress: a.motion_progress } : {}),
     Distance: a.distance, ...compact({ F: a.F, ACC: a.ACC, DEA: a.DEA, JERK: a.JERK }),
-    tx: a.x, ty: a.y, tz: a.z, td: a.radius, tin: 0,
+    tx: a.x, ty: a.y, tz: a.z, td: a.radius,
     pin_op_seq: a.pin_op_seq, event_id: a.event_id,
     ttl_ms: a.ttl_ms ?? 3000, timeout_ms: a.timeout_ms ?? 6000,
     ...(a.cells && a.cells > 0 ? { cells: a.cells, kind: a.kind === 'empty' ? 2 : a.kind === 'pack' ? 1 : 0 } : {}),

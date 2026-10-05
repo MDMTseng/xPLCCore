@@ -88,11 +88,25 @@ def daemon(req, timeout=60):
     return r
 
 
+TOKEN_FILE = os.path.join(SCRIPTS, "jobs", "harness_token")
+
+
+def harness_token():
+    """The token remote_harness.py wrote at its start (2026-10-05: /push
+    needs it; read every call so a restarted harness is picked up)."""
+    try:
+        with open(TOKEN_FILE, encoding="ascii") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
 def push(action, payload=None, timeout=30.0):
     body = json.dumps({"action": action, "payload": payload or {},
                        "wait_for_result": True, "timeout": timeout}).encode()
     req = urllib.request.Request(HARNESS + "/push", data=body,
-                                 headers={"Content-Type": "application/json"})
+                                 headers={"Content-Type": "application/json",
+                                          "X-Harness-Token": harness_token()})
     with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         res = json.loads(r.read().decode())
     res = res.get("result", res)   # remote_harness wraps it: {instr_id, result:{ok, value}}

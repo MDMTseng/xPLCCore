@@ -26,7 +26,7 @@ Regenerate this file with `python tools/gen_script_index.py`.
 | `a_speed_compare.py` | moves axes | Motion time per part with and without A rotations, on the machine. |
 | `arrival_phases.py` | moves axes | Does motion change the frame timing? |
 | `asda_scope.py` | read-only | Find stale-target events in ASDA-Soft scope recordings (B3-E, 8 kHz). |
-| `bus_watch.py` | downloads | Watch the EtherCAT bus at standstill for dropouts (2026-10-03: frames lost for ~2.5 s now and then, even with the delta virtual and off; the reel and QEC came back in INIT / SAFE-OP). |
+| `bus_watch.py` | moves axes, downloads | Watch the EtherCAT bus at standstill for dropouts (2026-10-03: frames lost for ~2.5 s now and then, even with the delta virtual and off; the reel and QEC came back in INIT / SAFE-OP). |
 | `circle_soak.py` | moves axes | Long soak of the delta (round path, square with dips, or a Z stroke), reporting every --report seconds: the drives' late % (DEM_STATS) and the torque change per cycle (FB_STATS) since the start. |
 | `comm_profile.py` | read-only | Comm task profile: where the Comm task's time goes (EC_STATS cs/cb/co/ cscan/ctask/cout/cout500 from TCP_MSGPAK_Server / PRG_EcatEspHttp stamps) next to TASK_STATS for all tasks. |
 | `dc_sweep.py` | moves axes, downloads | Sweep a DC timing setting and measure the ASDA stale-target rate per level. |

@@ -41,7 +41,7 @@ type LogEntry = { ts: number; line: string };
 
 const fmtNum = (n: number | undefined | null) => (n === undefined || n === null ? '—' : n.toString());
 
-export const RecoveryDemoPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrlObj }) => {
+export const RecoveryDemoPage: React.FC<{ COMCtrlObj: COMCtrlObj; active?: boolean }> = ({ COMCtrlObj, active = true }) => {
   const send = COMCtrlObj.sendTcpMsgPack;
   const [snap, setSnap] = useState<MachineState | null>(null);
   const [snapErr, setSnapErr] = useState<string | null>(null);
@@ -61,9 +61,14 @@ export const RecoveryDemoPage: React.FC<{ COMCtrlObj: COMCtrlObj }> = ({ COMCtrl
   }, []);
 
   // ── 1 Hz poll of GET_MACHINE_STATE ────────────────────────────────
+  // Only while the tab is shown (2026-10-05 review: every tab stays mounted,
+  // and the hidden ones' pollers added ~5 requests/s to the PLC link).
+  const activeRef = useRef(active);
+  activeRef.current = active;
   useEffect(() => {
     let cancelled = false;
     const tick = async () => {
+      if (!activeRef.current) return;
       try {
         const reply = await send(cmd.GetMachineState(), true, 1500);
         if (cancelled) return;

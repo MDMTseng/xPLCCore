@@ -61,15 +61,20 @@ def dwell_summary():
 
 
 class HostTiming:
-    """The UI stream's timing (lib/stream.ts, 2026-10-05): per report a log
-    line (max ack latency, acks over 250 ms, max gap between two sends) and,
-    with --dwell-log X.csv, every slow ack / send gap (> 150 ms) appended to
-    X_host.csv on the PLC clock of the dwell CSV (kind, plc_ms, packet,
-    ms, in_flight), so a pause of the delta can be matched to it."""
+    """The UI stream's timing (lib/stream.ts, 2026-10-05). Per report a log
+    line: the longest gap between two replies (steady state ~50-200 ms; a
+    long one = the PLC accepted nothing), the longest UI event-loop lag, the
+    longest send gap while the window had room (the host itself was late).
+    With --dwell-log X.csv every such event over its threshold goes to
+    X_host.csv on the PLC clock of the dwell CSV (kind, plc_ms, packet, ms,
+    in_flight), to be matched with the stops. Per-reply latency is NOT a
+    signal: the PLC holds each packet ~430 ms by design (back-pressure)."""
+
+    KINDS = (("reply_gap", "replyGaps"), ("send_gap", "sendGaps"), ("loop_lag", "loopLags"))
 
     def __init__(self, dwell_log):
         self.status = None
-        self.seen = {"ack": set(), "gap": set()}   # packet indexes already written
+        self.seen = set()            # (kind, t) already written
         self.path = dwell_log[:-4] + "_host.csv" if dwell_log and dwell_log.endswith(".csv") else None
         self.rt0 = self.py0 = None
         try:
@@ -83,20 +88,34 @@ class HostTiming:
 
     def report(self):
         tm = (self.status or {}).get("timing")
-        if not tm:
+        if not tm or "replyGapMax" not in tm:
             return
-        h = tm["latHist"]
-        log("        host: ack max %d ms | acks >= 250 ms %d (>= 1 s %d) | send gap max %d ms" % (
-            tm["latMax"], sum(h[3:]), sum(h[5:]), tm["gapMax"]))
+        log("        host: reply gap max %d ms | UI loop lag max %d ms | send gap max %d ms | "
+            "events (reply gap / loop lag / late send) %d/%d/%d" % (tm["replyGapMax"], tm["loopLagMax"], tm["sendGapMax"],
+                                 len(tm["replyGaps"]), len(tm["loopLags"]), len(tm["sendGaps"])))
         if not self.path or self.rt0 is None:
             return
         with open(self.path, "a") as f:
-            for kind, rows in (("ack", tm["slow"]), ("gap", tm["gaps"])):
-                for t, i, ms, n in rows:
-                    if i in self.seen[kind]:
+            for kind, key in self.KINDS:
+                for t, i, ms, n in tm.get(key, []):
+                    if (kind, t) in self.seen:
                         continue
-                    self.seen[kind].add(i)
+                    self.seen.add((kind, t))
                     f.write("%s,%d,%d,%d,%d\n" % (kind, self.rt0 + (tm["t0"] + t - self.py0), i, ms, n))
+
+
+# The PLC builds DWELL's ev / evq in STRING(255) and cuts what does not fit
+# (2026-10-05 review): a string that long may end in a cut row, so its last
+# row is dropped and read again by the next query.
+CUT_LEN = 250
+
+
+def _rows(text, fields):
+    text = text or ""
+    rows = [e.split(":") for e in text.rstrip(",").split(",") if e]
+    if len(text) >= CUT_LEN and rows:
+        rows = rows[:-1]
+    return [r for r in rows if len(r) in fields and all(r)]
 
 
 def dwell_read(frm, fh):
@@ -106,15 +125,19 @@ def dwell_read(frm, fh):
     i = max(frm, n - 4000)
     while i < n:
         rep = mc.sys_cmd("DWELL", **{"from": i})
-        ev = rep["ev"].rstrip(",")
-        rows = [e.split(":") for e in ev.split(",") if e.count(":") in (4, 5, 6) and all(e.split(":"))]
+        rows = _rows(rep.get("ev"), (5, 6, 7))
         if not rows:
             break
         # evq (2026-10-05): why it stopped, the same stops in the same order:
         # moves queued, host packets waiting, retry cooldown ms, commanded Z um.
-        evq = [e.split(":") for e in rep.get("evq", "").rstrip(",").split(",") if e.count(":") == 3]
-        for k, r in enumerate(rows):
-            q = evq[k] if len(evq) == len(rows) else ["", "", "", ""]
+        if "evq" in rep:
+            evq = _rows(rep.get("evq"), (4,))
+            rows = rows[:len(evq)]
+            if not rows:
+                break
+        else:
+            evq = [["", "", "", ""]] * len(rows)          # an older PLC program
+        for r, q in zip(rows, evq):
             fh.write("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n" % (
                 r[0], r[1], "" if int(r[2]) == NOT_SETTLED else r[2], r[3], r[4],
                 r[5] if len(r) > 5 else "", r[6] if len(r) > 6 else "",     # err 5 / 10 ms after the stop

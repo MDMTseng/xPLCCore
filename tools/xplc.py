@@ -185,15 +185,40 @@ class Machine:
 
     # -- raw ------------------------------------------------------------------
 
+    # Read-only commands: sending one twice changes nothing, so it may be
+    # resent after a LinkDown. Anything else may already have reached the PLC
+    # before the link broke; the UI gives a resent packet a new id and the
+    # PLC clears its G1 dedupe ring on disconnect, so a resend would run a
+    # G1 / ReelGo / TAPE_CYCLE twice (2026-10-05 integration review).
+    IDEMPOTENT_SYS = frozenset((
+        "PING", "GET_MACHINE_STATE", "AXIS_INFO", "EC_STATS", "TASK_STATS", "DEM_STATS",
+        "DEM_EVT", "FB_STATS", "DWELL", "SETTLE", "SETTLE_TRACE", "ESP_SYNC", "ESP_ARR",
+        "VERSION", "GET_DIAG", "IO_STATE", "PLAN_GET"))
+
+    @classmethod
+    def idempotent(cls, pkt):
+        if pkt.get("type") != "SYS" or pkt.get("reset"):
+            return False
+        cmd = pkt.get("cmd")
+        if cmd == "GA_EV":
+            return pkt.get("ev", 0) == 0          # 0 = state poll
+        if cmd == "DRV_SDO":
+            return "value" not in pkt             # a read
+        return cmd in cls.IDEMPOTENT_SYS
+
     def send(self, pkt, timeout_ms=5000):
-        """One packet; the reply dict. A LinkDown is repaired once (UiRelay)
-        and the packet sent again."""
+        """One packet; the reply dict. A LinkDown is repaired once (UiRelay);
+        a read-only packet is then sent again, any other is NOT (it may have
+        run) and the LinkDown is raised after the repair."""
         try:
             return self.t.send(pkt, timeout_ms)
-        except LinkDown:
+        except LinkDown as e:
             if not hasattr(self.t, "reconnect"):
                 raise
             self.t.reconnect()
+            if not self.idempotent(pkt):
+                raise LinkDown("%s (link repaired; %s %s not resent: it may have reached the PLC)"
+                               % (e, pkt.get("type"), pkt.get("cmd")))
             return self.t.send(pkt, timeout_ms)
 
     def sys(self, cmd, timeout_ms=5000, **kw):
