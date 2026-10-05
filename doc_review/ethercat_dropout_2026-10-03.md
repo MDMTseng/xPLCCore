@@ -61,7 +61,28 @@ the wire, tree = wire, no slave optional; doc_review/asda_stale_target
 | 22:06 (10-03) | round 10 %, 3 h (`soak_segments.py --hours 3 --recover 10`) | DWELL | clean for 170 min, **dropout at 170.7 min** (00:56) |
 | 03:47 (10-05) | Z 0 <-> -20 at 10 %, 6 h (`soak_segments.py --hours 6 --recover 10`) | fe5028a (diag in Comm task) | **clean for 323.8 min**, dropout at 09:10 in the 6th segment; stopped by hand at 09:13, the owner found the QEC wiring loose |
 
-The 2026-10-05 dropout, with the PLC log readable again (section 3): the
+After the QEC wiring fix (2026-10-05 09:30, re-download):
+
+| Start | Run | Result |
+|---|---|---|
+| 09:31 | round 30 %, 20 min (stopped by hand to switch shapes) | clean |
+| 09:52 | square dip 70 %, 59 min | clean (10-03 dropped twice at 14.9 min in this condition) |
+| 10:53 | square dip 70 %, 12 min (stopped by hand) | clean |
+| 11:06 | triangle 70 % (`--shape tri`), 2 h, with dwell CSV | **clean, 0 dropouts**, 33,166 stops |
+
+3 h 31 min of motion, `lost` 0 throughout: the QEC wiring was the cause
+of at least the 09:10 dropout, and so far of all of them.
+
+Triangle stop errors (33,166 stops, um): at arrival mean 23.3 (17-30),
++5 ms 9.3 (3-13), +10 ms 5.8 (1-11), leaving 5.8. The three corners (one per
+arm direction) have identical distributions; the two modes of the 5 / 10 ms
+histograms are anti-correlated within one stop (a residual oscillation of
+about +-2.5 um around 7 um, period ~10 ms, sampled at a varying phase
+because the 10 ms dwell lands on 9 or 10 cycles), not an axis difference.
+Torque RMS share on the triangle 33 / 35 / 32 % (square: 31 / 42 / 28 %,
+the square's geometry, not EAxis1).
+
+The 2026-10-05 09:10 dropout, with the PLC log readable again (section 3): the
 master's `Frames Lost` stayed **0**; `Drive=0xB: ETC device is no longer in
 mode operational`, then every 2 s `watchdog for opmode expired. Address:
 1002` (the QEC) with `unexpected working counters: number of slaves has
