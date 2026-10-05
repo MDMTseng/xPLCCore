@@ -128,7 +128,9 @@ ShouldReturn := FALSE;
         // not settled), emax = max error when leaving (um), ev = up
         // to 8 stops from index from:i as at_ms:dwell_ms:settle_ms:
         // err_stop_um:err_leave_um:err_5ms_um:err_10ms_um (settle 4294967295
-        // = not settled; fields 6 and 7 since 2026-10-05).
+        // = not settled; fields 6 and 7 since 2026-10-05); evq = the same
+        // stops as buf:hostq:cool_ms:z_um (GVL.DwBuf / DwHostQ / DwCoolMs /
+        // DwZUm, 2026-10-05; a separate string so ev stays within 255).
         // reset:1 clears it.
         ShouldReturn := TRUE;
         CommandAck := TRUE;
@@ -170,6 +172,20 @@ ShouldReturn := FALSE;
             EcEvtI := EcEvtI + 1;
         END_WHILE;
         MessagePackerFb.PackKvStr(ADR('ev'), ADR(EcTrStr));
+        EcTrStr := '';
+        EcEvtI := EcEvtFrom;
+        WHILE (EcEvtI < GVL.DwN) AND (EcEvtI < EcEvtFrom + 8) DO
+            EcTrStr := CONCAT(EcTrStr, UINT_TO_STRING(GVL.DwBuf[EcEvtI MOD 4096]));
+            EcTrStr := CONCAT(EcTrStr, ':');
+            EcTrStr := CONCAT(EcTrStr, UINT_TO_STRING(GVL.DwHostQ[EcEvtI MOD 4096]));
+            EcTrStr := CONCAT(EcTrStr, ':');
+            EcTrStr := CONCAT(EcTrStr, INT_TO_STRING(GVL.DwCoolMs[EcEvtI MOD 4096]));
+            EcTrStr := CONCAT(EcTrStr, ':');
+            EcTrStr := CONCAT(EcTrStr, DINT_TO_STRING(GVL.DwZUm[EcEvtI MOD 4096]));
+            EcTrStr := CONCAT(EcTrStr, ',');
+            EcEvtI := EcEvtI + 1;
+        END_WHILE;
+        MessagePackerFb.PackKvStr(ADR('evq'), ADR(EcTrStr));
     ELSIF (CommandType = 'FB_STATS') THEN
         // Feedback shock monitor (GVL.Fb*): per drive k, fd{k} =
         // histogram of |d2 actual position| (edges 1k 2k 5k 10k 20k

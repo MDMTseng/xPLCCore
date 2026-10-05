@@ -18,8 +18,10 @@ Every stop of the set positions (the dips' 10 ms dwells too) is logged by
 the PLC (SYS DWELL, 2026-10-03): the per-minute line adds the stops, the
 share settled within 0.2 mm before leaving, and the max error when
 leaving. --dwell-log FILE also writes every stop to a CSV (at_ms, dwell_ms,
-settle_ms or empty when not settled, err_stop_um, err_leave_um); the PLC
-ring holds 4096 stops, read every --report s.
+settle_ms or empty when not settled, err_stop_um, err_leave_um, err_5ms_um,
+err_10ms_um, and why it stopped: buf = moves queued (0 = ran dry), hostq =
+host packets waiting in the PLC, cool_ms = retry cooldown, z_um = commanded
+Z); the PLC ring holds 4096 stops, read every --report s.
 """
 
 import argparse
@@ -58,19 +60,65 @@ def dwell_summary():
             "emax": d["emax"], "next": d["n"]}
 
 
+class HostTiming:
+    """The UI stream's timing (lib/stream.ts, 2026-10-05): per report a log
+    line (max ack latency, acks over 250 ms, max gap between two sends) and,
+    with --dwell-log X.csv, every slow ack / send gap (> 150 ms) appended to
+    X_host.csv on the PLC clock of the dwell CSV (kind, plc_ms, packet,
+    ms, in_flight), so a pause of the delta can be matched to it."""
+
+    def __init__(self, dwell_log):
+        self.status = None
+        self.seen = {"ack": set(), "gap": set()}   # packet indexes already written
+        self.path = dwell_log[:-4] + "_host.csv" if dwell_log and dwell_log.endswith(".csv") else None
+        self.rt0 = self.py0 = None
+        try:
+            self.rt0 = int(mc.sys_cmd("GET_MACHINE_STATE")["runtime_ms"])
+            self.py0 = time.time() * 1000.0
+        except Exception as e:
+            log("host timing: no PLC clock (%s)" % e)
+        if self.path and not os.path.exists(self.path):
+            with open(self.path, "w") as f:
+                f.write("kind,plc_ms,packet,ms,in_flight\n")
+
+    def report(self):
+        tm = (self.status or {}).get("timing")
+        if not tm:
+            return
+        h = tm["latHist"]
+        log("        host: ack max %d ms | acks >= 250 ms %d (>= 1 s %d) | send gap max %d ms" % (
+            tm["latMax"], sum(h[3:]), sum(h[5:]), tm["gapMax"]))
+        if not self.path or self.rt0 is None:
+            return
+        with open(self.path, "a") as f:
+            for kind, rows in (("ack", tm["slow"]), ("gap", tm["gaps"])):
+                for t, i, ms, n in rows:
+                    if i in self.seen[kind]:
+                        continue
+                    self.seen[kind].add(i)
+                    f.write("%s,%d,%d,%d,%d\n" % (kind, self.rt0 + (tm["t0"] + t - self.py0), i, ms, n))
+
+
 def dwell_read(frm, fh):
     """Append stops frm.. to the CSV; returns the next index (skips what
     the 4096 ring already overwrote)."""
     n = mc.sys_cmd("DWELL")["n"]
     i = max(frm, n - 4000)
     while i < n:
-        ev = mc.sys_cmd("DWELL", **{"from": i})["ev"].rstrip(",")
+        rep = mc.sys_cmd("DWELL", **{"from": i})
+        ev = rep["ev"].rstrip(",")
         rows = [e.split(":") for e in ev.split(",") if e.count(":") in (4, 5, 6) and all(e.split(":"))]
         if not rows:
             break
-        for r in rows:
-            fh.write("%s,%s,%s,%s,%s,%s,%s\n" % (r[0], r[1], "" if int(r[2]) == NOT_SETTLED else r[2], r[3], r[4],
-                                             r[5] if len(r) > 5 else "", r[6] if len(r) > 6 else ""))   # err 5 / 10 ms after the stop
+        # evq (2026-10-05): why it stopped, the same stops in the same order:
+        # moves queued, host packets waiting, retry cooldown ms, commanded Z um.
+        evq = [e.split(":") for e in rep.get("evq", "").rstrip(",").split(",") if e.count(":") == 3]
+        for k, r in enumerate(rows):
+            q = evq[k] if len(evq) == len(rows) else ["", "", "", ""]
+            fh.write("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n" % (
+                r[0], r[1], "" if int(r[2]) == NOT_SETTLED else r[2], r[3], r[4],
+                r[5] if len(r) > 5 else "", r[6] if len(r) > 6 else "",     # err 5 / 10 ms after the stop
+                q[0], q[1], q[2], q[3]))
         i += len(rows)
     fh.flush()
     return i
@@ -129,6 +177,7 @@ def main():
                 pkts.append(dict(kin, type="M", cmd="G1", X=float(x), Y=float(y), Z=0.0, Cor=0.0))
     mc.reconnect()
     reason = "time"
+    host = None
     try:
         mc.set_delta(real=not a.virtual)
         mc.fsm_to("Ready", timeout=180, home=not a.virtual)
@@ -140,8 +189,12 @@ def main():
             pass
         fh = open(a.dwell_log, "a") if a.dwell_log else None
         if fh:
-            fh.write("at_ms,dwell_ms,settle_ms,err_stop_um,err_leave_um,err_5ms_um,err_10ms_um\n")
+            fh.write("at_ms,dwell_ms,settle_ms,err_stop_um,err_leave_um,err_5ms_um,err_10ms_um,buf,hostq,cool_ms,z_um\n")
         dw_next = 0
+        # Host timing (2026-10-05): the UI's stream reports slow acks and
+        # send gaps in its own ms; map them onto the PLC clock of the dwell
+        # CSV (at_ms = AxisGroupSM.RuntimeMs) through one reading of both.
+        host = HostTiming(a.dwell_log)
         mc.push("plc_stream_start", {"pkts": pkts, "timeoutMs": 30000})
         log("soak started: %s %.0f %% for %.0f min, %d packets" % (a.shape, a.speed, a.minutes, len(pkts)))
         t0 = last = time.time()
@@ -150,7 +203,9 @@ def main():
             if os.path.exists(STOP):
                 reason = "stop file"
                 break
-            if not mc.push("plc_stream_status", {})["running"]:
+            ss = mc.push("plc_stream_status", {})
+            host.status = ss
+            if not ss["running"]:
                 reason = "stream ended early"
                 break
             if time.time() - last >= a.report:
@@ -175,6 +230,7 @@ def main():
                         dw["n"], dw["settled_pct"], dw["le15_pct"], dw["emax"]))
                 if fh:
                     dw_next = dwell_read(dw_next, fh)
+                host.report()
                 if fsm == "Error":
                     reason = "FSM error %s %s" % (r.get("err_src"), r.get("err_id"))
                     break
@@ -186,6 +242,12 @@ def main():
             mc.push("plc_send_many_abort", {})
             while mc.push("plc_stream_status", {})["running"]:
                 time.sleep(0.2)
+            try:
+                if host:
+                    host.status = mc.push("plc_stream_status", {})
+                    host.report()
+            except Exception as e:
+                log("host timing: %s" % e)
             st = stats()
             log("END (%s) | late %% %s | tq max %% %s | >=20 %% %s | >=50 %% %s | moving cycles %s" % (
                 reason,

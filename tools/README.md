@@ -31,6 +31,7 @@ Regenerate this file with `python tools/gen_script_index.py`.
 | `comm_profile.py` | read-only | Comm task profile: where the Comm task's time goes (EC_STATS cs/cb/co/ cscan/ctask/cout/cout500 from TCP_MSGPAK_Server / PRG_EcatEspHttp stamps) next to TASK_STATS for all tasks. |
 | `dc_sweep.py` | moves axes, downloads | Sweep a DC timing setting and measure the ASDA stale-target rate per level. |
 | `dem_events.py` | read-only | Compare the timing of the three delta drives' stale-target bursts. |
+| `deploy.py` | moves axes, downloads | Write new PLC code with the machine made safe first (owner's sequence, 2026-10-05): no motion -> Error state -> stop + reset -> import/build -> download -> wait -> start -> check. |
 | `direct_test.py` | moves axes, writes PLC vars | Direct drive test without SoftMotion: EAxis0's controlword and target position are written by PLC code (SYS DIRECT, PRG_EventLog) while SoftMotion holds EAxis0 as a virtual axis. |
 | `drive_param.py` | writes PLC vars | Read or write ASDA-B3 drive parameters over EtherCAT SDO (PLC SYS DRV_SDO / DRV_SDO_RESULT). |
 | `ec_stress.py` | moves axes, writes PLC vars | EtherCAT task timing under load (owner, 2026-09-29: DC statistics show the odd late cycle while the machine runs). |

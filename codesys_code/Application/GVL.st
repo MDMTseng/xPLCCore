@@ -365,6 +365,16 @@ VAR_GLOBAL
 	DwErr5Um        : ARRAY[0..4095] OF UDINT;
 	DwErr10Um       : ARRAY[0..4095] OF UDINT;
 	DwErrLeaveUm    : ARRAY[0..4095] OF UDINT;
+	(* Why the motion stopped (2026-10-05, unplanned 40-877 ms pauses and
+	   1-3 ms stops on the triangle soak): at the first stopped cycle,
+	   DwBuf = moves queued in SoftMotion (AxisGroupSM.MotionBufferSize; 0 =
+	   the queue ran dry), DwHostQ = host packets waiting in minfo_buf (not
+	   yet accepted), DwCoolMs = AxisGroupSM.RetryMotionCommandCooldown (> 0:
+	   a refused G1 / G4 waits for its retry), DwZUm = commanded Z, um. *)
+	DwBuf           : ARRAY[0..4095] OF UINT;
+	DwHostQ         : ARRAY[0..4095] OF UINT;
+	DwCoolMs        : ARRAY[0..4095] OF INT;
+	DwZUm           : ARRAY[0..4095] OF DINT;
 	DwN             : UDINT;
 	DwHist          : ARRAY[0..8] OF UDINT;
 	DwErrLeaveMaxUm : UDINT;

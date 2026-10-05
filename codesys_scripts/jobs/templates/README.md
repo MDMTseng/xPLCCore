@@ -51,6 +51,7 @@ One-off probes live in `_archive/`. Regenerate this file with
 | `diff_st.py` | read-only | READ-ONLY dry run of import_all.py. |
 | `download_and_start.py` | edits project, PLC session | Save project, login to PLC with download (force), start the application. |
 | `download_start_virtual.py` | PLC session | FULL DOWNLOAD the current project to the controller and start it. |
+| `download_wait_start.py` | PLC session | Download the (stopped, reset) application, wait, start it, and watch the EtherCAT master come up in the same session: step 5 of tools/deploy.py. |
 | `dump_drive_target_addr.py` | read-only | Print the IEC address (and any mapping) of each ASDA drive's Target Position / Actual Position PDO channel (manual_iec_address holds the address even when it is assigned automatically), for AT-declared read-only taps of  |
 | `dump_ethercat.py` | read-only | Dump the EtherCAT configuration of the open project. |
 | `dump_master_all.py` | read-only | Print every parameter of the EtherCAT master (defaults included) and the EtherCAT_Task settings, to compare the master setup with Delta's DIADesigner-AX one (2026-10-02: their PLC drives the same ASDA-B3-E at 1 ms withou |
@@ -110,6 +111,7 @@ One-off probes live in `_archive/`. Regenerate this file with
 | `set_slaves_bypass.py` | edits project | Bypass the QEC (A axis stepper, station 1002) and the reel servo (1003) on the EtherCAT line: disable both slaves in the device tree and make their axes (EAXIS_A, SM_Drive_GenericDSP402 = A, reelpullmotor) virtual, so th |
 | `set_sm3_420.py` | edits project | NOT IN USE (2026-09-30): the real PLC hangs on the first blended G1 with A as additional axis on SM3 4.20; the machine runs SM3 4.18 + Kin_CAxis. |
 | `stamp_build_info.py` | edits project | Stamp BUILD_GIT_SHA / BUILD_TS_MS in GVL.st with the current git rev and a unix-ms timestamp. |
+| `stop_and_reset.py` | PLC session, resets PLC | Stop the running application and reset it (warm by default), BEFORE the new code is imported: step 3 of tools/deploy.py (owner's sequence, 2026-10-05: no motion -> Error state -> reset -> download -> start). |
 | `stop_then_install.py` | PLC session | Full install: download the project to the PLC and start it. |
 | `sweep_elecount.py` | ? | Zero-out ele_count literal initializers + remove redundant adders. |
 | `sweep_pack_overflow_guards.py` | ? | Add overflow-latch guards to every FB_MpPacker pack helper. |
