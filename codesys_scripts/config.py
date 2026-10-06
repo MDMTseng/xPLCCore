@@ -145,6 +145,15 @@ def codesys_profile():
     return get("profile", required=True)
 
 
+def codesys_additional_folder():
+    """--additionalfolder for a modular install made by the CODESYS
+    Installer (APInstaller): its add-ons, the Scripting engine included,
+    live in <install>/CODESYS/AdditionalFolders/<name>, and without this
+    option --runscript fails with 'no script engine implementation
+    available'. Empty string means a classic install (no option)."""
+    return get("codesys_additional_folder", default="")
+
+
 def rpc_host():
     return get("rpc_host", default="127.0.0.1")
 

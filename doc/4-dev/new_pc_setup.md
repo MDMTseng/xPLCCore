@@ -76,6 +76,14 @@ copy codesys_scripts\codesys_env.sample.json codesys_scripts\codesys_env.json
 Edit `project` (the .project path from step 3) and `plc_host`
 (`192.168.1.70`). The file is git-ignored.
 
+If CODESYS was installed through the CODESYS Installer (a modular
+install; its desktop shortcut carries `--additionalfolder=...`), also set
+`codesys_additional_folder` to that folder, e.g. `C:/Program Files/CODESYS
+3.5.22.30/CODESYS/AdditionalFolders/CODESYS 3.5.22.30`. Without it the
+Scripting engine is not loaded: `rpc.py daemon-start` times out and
+CODESYS shows "The command line option 'runscript' has been set. However,
+there is no script engine implementation available." (2026-10-06).
+
 UI calibration: `standalone/data/` is git-ignored (per-instance data);
 copy the machine's calibration in:
 

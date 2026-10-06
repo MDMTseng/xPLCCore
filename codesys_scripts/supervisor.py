@@ -81,6 +81,9 @@ def codesys_cmdline(script, scriptargs=None, noui=False):
     """
     parts = ['"%s"' % config.codesys_exe(),
              '--profile="%s"' % config.codesys_profile()]
+    additional = config.codesys_additional_folder()
+    if additional:
+        parts.append('--additionalfolder="%s"' % additional)
     culture = config.codesys_culture()
     if culture:
         # Pin the language so diagnostics are readable and comparable.
