@@ -91,6 +91,31 @@ checked: 5 CODESYS login reads and 3 UI reconnects on the healthy bus lost
 QEC wiring was at least not the only cause; the QEC / reel supply and their
 cables are suspects again (section 4).
 
+Timeline of 2026-10-06 (PC time; the PLC clock is 4 min 40 s +-3 s ahead,
+from the 08:34 download logged at 08:38:50 PLC):
+
+| PC time | PLC log / event | What I did |
+|---|---|---|
+| ~08:05:40 | power cycle, startup, all OP (08:10:23 PLC); only the usual startup SDO warnings | -- (UI on the sim, no client on the PLC) |
+| 08:05-08:27 | nothing in the PLC log for 21.5 min | -- |
+| 08:27:07 | | real CODESYS daemon started (opens the project, no PLC contact) |
+| ~08:27:20-30 | | UI link moved from the sim to 192.168.1.70 (first client since the boot) |
+| **~08:27:26** | 08:32:06 PLC: QEC drives (EAXIS_A, GenericDSP402) and reel "lost synchronicity", 40 ms then 101 ms without frames, "more than 100 packets lost", slaves leave OP; 3 s later AL 0x8130 from the 3 ASDA | (seconds after the UI connected) |
+| ~08:27:35 | | EC_STATS: lost 2532 already; then a CODESYS login read |
+| ~08:27:50-08:28:07 | | slave states read (QEC 0, reel 0, master xError); lost still 2532 |
+| **~08:28:05-08:28:08** | 08:32:45 PLC: a second "more than 100 packets lost" (lost 2532 -> 4958, ~2.4 s) | read_plc_log job ran 08:28:09-08:28:10 (evidence capture) |
+| ~08:28:53 | 08:33:33 PLC: all slaves OP again | GA_EV 8 (bus restart through UnInited); lost stayed 4958 |
+| 08:29-08:31 | no loss | 60 s idle, 5 login reads, 3 UI reconnects: 0 frames lost |
+
+Correction: lost 4958 was a second burst before the restart, not the
+restart itself. Both bursts fell within seconds of my first contacts with
+the freshly booted PLC (the UI's first connection; a PLC log read job).
+The controlled test afterwards (logins, reconnects) did not reproduce it,
+but the log-read job was not part of that test, and nothing has been
+proven either way; the earlier dropouts (10-03) also happened with nobody
+connecting. To test next: the PLC log read job repeated on a healthy bus,
+and a first UI connection after a PLC restart.
+
 6 h triangle (`soak_logs/tri6h_1005.log`, `dwell_tri6h.csv`): stop error
 mean 23.2-23.6 um and +10 ms 5.6-6.3 um in every 15-min window, flat. The
 +5 ms mean rose slowly from 9.2 (first minute) to 10.2 um (last hour): the
