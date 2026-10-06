@@ -151,3 +151,13 @@ comm gap max 17 ms on Windows.
 Left for later: `seq` stamped at send time (needs the reply bytes rewritten
 in the Comm task), accept timestamps in every motion ack, a motion-queue-
 empty event (the per-stop fields cover the pause diagnosis).
+
+## 6. Deployed to the machine (2026-10-06 08:33)
+
+`tools/deploy.py --owner-ok` after the owner's power cycle: every step
+passed in 69 s; the download took 7.1 s (stopped and reset first; the old
+flow's downloads took 15-32 s, the two failed ones 83-92 s), EtherCAT
+finished its startup 1.6 s after the start, all 7 slaves OP, lost 0. On the
+machine, without moving anything: DELTA_MODE real and DIRECT refused
+`maint_not_armed`, GA_EV with a stale expect_st refused `state_changed`,
+fault_seq / maint_left_ms / comm gap / DWELL next present.

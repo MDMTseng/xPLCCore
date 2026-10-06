@@ -1,7 +1,8 @@
 # EtherCAT dropouts with the QEC and reel resetting (2026-10-03)
 
-Status: **solved 2026-10-05: loose QEC wiring** (section 2: 9.5 h of
-motion clean after the fix). Original report: since the afternoon of 2026-10-03 the bus
+Status: **reopened 2026-10-06**: after the QEC wiring fix (9.5 h of motion
+clean, section 2) it happened again at standstill, 22 min after a power
+cycle (section 2, last table). Original report: since the afternoon of 2026-10-03 the bus
 loses all frames for ~2.5 s now and then: the servos lose DC sync and go
 to errorstop if they are enabled, and the QEC (station 1002) and the reel
 servo (1003) come back in INIT / SAFE-OP, as if they had rebooted. It
@@ -76,6 +77,19 @@ After the QEC wiring fix (2026-10-05 09:30, re-download):
 longest clean run was 323.8 min and most dropped within 0.5-30 min): the
 QEC wiring was the cause of the dropouts. Status: **solved**, unless one
 comes back.
+
+2026-10-06 (after a PLC power cycle at ~08:05): all slaves OP at 08:10
+(PLC clock, ~4 min 19 s ahead of the PC); at 08:32:06 PLC (08:27:47 PC),
+FSM UnInited, drives off, nothing moving: `Fieldbus lost synchronicity`,
+`more than 100 packets lost`, lost frames 2532 (~2.5 s), QEC and reel back in
+state 0, master xError, the ASDA drives AL 0x8130 (heartbeat). Same signature
+as 10-03. It coincided with my first connection after the restart, so it was
+checked: 5 CODESYS login reads and 3 UI reconnects on the healthy bus lost
+0 frames -- not caused by either. Recovered without a download: GA_EV 8
+(UnInited entry restarts a faulted bus), all 7 slaves OP. Evidence:
+`codesys_scripts/jobs/incidents/20261006-082809_after_power_cycle/`. So the
+QEC wiring was at least not the only cause; the QEC / reel supply and their
+cables are suspects again (section 4).
 
 6 h triangle (`soak_logs/tri6h_1005.log`, `dwell_tri6h.csv`): stop error
 mean 23.2-23.6 um and +10 ms 5.6-6.3 um in every 15-min window, flat. The
