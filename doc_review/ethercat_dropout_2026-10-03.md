@@ -2,7 +2,8 @@
 
 Status: **reopened 2026-10-06**: after the QEC wiring fix (9.5 h of motion
 clean, section 2) it happened again at standstill, 22 min after a power
-cycle (section 2, last table). Original report: since the afternoon of 2026-10-03 the bus
+cycle (section 2, last tables), and again 2026-10-06 21:21 PC, 1.5 h after
+an app start with no first contact nearby; GA_EV 8 recovered it. Original report: since the afternoon of 2026-10-03 the bus
 loses all frames for ~2.5 s now and then: the servos lose DC sync and go
 to errorstop if they are enabled, and the QEC (station 1002) and the reel
 servo (1003) come back in INIT / SAFE-OP, as if they had rebooted. It
@@ -115,6 +116,40 @@ but the log-read job was not part of that test, and nothing has been
 proven either way; the earlier dropouts (10-03) also happened with nobody
 connecting. To test next: the PLC log read job repeated on a healthy bus,
 and a first UI connection after a PLC restart.
+
+**2026-10-06 evening (new PC), a third one, not near any first contact.**
+The owner downloaded from the IDE (19:22:44 PC; bootinfo written) and the
+app was started 19:46:57 (`app_start.py`, Keep login; 19:51:40 PLC all
+OP). ESP32 not reset: SYNC0-driven (`sync` 1, 999-1001 us). PLC clock
+4 min 43 s ahead of the PC (app start <-> "Startup finished").
+
+| PC time | PLC log / event | What I did |
+|---|---|---|
+| 19:47-21:20 | clean, lost 0 | UI connected ~20:45 (first client after the start), EC_STATS reads, 9 daemon login reads ~19:50, ESP32 serial read (dtr/rts off) 20:58: 0 lost |
+| 21:20:13-18 | | `bus_watch.py` start: UI reconnect, daemon login, 9 symbol reads |
+| 21:20-21:21:13 | | EC_STATS every 10 s via the UI; no daemon contact |
+| **~21:21:19** | 21:26:02 PLC: EAXIS_A, QEC (GenericDSP402), reel "lost synchronicity" (23 lost), "more than 100 packets lost", slaves leave OP; 21:26:04.9 AL 0x8130 from 1004/1005/1006 | (none: next daemon read was due after 21:21:18 but not started) |
+| 21:21:23 | | EC_STATS: lost 0 -> 2538, rx 0 -> 2539; QEC 0, reel 0, xError TRUE, others OP |
+| 21:22:50 | | lost 2538, rx 2539; ESP32 still OP / sync 1 but interrupt interval 805-6057 us, stale / skip climbing (master in error, irregular frames) |
+| by 21:30:42 | (no loss entry) | rx errors 2539 -> 4903, lost unchanged (cf. the second burst in the morning) |
+| 21:30:34 | 21:35:21-24 PLC: bus restart, all slaves OP; then `OnlineLicenseManager: Demo mode expired.` | GA_EV 8 from UnInited (expect_st 10) |
+| 21:32-23:32 | 2 h clean (lost 2538, rx 4903 unchanged) | `bus_watch.py --hours 2` |
+| 00:42- | overnight watch, two 3.8 h legs | |
+
+So the dropout came 1 h 34 min after the app start and ~60 s after the
+last daemon login, with only the UI's routine traffic on the wire: not a
+"first contact" effect. Same signature as before (QEC + reel leave OP,
+~2.5 s, 0x8130 from the three ASDA).
+
+Open: the `Demo mode expired` line (first time in the log; the PLC log
+only reaches back to 15:50 today, so no comparison with older runs).
+SoftMotion finds its legacy licenses at every start and the project uses
+SM3 4.18 throughout; which component ran in demo is unknown. The dropout
+fell ~2 h after the IDE download (19:27 PLC -> 21:26 PLC), but the 2 h
+after the GA_EV 8 restart (21:30 -> 23:30 PC) passed clean, so "2 h after
+a (re)start" does not hold. Evidence:
+`codesys_scripts/jobs/incidents/20261006-212128_bus_watch/` (with the PLC
+log, saved afterwards: read_plc_log.py had a hard-coded old-PC path).
 
 6 h triangle (`soak_logs/tri6h_1005.log`, `dwell_tri6h.csv`): stop error
 mean 23.2-23.6 um and +10 ms 5.6-6.3 um in every 15-min window, flat. The
