@@ -200,6 +200,11 @@ class Handler(BaseHTTPRequestHandler):
 class ThreadingHTTPServer(HTTPServer):
     """One thread per request so /push can block without stalling /poll."""
 
+    # Windows SO_REUSEADDR lets a second harness bind the same port; it then
+    # wrote its own token and half the requests got 403 (2026-10-06). A
+    # second harness must fail to start instead.
+    allow_reuse_address = False
+
     def process_request(self, request, client_address):  # type: ignore[override]
         t = threading.Thread(
             target=self._handle, args=(request, client_address), daemon=True

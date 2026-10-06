@@ -362,7 +362,8 @@ def ui_guards(a):
     push("run_cycle", timeout=10)
     time.sleep(6)
     try:
-        push("set_plan", {"plan": [3]}, timeout=10)
+        push("set_plan", {"plan": [3], "restart": True}, timeout=10)
+        push("plan_confirm_preset", {"answer": True}, timeout=10)
         check("set_plan refused mid-run", False)
     except RuntimeError as e:
         check("set_plan refused mid-run", "a run is on" in str(e))
@@ -691,6 +692,13 @@ def chaos(a):
                 push("forget_plan", timeout=10)
                 log("chaos: renderer plan forgotten; PLC has %s at cell %s -> %s" % (
                     plc.get("seg"), plc.get("cells_done"), plc.get("remaining")))
+            if left and a.reapply_at_stop:
+                # The operator applies the same plan again (2026-10-06 plan
+                # audit #1: that used to reset the PLC's progress to 0). RUN
+                # must continue where the tape is.
+                plc = push("get_plc_plan", timeout=10)
+                push("set_plan", {"plan": list(plc.get("seg") or [])}, timeout=10)
+                log("chaos: same plan applied again; PLC had %s at cell %s" % (plc.get("seg"), plc.get("cells_done")))
             if left:
                 push("run_cycle", timeout=10)
                 log("chaos: RUN again")
@@ -874,6 +882,8 @@ def main():
                          "instead of the transport settings")
     ap.add_argument("--forget-at-stop", action="store_true",
                     help="after each chaos STOP, drop the renderer's plan so RUN resumes from the PLC's")
+    ap.add_argument("--reapply-at-stop", action="store_true",
+                    help="after each chaos STOP, apply the same plan again (Apply), as an operator might")
     ap.add_argument("--chaos-in-empty", action="store_true",
                     help="with --chaos: press STOP only inside an empty-cell segment of the plan")
     ap.add_argument("--stop-after", type=int, default=None,
@@ -890,7 +900,14 @@ def main():
     stalled = False
     try:
         plc_prepare()
-        procs.append(start("remote_harness", [sys.executable, os.path.join(SCRIPTS, "internals", "remote_harness.py")]))
+        # One harness only: with --no-ui-start the UI already polls a running
+        # one (2026-10-06: a second one took the port too on Windows and
+        # wrote its own token, so every /push got 403).
+        try:
+            urllib.request.urlopen(HARNESS + "/poll", timeout=2).read()
+            log("remote_harness already running")
+        except Exception:
+            procs.append(start("remote_harness", [sys.executable, os.path.join(SCRIPTS, "internals", "remote_harness.py")]))
         events_csv = os.path.join(LOGS, "events.csv")
         for stale in (events_csv, events_csv + ".start"):
             if os.path.exists(stale):
@@ -964,7 +981,11 @@ def main():
             plan = [a.parts] if a.parts else [a.cycles + 5]
         if a.parts or a.plan:
             a.cycles = 10 ** 6            # run until the plan completes
-        log("plan:", push("set_plan", {"plan": plan}, timeout=10))
+        log("plan:", push("set_plan", {"plan": plan, "restart": True}, timeout=10))
+        # A test run starts its plan on purpose: if the PLC still holds an
+        # unfinished one (an earlier test), RUN asks to abandon it
+        # (lib/production/planSync.ts); answer yes for the test.
+        push("plan_confirm_preset", {"answer": True}, timeout=10)
         open(events_csv + ".start", "w").close()      # vision_mock starts collecting
         collector = events_csv
         if a.peaks:
@@ -972,8 +993,8 @@ def main():
             daemon({"cmd": "logout"})
         if a.speed != 100:
             log("speed:", push("set_speed", {"percent": a.speed}, timeout=10))
-        pos0 = reel_pos() if a.fault else None     # a new plan counts from cell 0
-        odo0 = reel_odo() if a.fault else None
+        pos0 = reel_pos() if (a.fault or a.chaos) else None     # a new plan counts from cell 0
+        odo0 = reel_odo() if (a.fault or a.chaos) else None
         sampler = TaskSampler() if a.task_stats else None
         if a.ui_guards:
             ui_guards(a)
@@ -1005,6 +1026,9 @@ def main():
             vision_drop(a)
         if a.chaos:
             chaos(a)                        # runs the plan to its end itself
+            # the tape moved exactly the cells the PLC counted (with
+            # --reapply-at-stop: re-applying did not restart the count)
+            reel_books(pos0, 0, odo0)
         elif a.fault:
             fault(a)
             reel_books(pos0, 0, odo0)

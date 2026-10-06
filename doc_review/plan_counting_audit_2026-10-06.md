@@ -91,3 +91,30 @@ segment; a failed last step; the counters; anything on the machine.
 6. Position lost: a UI to jog to the hole and send REEL_CLEAR with the count
    suggested from the odometer.
 7. Tests for the above; move syncPlanWithPlc into lib and unit-test it.
+
+## Done 2026-10-06 (items 1, 2, 5; UI and tools only)
+
+- `lib/production/planSync.ts` (+ 12 tests): `decideSync` decides what RUN
+  does with the plan, `pullPlan` takes the PLC's count back, `countsAt`
+  derives placed / empty by position.
+  - Same segments applied again: continues the PLC's progress under its id
+    (audit #1). "從頭開始 / Restart" (button next to Apply; harness
+    `set_plan {restart:true}` / `restart_plan`) starts from cell 0.
+  - A different plan over an unfinished PLC plan, or a Restart over one:
+    the operator confirms abandoning it.
+  - The PLC lost its plan (download / cold reset) while the UI counts
+    progress: the operator confirms the tape position before the count is
+    pushed back (audit #2). STOP cancels an open question.
+- Every run, however it ends, pulls the PLC's count (`pullPlanFromPlc` in
+  runAllObjects' finally; audit #5), and so does every reconnect.
+- The plan button shows the PLC's ledger: cells done / total, packed,
+  empty, an open or lost tape move.
+- `tools/deploy.py` step 2 refuses while a tape move is open and notes an
+  unfinished PLC plan.
+- Sim (`run_virtual.py --chaos 3 --reapply-at-stop`, new option; the chaos
+  runs now end with the reel odometer check): plan 3,-2,4 with STOP + the
+  same plan applied again, seeds 5 and 11: 9 cells counted, 72.000 mm
+  travelled, MATCH; baseline without re-apply MATCH; 2,-8,3 MATCH.
+
+Still open: items 3 (look before an empty advance), 4 (odometer compare at
+RUN), 6 (position-lost UI), the Count / speed display (still per run).

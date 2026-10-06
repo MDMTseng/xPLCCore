@@ -153,6 +153,23 @@ def main():
             for f in ("pos", "act", "vel"))]
         if moving:
             fail("delta axes %s still moving" % moving, "unchanged")
+        # A download wipes RETAIN: an open tape move would be forgotten and
+        # the tape left between cells (plan audit 2026-10-06, #2). Finish it
+        # first (RUN does, through REEL_RESUME).
+        try:
+            plan = mc.sys_cmd("PLAN_GET")
+        except Exception as e:
+            plan = {}
+            say("   PLAN_GET failed: %s" % e)
+        say("   plan: id %s, cells %s of %s, reel_open %s" % (
+            plan.get("plan_id"), plan.get("cells_done"), sum(abs(n) for n in plan.get("seg", []) or []),
+            plan.get("reel_open")))
+        if plan.get("reel_open"):
+            fail("a tape move is open (PLAN_GET reel_open): finish it with RUN first, a download would lose it",
+                 "unchanged")
+        if plan.get("seg") and plan.get("cells_done", 0) < sum(abs(n) for n in plan["seg"]):
+            say("   NOTE: the PLC holds an unfinished plan; the download wipes it, and the next RUN "
+                "asks the operator before pushing the UI's count back")
         say("   PLC log saved:", mc.save_plc_log())
         if a.dry_run:
             say("dry run: checks passed, nothing changed")

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Divider, Popconfirm, Popover, Typography, message } from 'antd';
+import { Button, Divider, Popconfirm, Popover, Typography, message, Modal as AntModal } from 'antd';
 import { JoggingPad } from '../JoggingPad';
 import { Modal } from '../Modal';
 import type { COMCtrlObj } from '../types';
@@ -19,6 +19,7 @@ import { runJogTest } from '../lib/jogTest';
 import { finishTapeMove, emptyNozzle } from '../lib/production/recovery';
 import { InputMonitor, TAPE_SENSOR_PINS, checkTapeSensors, type DiEvent } from '../lib/production/inputs';
 import { registerRunProbe } from '../lib/fsmLock';
+import { decideSync, pullPlan, countsAt } from '../lib/production/planSync';
 import type { PlanState } from '../lib/protocol';
 
 
@@ -167,6 +168,13 @@ export const CalibPage: React.FC<{
     production_plan?: number[];
     production_plan_original?: number[];
     production_plan_stageIndex?: number;
+    production_plan_id?: number;
+    // The operator asked to start this plan from its first cell ("Restart").
+    production_plan_restart?: boolean;
+    // Last PLAN_GET: the PLC's ledger (lib/production/planSync.ts).
+    plcPlan?: any;
+    // Harness: the answer for the next plan confirmation instead of a dialog.
+    planConfirmPreset?: boolean;
     // Throughput / counters
     lastPackCount?: number;
     packCountOffset?: number;
@@ -186,6 +194,13 @@ export const CalibPage: React.FC<{
   const _this = useRef<RunCtx>({}).current;
   // No FSM walk (Init buttons) while a production run is on (lib/fsmLock).
   useEffect(() => { registerRunProbe(() => _this.isRunning === true); }, []);
+  // On (re)connect PluginHello posts a machine snapshot: pull the PLC's
+  // plan ledger then (not during a run).
+  useEffect(() => {
+    const h = () => { if (_this.isRunning !== true) pullPlanFromPlc(); };
+    window.addEventListener('plc:machine-state', h);
+    return () => window.removeEventListener('plc:machine-state', h);
+  }, []);
   const sendTcpMsgPack = COMCtrlObj.sendTcpMsgPack;
   // Host mark in the PLC event log: fire-and-forget (no reply awaited, no
   // throw) so timing marks can never disturb the cycle.
@@ -883,6 +898,9 @@ export const CalibPage: React.FC<{
       if(e instanceof Error) setRunningState(JSON.stringify({errorString:e.message}));
     }finally{
       _this.cycleEnded=true;
+      // the PLC's count is the truth however the run ended
+      await pullPlanFromPlc();
+      _this.planConfirmPreset = undefined;   // a harness answer is for one RUN only
       _this.isRunning=false;
     }
   };
@@ -1526,8 +1544,26 @@ export const CalibPage: React.FC<{
     if (!Array.isArray(plan) || plan.length === 0 || !plan.every((n: any) => Number.isInteger(n) && n !== 0)) {
       throw new Error('set_plan: plan must be a non-empty array of non-zero integers');
     }
-    if (!setProductionPlan(plan)) throw new Error('set_plan: a run is on');
-    return { plan: _this.production_plan };
+    // restart: start it from cell 0 even if the PLC has progress on the same
+    // segments (the "從頭開始" button); without it the same segments continue.
+    if (!setProductionPlan(plan, undefined, payload?.restart === true)) throw new Error('set_plan: a run is on');
+    return { plan: _this.production_plan, restart: payload?.restart === true };
+  }, []);
+
+  // answer: true / false for the next plan confirmation (no dialog).
+  useHarnessAction('plan_confirm_preset', async (payload: any) => {
+    _this.planConfirmPreset = payload?.answer === true;
+    return { preset: _this.planConfirmPreset };
+  }, []);
+  useHarnessAction('restart_plan', async () => {
+    const o = _this.production_plan_original as number[] | undefined;
+    if (!o || o.length === 0) throw new Error('restart_plan: no plan');
+    if (!setProductionPlan([...o], undefined, true)) throw new Error('restart_plan: a run is on');
+    return { plan: _this.production_plan, restart: true };
+  }, []);
+  useHarnessAction('pull_plan', async () => {
+    await pullPlanFromPlc();
+    return { plan: _this.production_plan, plc: _this.plcPlan, counts: _this.plcPlan ? countsAt(_this.plcPlan.seg ?? [], _this.plcPlan.cells_done ?? 0) : null };
   }, []);
 
   useHarnessAction('set_speed', async (payload: any) => applySpeed(Number(payload?.percent ?? 100)), [applySpeed]);
@@ -1622,7 +1658,7 @@ export const CalibPage: React.FC<{
     return { ok: true, plan };
   }
 
-  function setProductionPlan(plan: number[], planId: number = Date.now() % 2147483647): boolean {
+  function setProductionPlan(plan: number[], planId: number = Date.now() % 2147483647, restart: boolean = false): boolean {
     // Not mid-run: the loop, the PLC's plan and its cell count all follow
     // the plan the run started with (review 2026-09-26 #5).
     if (_this.isRunning === true) {
@@ -1635,8 +1671,55 @@ export const CalibPage: React.FC<{
     // Labels the plan on the PLC (PLAN_SET plan_id), so a RUN can tell
     // "the PLC's progress on this plan" from "a plan the PLC never saw".
     _this.production_plan_id = planId;
+    // Applying the same segments again continues the PLC's progress
+    // (planSync.decideSync); only "Restart" starts from cell 0.
+    _this.production_plan_restart = restart;
     setProductionPlanTick((x) => x + 1);
     return true;
+  }
+
+  // Ask the operator (or take the harness preset) before the plan sync does
+  // something only a person can vouch for: pushing the renderer's count to
+  // a PLC that lost its plan, or abandoning an unfinished PLC plan.
+  function confirmPlan(title: string, text: string): Promise<boolean> {
+    if (_this.planConfirmPreset !== undefined) {
+      const a = _this.planConfirmPreset;
+      _this.planConfirmPreset = undefined;
+      return Promise.resolve(a);
+    }
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (v: boolean) => { if (!done) { done = true; clearInterval(poll); resolve(v); } };
+      const dlg = AntModal.confirm({
+        title, content: text, okText: uiLang === 'zh' ? '確認' : 'Confirm', cancelText: uiLang === 'zh' ? '取消' : 'Cancel',
+        onOk: () => finish(true), onCancel: () => finish(false),
+      });
+      // STOP while the question is open cancels it (and so the run).
+      const poll = setInterval(() => {
+        if (_this.run_cycle_stop === true) { dlg.destroy(); finish(false); }
+      }, 200);
+    });
+  }
+
+  // The renderer's plan from the PLC's cell count, when it is the same plan
+  // (planSync.pullPlan): after every run, however it ended (a failed last
+  // step used to show the plan as finished, audit #5), and on reconnect.
+  async function pullPlanFromPlc(): Promise<void> {
+    try {
+      const st = await sendTcpMsgPack(cmd.PlanGet()) as PlanState;
+      _this.plcPlan = st;
+      const r = pullPlan({ original: _this.production_plan_original, remaining: _this.production_plan, id: _this.production_plan_id }, st as any);
+      if (r !== undefined) {
+        if (JSON.stringify(r) !== JSON.stringify(_this.production_plan ?? [])) {
+          console.warn("[PLAN] pulled from the PLC", JSON.stringify(_this.production_plan), "->", JSON.stringify(r));
+        }
+        _this.production_plan = r;
+        _this.production_plan_stageIndex = (_this.production_plan_original?.length ?? 0) - r.length;
+      }
+      setProductionPlanTick((x) => x + 1);
+    } catch (e: any) {
+      console.warn("[PLAN] pull from the PLC failed:", e?.message ?? e);
+    }
   }
 
   // The PLC keeps the whole plan and the tape cells advanced since it was
@@ -1649,36 +1732,58 @@ export const CalibPage: React.FC<{
   async function syncPlanWithPlc(send: (pkt: any) => Promise<any>): Promise<string> {
     const st = await send(cmd.PlanGet()) as PlanState;
     if (typeof st?.reel_counts_per_mm === 'number') _this.reelCountsPerMm = st.reel_counts_per_mm;
-    const seg = (st?.seg ?? []) as number[];
-    const plcRemaining = remainingPlan(seg, st?.cells_done ?? 0);
-    const original = _this.production_plan_original as number[] | undefined;
-    const samePlan = !!original && st?.plan_id === _this.production_plan_id
-      && seg.length === original.length && seg.every((n, i) => n === original[i]);
-    if (samePlan) {
-      const mine = (_this.production_plan ?? []) as number[];
-      if (JSON.stringify(mine) !== JSON.stringify(plcRemaining)) {
-        console.warn("[PLAN] resynced from the PLC", JSON.stringify(mine), "->", JSON.stringify(plcRemaining));
-      }
-      _this.production_plan = plcRemaining;
-      _this.production_plan_stageIndex = seg.length - plcRemaining.length;
-      setProductionPlanTick((x) => x + 1);
-      return "plc";
-    }
-    if (!original || original.length === 0) {
-      if (plcRemaining.length > 0) {
-        _this.production_plan_original = [...seg];
-        _this.production_plan_id = st.plan_id;
-        _this.production_plan = plcRemaining;
-        _this.production_plan_stageIndex = seg.length - plcRemaining.length;
+    _this.plcPlan = st;
+    const d = decideSync({
+      original: _this.production_plan_original as number[] | undefined,
+      remaining: _this.production_plan as number[] | undefined,
+      id: _this.production_plan_id,
+      restart: _this.production_plan_restart,
+    }, st as any);
+    const zh = uiLang === 'zh';
+    switch (d.kind) {
+      case 'plc': {
+        if (JSON.stringify(_this.production_plan ?? []) !== JSON.stringify(d.remaining)) {
+          console.warn("[PLAN] resynced from the PLC", JSON.stringify(_this.production_plan), "->", JSON.stringify(d.remaining));
+        }
+        _this.production_plan_id = d.id;
+        _this.production_plan = d.remaining;
+        _this.production_plan_stageIndex = (_this.production_plan_original?.length ?? 0) - d.remaining.length;
         setProductionPlanTick((x) => x + 1);
-        console.warn("[PLAN] resumed from the PLC", JSON.stringify(seg), "at cell", st.cells_done);
+        return "plc";
+      }
+      case 'resume': {
+        _this.production_plan_original = d.original;
+        _this.production_plan_id = d.id;
+        _this.production_plan = d.remaining;
+        _this.production_plan_stageIndex = d.original.length - d.remaining.length;
+        setProductionPlanTick((x) => x + 1);
+        console.warn("[PLAN] resumed from the PLC", JSON.stringify(d.original), "at cell", st.cells_done);
         return "resumed";
       }
-      return "none";
+      case 'none':
+        return "none";
+      case 'confirm_push': {
+        const ok = await confirmPlan(
+          zh ? 'PLC 上的生產計畫已被清除' : 'The PLC lost its production plan',
+          zh ? `PLC 的計畫記錄已清空（下載或冷重置）。UI 記錄這個計畫已走過 ${d.done} 格。請先確認膠帶上的實際位置與這個數字一致，再按確認；否則按取消並重新套用計畫。`
+             : `The PLC's plan was wiped (download or cold reset). The UI counts ${d.done} cells of this plan done. Confirm only after checking the tape matches; otherwise cancel and apply the plan again.`);
+        if (!ok) throw new Error(zh ? '計畫同步已取消（PLC 計畫被清除）' : 'plan sync cancelled (the PLC lost its plan)');
+        break;
+      }
+      case 'confirm_abandon': {
+        const ok = await confirmPlan(
+          zh ? '放棄 PLC 上未完成的計畫？' : 'Abandon the unfinished PLC plan?',
+          zh ? `PLC 上還有一個未完成的計畫（剩 ${d.plcCellsLeft} 格）。確認後改用新的計畫${d.done ? `（從第 ${d.done} 格起）` : '（從頭開始）'}，原計畫的進度會被放棄。`
+             : `The PLC holds an unfinished plan (${d.plcCellsLeft} cells left). Confirm to replace it${d.done ? ` (from cell ${d.done})` : ' (from the start)'}; its progress is abandoned.`);
+        if (!ok) throw new Error(zh ? '已取消：PLC 上的計畫未完成' : 'cancelled: the PLC plan is unfinished');
+        break;
+      }
+      case 'set':
+        break;
     }
-    const done = cellsDone(original, (_this.production_plan ?? []) as number[]);
-    await send(cmd.PlanSet(original, _this.production_plan_id ?? 0, done));
-    console.log("[PLAN] sent to the PLC", JSON.stringify(original), "cells_done", done);
+    await send(cmd.PlanSet(d.seg, d.id, d.done));
+    _this.production_plan_restart = false;
+    console.log("[PLAN] sent to the PLC", JSON.stringify(d.seg), "cells_done", d.done);
     return "set";
   }
 
@@ -1738,6 +1843,22 @@ export const CalibPage: React.FC<{
     if (!res.ok) return '';
     return res.plan.join(',');
   }, [planSegments]);
+
+  // The PLC's ledger (last PLAN_GET): placed / empty by position, never
+  // accumulated (planSync.countsAt).
+  const plcLedger = useMemo(() => {
+    void productionPlanTick;
+    const st = _this.plcPlan;
+    if (!st || !Array.isArray(st.seg) || st.seg.length === 0) return null;
+    const c = countsAt(st.seg, st.cells_done ?? 0);
+    const zh = uiLang === 'zh';
+    let text = zh ? `PLC 帳：已走 ${c.done} / ${c.total} 格（放置 ${c.packed}、空放 ${c.empty}）`
+                  : `PLC ledger: ${c.done} / ${c.total} cells (packed ${c.packed}, empty ${c.empty})`;
+    const warn = !!st.reel_open || !!st.reel_pos_lost;
+    if (st.reel_pos_lost) text += zh ? '；膠帶位置遺失' : '; tape position lost';
+    else if (st.reel_open) text += zh ? '；膠帶移動未完成，下次 RUN 會先走完' : '; a tape move is open, RUN finishes it first';
+    return { text, warn };
+  }, [productionPlanTick, uiLang]);
 
   const { progressDisplay, isProductionFinished } = useMemo(() => {
     // Depend on productionPlanTick so this updates while running.
@@ -1891,6 +2012,11 @@ export const CalibPage: React.FC<{
             {isProductionFinished ? <span style={{ marginLeft: 6, fontWeight: 700, opacity: 0.8 }}>✓ {t(uiLang, 'planFinished')}</span> : null}
             &nbsp;&nbsp;<span style={{ fontSize: 10, opacity: 0.5 }}>{isPlanExpanded ? '▲' : '▼'}</span>
           </Button>
+          {plcLedger && (
+            <div style={{ fontSize: 12, color: plcLedger.warn ? '#b91c1c' : '#475569', padding: '2px 4px' }}>
+              {plcLedger.text}
+            </div>
+          )}
 
           {packSpeedInfo && (
             <div style={{
@@ -2185,6 +2311,18 @@ export const CalibPage: React.FC<{
                     }}
                   >
                     {t(uiLang, 'planApplySetup')}
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      // Same plan from cell 0 (a new tape): applying it
+                      // again continues the PLC's progress instead.
+                      const res = segmentsToPlan(planSegments);
+                      if (!res.ok) return;
+                      if (!setProductionPlan(res.plan, undefined, true)) return;
+                      message.info(uiLang === 'zh' ? '下次 RUN 從第 1 格開始（PLC 若有未完成的進度會先請你確認）' : 'Next RUN starts at cell 1 (asks first if the PLC has unfinished progress)');
+                    }}
+                  >
+                    {uiLang === 'zh' ? '從頭開始' : 'Restart'}
                   </Button>
                 </div>
 
