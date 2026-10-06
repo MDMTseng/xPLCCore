@@ -155,7 +155,7 @@ root holds the standing instructions.
   (`--owner-ok`); downloads only with the owner's go, through
   `tools/deploy.py`, drives off; SyncOffset <= 50.
 - Merge work branches into `main` with `--no-ff`.
-- Open work: `doc_review/TODO.md`. Latest reviews:
+- Where the work stands: `doc_review/HANDOVER_2026-10-06.md`. Open work: `doc_review/TODO.md`. Latest reviews:
   `doc_review/plc_ui_integration_review_2026-10-05.md`,
   `doc_review/plan_counting_audit_2026-10-06.md`,
   `doc_review/ethercat_dropout_2026-10-03.md`.

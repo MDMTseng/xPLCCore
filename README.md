@@ -6,6 +6,7 @@ side-projection dimensioning.
 
 > **New PC:** follow [doc/4-dev/new_pc_setup.md](doc/4-dev/new_pc_setup.md) (clone with Git LFS;
 > the CODESYS project archive, calibration and tooling are all in the repo).
+> Where things stand: [doc_review/HANDOVER_2026-10-06.md](doc_review/HANDOVER_2026-10-06.md).
 > Open work: [doc_review/TODO.md](doc_review/TODO.md). Standing rules: [CLAUDE.md](CLAUDE.md).
 
 The UI in this repo is the **renderer + orchestrator**: it owns the PLC

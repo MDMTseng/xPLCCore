@@ -4,6 +4,7 @@ PackerX: a delta-robot tape-and-reel packer. CODESYS PLC program
 (`codesys_code/`, Structured Text, SoftMotion, EtherCAT), Electron + React
 operator UI (`PluginHello.tsx`, `components/`, `lib/`), Python tools that
 drive both (`tools/`, `codesys_scripts/`). New PC: `doc/4-dev/new_pc_setup.md`.
+Where the work stands: `doc_review/HANDOVER_2026-10-06.md`.
 Memory of past sessions: `doc/4-dev/claude_memory/` (install with
 `tools/install_claude_memory.py`).
 
