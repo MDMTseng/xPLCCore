@@ -4,6 +4,10 @@ Electron + React operator UI and CODESYS PLC firmware for a delta-robot
 tape-and-reel packer with 4-surface defect inspection and
 side-projection dimensioning.
 
+> **New PC:** follow [doc/4-dev/new_pc_setup.md](doc/4-dev/new_pc_setup.md) (clone with Git LFS;
+> the CODESYS project archive, calibration and tooling are all in the repo).
+> Open work: [doc_review/TODO.md](doc_review/TODO.md). Standing rules: [CLAUDE.md](CLAUDE.md).
+
 The UI in this repo is the **renderer + orchestrator**: it owns the PLC
 TCP link, the vision TCP link, FlexBowl serial, and the overall job
 sequence. The PLC owns safety-critical motion and coordinate transforms.

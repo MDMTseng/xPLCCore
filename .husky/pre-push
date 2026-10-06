@@ -8,4 +8,11 @@
 #
 # Live-PLC tests (codesys_scripts/tests/, demo_recovery_flow.py) are
 # intentionally NOT in this hook -- they need real hardware + UI.
+#
+# Git LFS (2026-10-06: codesys_project/*.projectarchive, *.project) needs its
+# own pre-push to upload the objects; husky owns the hook, so it runs here,
+# first (it reads the refs on stdin).
+if command -v git-lfs >/dev/null 2>&1; then
+  git lfs pre-push "$@"
+fi
 npm run check

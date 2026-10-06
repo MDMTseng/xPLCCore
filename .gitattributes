@@ -4,6 +4,7 @@
 # fed; subsequent disk reads on LF mismatched and re-applied). Pin to LF
 # so disk + CODESYS internal stay aligned.
 *.st text eol=lf
-
 # Python tooling -- LF on all platforms.
 *.py text eol=lf
+codesys_project/*.projectarchive filter=lfs diff=lfs merge=lfs -text
+codesys_project/*.project filter=lfs diff=lfs merge=lfs -text

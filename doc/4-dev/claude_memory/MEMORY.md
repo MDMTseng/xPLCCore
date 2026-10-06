@@ -1,0 +1,19 @@
+- [Reply in Traditional Chinese](reply-in-traditional-chinese.md) — EVERY user-visible line in 繁體中文 (owner repeated many times, 2026-10-03 again); only reasoning English; repo docs/commits stay English
+- [Machine motion safety](machine-motion-safety.md) — delta trio must stay virtual; EAXIS_A rotation and reel are safe to move
+- [Stall detection by typical timing](stall-detection-by-typical-timing.md) — use per-phase typical durations to catch stuck runs, not blanket 300 s timeouts
+- [Ask before every download](ask-before-every-download.md) — owner OK needed for EVERY full download to the real PLC, even mid-debug; one retry max, then stop and report
+- [PLC download pitfalls](plc-download-pitfalls.md) — no scripting login is read-only (Keep online-changes/downloads); plc_guard fingerprint; never push/kill mid-transfer
+- [PLC exception remote recovery](plc-exception-remote-recovery.md) — stuck exception/reset: telnet 192.168.1.70:23 (Intewell shell), `tr` the frozen IEC task, then start
+- [Local soft-PLC sim](local-softplc-sim.md) — PC-local Control Win x64 copy of PackerX: XPLC_CONFIG=codesys_env.sim.json, Gateway-2, all axes virtual
+- [Placement corrections](placement-corrections.md) — tape hole corrects tape X+Y with the TOP camera mm/px; bottom camera corrects nozzle pickup offset
+- [ASDA stale-target investigation](asda-stale-target-investigation.md) — SOLVED: config order != wire order (EC0808 ref clock after drives); keep tree order = wire order; doc 7l
+- [Announce long operations](announce-long-operations.md) — say what/how long before downloads, homing, runs; no silent `| tail` chains (owner interrupted thinking I hung)
+- [Delta shock / settle method](delta-shock-settle-method.md) — shock on the circle-like round path, settling on PnP stops (tools/param_sweep.py)
+- [Tool timeouts 30 s](tool-timeouts-30s.md) — default 30 s; longer only with evidence (measured step durations inside)
+- [Protective settings first](protective-settings-first.md) — test WITH the filter/limit first, remove it only after a clean protected run (gearbox)
+- [EtherCAT dropout, QEC+reel reset](ethercat-dropout-qec-reel.md) — QEC wiring fix gave 9.5 h clean, but RECURRED 2026-10-06 at standstill after a power cycle; GA_EV 8 recovers without download
+- [PLC architecture review 2026-10-04](plc-architecture-review-2026-10-04.md) — safety fixes + UnInited log fix deployed 2026-10-05 01:42; save_plc_log fixed; 11000 after a failed start = download again
+- [ST AND does not short-circuit](st-and-no-short-circuit.md) — pointer guards as nested IFs; first-cycle NULL deref kills the EtherCAT task (AxisGroupSMScans=1, task missing in telnet table)
+- [Soak report format](soak-report-format.md) — owner's standing format: one artifact per campaign, 30-min updates, stop errors at arrival/+5/+10 ms/leave, 15-min means + box plots (mean/min/max joined), summary table; tri path for axis comparison
+- [Git push / node PATH / TODO list](git-push-node-path.md) — pre-push hook needs node on PATH (Git Bash); branch flow-analysis; open work in doc_review/TODO.md
+- [Merge into main with --no-ff](merge-no-ff.md) — owner wants a merge commit, not fast-forward; state the style before pushing main

@@ -90,6 +90,7 @@ One-off probes live in `_archive/`. Regenerate this file with
 | `rename_ringbuf_methods.py` | edits project | Rename FB_RingBufferIndex methods to PascalCase (Tier-B cleanup). |
 | `restart_app.py` | PLC session | Stop and start the application on the PLC (no download). |
 | `run_msgpack_tests.py` | edits project, PLC session | Drive the PLC-side MsgPack self-test harness (FB_MsgPackTests) in online mode and print results. |
+| `save_archive.py` | read-only | Write a CODESYS project archive of the open project, with the devices and libraries it references, to codesys_project/PackerX.projectarchive (Git LFS). |
 | `save_project.py` | edits project | Persist whatever's currently in the warm session to the project file. |
 | `set_a_additional_axis.py` | edits project | NOT IN USE (2026-09-30): the real PLC hangs on the first blended G1 with A as additional axis on SM3 4.20; the machine runs SM3 4.18 + Kin_CAxis. |
 | `set_axis_limits.py` | edits project | Axis dynamic limits (the axis' "Dynamic limits": fSWMax*), from the peaks the production flow reached on the machine (2026-09-29, real flow with the vision mock, plus a queued-replay run for the worst segment): delta joi |
@@ -110,6 +111,8 @@ One-off probes live in `_archive/`. Regenerate this file with
 | `set_slave_order.py` | edits project | Put the EtherCAT slaves in the device tree in wire order and make them non-optional, so the master addresses them by position and refuses a mismatch (2026-10-02). |
 | `set_slaves_bypass.py` | edits project | Bypass the QEC (A axis stepper, station 1002) and the reel servo (1003) on the EtherCAT line: disable both slaves in the device tree and make their axes (EAXIS_A, SM_Drive_GenericDSP402 = A, reelpullmotor) virtual, so th |
 | `set_sm3_420.py` | edits project | NOT IN USE (2026-09-30): the real PLC hangs on the first blended G1 with A as additional axis on SM3 4.20; the machine runs SM3 4.18 + Kin_CAxis. |
+| `sim_esp_gvl.py` | edits project | rpc.py exec --file jobs/templates/sim_esp_gvl.py (XPLC_CONFIG = the sim config) SIM PROJECT ONLY: stand-ins for the EasyCAT IO channels (the sim has no EasyCAT slave in its EtherCAT tree). |
+| `sim_patch_trans.py` | edits project | rpc.py exec --file jobs/templates/sim_patch_trans.py (XPLC_CONFIG = the sim config) or: tools/deploy.py --allow-bus-down --post-import codesys_scripts/jobs/templates/sim_patch_trans.py SIM PROJECT ONLY: the sim's older S |
 | `stamp_build_info.py` | edits project | Stamp BUILD_GIT_SHA / BUILD_TS_MS in GVL.st with the current git rev and a unix-ms timestamp. |
 | `stop_and_reset.py` | PLC session, resets PLC | Stop the running application and reset it (warm by default), BEFORE the new code is imported: step 3 of tools/deploy.py (owner's sequence, 2026-10-05: no motion -> Error state -> reset -> download -> start). |
 | `stop_then_install.py` | PLC session | Full install: download the project to the PLC and start it. |

@@ -41,6 +41,7 @@ Regenerate this file with `python tools/gen_script_index.py`.
 | `gen_script_index.py` | writes these README files | Regenerate the script indexes from each script's own header: codesys_scripts/jobs/templates/README.md and tools/README.md. |
 | `host_crash_test.py` | moves axes | The host PC dies without closing its PLC connection (a blue screen): can it connect again after it comes back? |
 | `host_gone_test.py` | moves axes | What the PLC does with a host that goes away (resource cleanup). |
+| `install_claude_memory.py` | read-only | Copy the Claude Code memory kept in the repo (doc/4-dev/claude_memory/) into this PC's Claude Code project memory, so a session started in the workspace folder knows the owner's rules and the machine's history. |
 | `intewell_watch.py` | read-only | Log the Intewell RTOS task table (and CPU use) of the PLC over its telnet shell, for post-mortem when the PLC hangs. |
 | `joint_bench.py` | moves axes | Delta joint bench steps through the UI's link (the Motors page must be open in the standalone UI with XPLC_HARNESS=1; its Delta joints panel shows the same state live, with a STOP). |
 | `limit_test.py` | moves axes, writes PLC vars | Do the axis limits hold when the path asks for far more? |
@@ -48,6 +49,7 @@ Regenerate this file with `python tools/gen_script_index.py`.
 | `p3009_sweep.py` | moves axes, downloads | Sweep the ASDA drives' P3.009 (communication synchronization) and measure the stale-target rate at each setting. |
 | `param_sweep.py` | moves axes | Compare drive parameter sets (the same on all three delta drives) by the shock the motion feels and by the settling time. |
 | `plc_direct.py` | library (direct msgpack client, port 8125) | Talk to the PLC's msgpack server (port 8125) directly, without the UI. |
+| `plc_telnet.py` | read-only | Send commands to the PLC's RTOS shell (Kyland Intewell, telnet :23, no login) and print the answers. |
 | `pulse_test.py` | moves axes, writes PLC vars | Constant-pulse test for one delta drive, for the ASDA stale-target issue (doc_review/asda_stale_target_2026-09-30.md). |
 | `reel_real_test.py` | moves axes, writes PLC vars | Reel axis on the machine: power it, move it, check the cell count and the odometer against the encoder, and the tracker's stop detection on a real servo (a virtual axis has no standstill jitter). |
 | `safe_install.py` | downloads | Download the project to the PLC with every safety step (machine.safe_install): 1. |

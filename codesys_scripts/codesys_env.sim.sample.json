@@ -1,0 +1,17 @@
+{
+  "_comment": "Local soft-PLC sim (CODESYS Control Win V3 x64 on this PC). Copy to codesys_env.sim.json, set the project path, and use with XPLC_CONFIG=<abs path of that file>. See doc/4-dev/new_pc_setup.md section 6.",
+  "project": "<SET-ME: absolute path of PackerX_sim.project (copy of codesys_project/PackerX_sim.project)>",
+  "source_root": "codesys_code",
+  "state_dir": "codesys_scripts/jobs_sim",
+  "codesys_exe": "C:/Program Files/CODESYS 3.5.22.30/CODESYS/Common/CODESYS.exe",
+  "profile": "CODESYS V3.5 SP22 Patch 3",
+  "culture": "en-US",
+  "rpc_host": "127.0.0.1",
+  "rpc_port": 7421,
+  "plc_host": "127.0.0.1",
+  "plc_port": 8125,
+  "snapshot_keep": 40,
+  "session_max_jobs": 150,
+  "session_max_seconds": 14400,
+  "heartbeat_stale_seconds": 90
+}

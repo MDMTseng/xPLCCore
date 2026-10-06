@@ -1,0 +1,13 @@
+# Python 3.12 (tested 3.12.10) for tools/, codesys_scripts/ (the CPython
+# side; the CODESYS daemon itself runs inside the IDE's IronPython) and
+# script/serial_ctrl.py (the feeder bridge the UI spawns).
+#   pip install -r requirements.txt
+msgpack>=1.2        # PLC protocol (tools/plc_direct.py, tests)
+numpy>=2.0          # analysis tools (sweeps, settle, scope)
+matplotlib>=3.9     # plots from the analysis tools
+pyserial>=3.5       # feeder bridge, asda_scope
+pytest>=8           # codesys_scripts/tests (offline: plc_guard, layout_check)
+py7zr>=1.0          # tools/asda_scope.py (ASDA-Soft scope archives)
+requests>=2.31
+# Only with a real FlexBowl feeder on a COM port (the sim uses port "MOCK"):
+# pymodbus>=3.6

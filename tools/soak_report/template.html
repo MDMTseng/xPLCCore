@@ -1,0 +1,275 @@
+<title>Delta Soak 監測</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&display=swap">
+<style>
+/* Layout: an instrument log sheet: status strip, then one chart per question, readings in mono. */
+:root {
+  --bg: #f3f5f6; --panel: #ffffff; --ink: #1b2328; --muted: #5d6b73; --rule: #d7dde1;
+  --accent: #1f6f8b;
+  --ax0: #2f6fd0; --ax1: #d9772b; --ax2: #8a4fbf;
+  --ok: #2e8b57; --warn: #c98a12; --bad: #c43d3d;
+  --sans: "IBM Plex Sans", "Noto Sans TC", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "Noto Sans TC", monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #12171a; --panel: #1a2125; --ink: #e3e9ec; --muted: #94a3ab; --rule: #2c363c;
+  --accent: #5fb3cf; --ax0: #6ea2f0; --ax1: #f0a060; --ax2: #b88ae6;
+  --ok: #5cc28a; --warn: #e3b04a; --bad: #ef6b6b; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #12171a; --panel: #1a2125; --ink: #e3e9ec; --muted: #94a3ab; --rule: #2c363c;
+  --accent: #5fb3cf; --ax0: #6ea2f0; --ax1: #f0a060; --ax2: #b88ae6;
+  --ok: #5cc28a; --warn: #e3b04a; --bad: #ef6b6b; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.5;
+  padding-inline: 16px; padding-block: 20px 40px; margin: 0; }
+.wrap { max-width: 1080px; margin: 0 auto; display: grid; gap: 18px; }
+header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; }
+h1 { font-size: 1.6rem; margin: 0; font-weight: 600; text-wrap: balance; }
+.sub { color: var(--muted); margin: 4px 0 0; }
+.pill { font-family: var(--mono); font-size: .8rem; padding: 4px 10px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+.pill.run { color: var(--ok); } .pill.stop { color: var(--warn); }
+.updated { font-family: var(--mono); font-size: .8rem; color: var(--muted); }
+.strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1px; background: var(--rule);
+  border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
+.cell { background: var(--panel); padding: 12px 14px; min-width: 0; }
+.lab { font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.val { font-family: var(--mono); font-size: 1.35rem; font-variant-numeric: tabular-nums; }
+.val small { font-size: .78rem; color: var(--muted); }
+.ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+.bar { height: 5px; background: var(--rule); border-radius: 3px; margin-top: 6px; overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--accent); }
+section { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; min-width: 0; }
+h2 { font-size: 1rem; margin: 0 0 2px; font-weight: 600; }
+.note { color: var(--muted); font-size: .85rem; margin: 0 0 8px; max-width: 70ch; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
+svg { width: 100%; height: auto; display: block; }
+svg text { fill: var(--muted); font-family: var(--mono); font-size: 11px; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: .82rem; color: var(--muted); }
+.legend b { display: inline-block; width: 12px; height: 3px; vertical-align: middle; margin-right: 5px; border-radius: 2px; }
+table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+td { padding: 4px 8px; border-top: 1px solid var(--rule); }
+td:first-child { font-family: var(--mono); color: var(--muted); width: 6em; }
+.tw { overflow-x: auto; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Delta 長時間 Soak</h1>
+      <p class="sub" id="sub"></p>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <span class="pill" id="state"></span><span class="updated" id="upd"></span>
+    </div>
+  </header>
+
+  <div class="strip" id="strip"></div>
+
+  <div class="grid2">
+    <section>
+      <h2>每週期扭力變化最大值（累計）</h2>
+      <p class="note">三軸各自到目前為止的最大值，% 額定扭力。超過 100% 會自動停止。</p>
+      <div class="legend"><span><b style="background:var(--ax0)"></b>EAxis0</span><span><b style="background:var(--ax1)"></b>EAxis1</span><span><b style="background:var(--ax2)"></b>EAxis2</span></div>
+      <svg id="c_tq" viewBox="0 0 520 220" role="img" aria-label="三軸每週期扭力變化最大值隨時間"></svg>
+    </section>
+    <section>
+      <h2>每分鐘 ≥ 20% 扭力變化次數</h2>
+      <p class="note">dip 換向時的正常負載，穩定代表沒有隨時間惡化。</p>
+      <div class="legend"><span><b style="background:var(--ax0)"></b>EAxis0</span><span><b style="background:var(--ax1)"></b>EAxis1</span><span><b style="background:var(--ax2)"></b>EAxis2</span></div>
+      <svg id="c_g20" viewBox="0 0 520 220" role="img" aria-label="每分鐘 20% 以上扭力變化次數"></svg>
+    </section>
+  </div>
+
+  <div class="grid2">
+    <section>
+      <h2>停點：停下時的誤差</h2>
+      <p class="note">每個 PnP 停點（約 10 ms）停下那一刻，實際 TCP 到目標的距離，µm。</p>
+      <svg id="c_e0" viewBox="0 0 520 220" role="img" aria-label="停下時誤差分佈"></svg>
+    </section>
+    <section id="trendcard">
+      <h2>停點誤差均值，第 1 分鐘後每 15 分鐘一點</h2>
+      <p class="note">第一點是第 1 分鐘，之後每 15 分鐘一點（1–15、15–30…）所有停點的平均誤差，µm：停下那一刻、停下後 5 ms、停下後 10 ms。平的代表沒有隨時間漂移。</p>
+      <div class="legend"><span><b style="background:var(--ax0)"></b>停下</span><span><b style="background:var(--ax1)"></b>5 ms</span><span><b style="background:var(--ax2)"></b>10 ms</span></div>
+      <svg id="c_trend" viewBox="0 0 520 220" role="img" aria-label="停點誤差均值，第 1 分鐘後每 15 分鐘一點"></svg>
+    </section>
+    <section id="boxcard" style="grid-column: 1 / -1;">
+      <h2>停點誤差箱型圖，第 1 分鐘後每 15 分鐘一格</h2>
+      <p class="note">命令位置到位那一刻（停下）、到位後 5 ms、到位後 10 ms，實際 TCP 到命令目標的距離，µm。箱 = Q1–Q3，粗線 = 中位數，鬚 = 最小/最大，點 = 平均；各區間的平均以實線相連、最小/最大以虛線相連。</p>
+      <div class="legend"><span><b style="background:var(--ax0)"></b>停下</span><span><b style="background:var(--ax1)"></b>5 ms</span><span><b style="background:var(--ax2)"></b>10 ms</span></div>
+      <svg id="c_box" viewBox="0 0 1060 260" role="img" aria-label="停點誤差箱型圖，第 1 分鐘後每 15 分鐘一格" style="width:100%;height:auto"></svg>
+      <div class="tw"><table id="boxtab"></table></div>
+    </section>
+    <section>
+      <h2>停點：停下後 5 ms 的誤差</h2>
+      <p class="note">同一個停點在停下後 5 ms 那一個週期的誤差，µm（停不到 5 ms 的停點取最後一個週期）。</p>
+      <svg id="c_e5" viewBox="0 0 520 220" role="img" aria-label="停下後 5 ms 誤差分佈"></svg>
+    </section>
+    <section>
+      <h2>停點：離開時的誤差</h2>
+      <p class="note">同一個停點在離開那一刻的誤差，µm。整定門檻 0.2 mm = 200 µm。</p>
+      <svg id="c_el" viewBox="0 0 520 220" role="img" aria-label="離開時誤差分佈"></svg>
+    </section>
+  </div>
+
+  <section>
+    <h2>紀錄</h2>
+    <div class="tw"><table id="ev"></table></div>
+  </section>
+</div>
+
+<script>
+const D = /*DATA*/null;
+const $ = id => document.getElementById(id);
+const last = D.rows[D.rows.length - 1] || null;
+const AX = ["var(--ax0)", "var(--ax1)", "var(--ax2)"];
+
+// elapsed minutes across segments
+let base = 0, prevSeg = 0, prevMin = 0;
+const pts = D.rows.map(r => {
+  if (r.seg !== prevSeg) { base += prevMin; prevSeg = r.seg; prevMin = 0; }
+  prevMin = r.min;
+  return Object.assign({ x: base + r.min }, r);
+});
+const elapsed = pts.length ? pts[pts.length - 1].x : 0;
+
+$("sub").textContent = D.sub;
+$("state").textContent = D.running ? "運行中" : "已停止";
+$("state").className = "pill " + (D.running ? "run" : "stop");
+$("upd").textContent = "更新 " + D.updated;
+
+const lateMax = last ? Math.max(...last.late) : 0;
+const ge50 = last ? last.ge50.reduce((a, b) => a + b, 0) : 0;
+const lostNow = last && last.lost != null ? last.lost : null;
+const cells = [
+  ["已跑時間", elapsed.toFixed(1) + ' <small>/ ' + D.plan + ' min</small>', "", Math.min(100, 100 * elapsed / D.plan)],
+  ["Late %（三軸）", last ? last.late.map(v => v.toFixed(2)).join(" / ") : "–", lateMax > 0 ? "bad" : "ok"],
+  ["扭力變化最大值 %", last ? last.tq.map(v => v.toFixed(1)).join(" / ") : "–", last && Math.max(...last.tq) > 50 ? "warn" : ""],
+  ["≥ 50% 次數", String(ge50), ge50 > 0 ? "bad" : "ok"],
+  ["停點數", D.nstops.toLocaleString() + ' <small>未整定 ' + D.notsettled + '</small>', D.notsettled > 0 ? "warn" : "ok"],
+  ["離開時誤差最大", D.elmax + ' <small>µm</small>', D.elmax > 200 ? "bad" : "ok"],
+  ["5 ms 後誤差最大", D.e5n ? D.e5max + ' <small>µm</small>' : "–", D.e5max > 200 ? "bad" : "ok"],
+  ["EtherCAT 掉包", lostNow == null ? "–" : String(lostNow), lostNow ? "bad" : "ok"],
+];
+$("strip").innerHTML = cells.map(c => '<div class="cell"><div class="lab">' + c[0] + '</div><div class="val ' + c[2] + '">' + c[1] + '</div>' +
+  (c[3] != null ? '<div class="bar"><i style="width:' + c[3].toFixed(1) + '%"></i></div>' : '') + '</div>').join("");
+
+function axes(svg, xmax, ymax, ylab, xlab) {
+  const L = 44, R = 10, T = 10, B = 30, W = 520 - L - R, H = 220 - T - B;
+  let g = '';
+  const yt = niceTicks(ymax);
+  yt.forEach(v => { const y = T + H - H * v / yt[yt.length - 1];
+    g += '<line x1="' + L + '" x2="' + (L + W) + '" y1="' + y + '" y2="' + y + '" stroke="var(--rule)" stroke-width="1"/>' +
+         '<text x="' + (L - 6) + '" y="' + (y + 4) + '" text-anchor="end">' + v + '</text>'; });
+  const xt = niceTicks(xmax);
+  xt.forEach(v => { const x = L + W * v / xt[xt.length - 1];
+    g += '<text x="' + x + '" y="' + (T + H + 16) + '" text-anchor="middle">' + v + '</text>'; });
+  g += '<text x="' + (L + W) + '" y="' + (220 - 2) + '" text-anchor="end">' + xlab + '</text>';
+  return { g, sx: v => L + W * v / xt[xt.length - 1], sy: v => T + H - H * v / yt[yt.length - 1], L, W, T, H };
+}
+function niceTicks(max) {
+  max = Math.max(max, 1);
+  const step = Math.pow(10, Math.floor(Math.log10(max)));
+  const s = [1, 2, 5, 10].map(m => m * step).find(s => max / s <= 5) || step * 10;
+  const out = []; for (let v = 0; v <= max + 1e-9 || out.length < 2; v += s) out.push(+v.toFixed(6));
+  if (out[out.length - 1] < max) out.push(out[out.length - 1] + s);
+  return out;
+}
+function lines(id, series, ymax, xlab) {
+  const xmax = Math.max(D.plan, elapsed);
+  const a = axes(null, xmax, ymax, "", xlab);
+  let s = a.g;
+  series.forEach((ser, k) => {
+    if (!ser.length) return;
+    const d = ser.map((p, i) => (i ? "L" : "M") + a.sx(p[0]).toFixed(1) + " " + a.sy(p[1]).toFixed(1)).join(" ");
+    s += '<path d="' + d + '" fill="none" stroke="' + AX[k] + '" stroke-width="1.8"/>';
+    const e = ser[ser.length - 1];
+    s += '<circle cx="' + a.sx(e[0]).toFixed(1) + '" cy="' + a.sy(e[1]).toFixed(1) + '" r="3" fill="' + AX[k] + '"/>';
+  });
+  $(id).innerHTML = s;
+}
+lines("c_tq", [0, 1, 2].map(k => pts.map(p => [p.x, p.tq[k]])), Math.max(50, ...pts.flatMap(p => p.tq)), "分鐘");
+const rate = [0, 1, 2].map(k => pts.map((p, i) => {
+  const q = i && pts[i - 1].seg === p.seg ? pts[i - 1] : null;
+  const dt = q ? p.min - q.min : p.min;
+  return [p.x, dt > 0 ? (p.ge20[k] - (q ? q.ge20[k] : 0)) / dt : 0];
+}));
+lines("c_g20", rate, Math.max(10, ...rate.flat().map(p => p[1])), "分鐘");
+
+function bars(id, hd, unit) {
+  const L = 44, R = 10, T = 10, B = 30, W = 520 - L - R, H = 220 - T - B;
+  const n = hd.h.length, bw = W / n, ymax = Math.max(1, ...hd.h);
+  const yt = niceTicks(ymax);
+  let s = '';
+  yt.forEach(v => { const y = T + H - H * v / yt[yt.length - 1];
+    s += '<line x1="' + L + '" x2="' + (L + W) + '" y1="' + y + '" y2="' + y + '" stroke="var(--rule)"/>' +
+         '<text x="' + (L - 6) + '" y="' + (y + 4) + '" text-anchor="end">' + v.toLocaleString() + '</text>'; });
+  hd.h.forEach((c, i) => {
+    const h = H * c / yt[yt.length - 1];
+    s += '<rect x="' + (L + i * bw + 2).toFixed(1) + '" y="' + (T + H - h).toFixed(1) + '" width="' + (bw - 4).toFixed(1) + '" height="' + h.toFixed(1) + '" fill="var(--accent)" opacity=".85"/>';
+    const lab = i === 0 ? '<' + hd.edges[0] : (i === n - 1 ? '≥' + hd.edges[n - 2] : hd.edges[i - 1] + '–' + hd.edges[i]);
+    s += '<text x="' + (L + i * bw + bw / 2).toFixed(1) + '" y="' + (T + H + 16) + '" text-anchor="middle">' + lab + '</text>';
+  });
+  s += '<text x="' + (L + W) + '" y="218" text-anchor="end">' + unit + '</text>';
+  $(id).innerHTML = s;
+}
+const trim = hd => ({ edges: hd.edges.slice(1), h: [hd.h[0] + hd.h[1]].concat(hd.h.slice(2)) });
+bars("c_e0", trim(D.e0), "µm");
+bars("c_el", trim(D.el), "µm");
+if (D.e5) bars("c_e5", trim(D.e5), "µm");
+if (D.trend && D.trend.length) {
+  const tr = D.trend;
+  const ser = ["e0", "e5", "e10"].map(k => tr.filter(t => t[k] != null).map(t => [t.m, t[k]]));
+  const ymax = Math.max(10, ...ser.flat().map(p => p[1])) * 1.2;
+  lines("c_trend", ser, ymax, "分鐘");
+} else if ($("trendcard")) {
+  $("trendcard").hidden = true;
+}
+// Box-and-whisker per 15 min window: stop / 5 ms / 10 ms.
+if (D.boxes && D.boxes.length && D.summary && D.summary.e0) {
+  const KEYS = ["e0", "e5", "e10"], NAMES = ["停下", "5 ms", "10 ms", "離開"];
+  const L = 44, R = 10, T = 12, B = 34, W = 1060 - L - R, H = 260 - T - B;
+  const ymax = Math.max(10, ...D.boxes.flatMap(b => KEYS.map(k => b[k] ? b[k].max : 0)));
+  const yt = niceTicks(ymax), ytop = yt[yt.length - 1];
+  const sy = v => T + H - H * v / ytop;
+  let s = '';
+  yt.forEach(v => { s += '<line x1="' + L + '" x2="' + (L + W) + '" y1="' + sy(v) + '" y2="' + sy(v) + '" stroke="var(--rule)"/>' +
+    '<text x="' + (L - 6) + '" y="' + (sy(v) + 4) + '" text-anchor="end">' + v + '</text>'; });
+  const n = D.boxes.length, gw = W / Math.max(n, 1), bw = Math.min(16, gw / 4.5);
+  D.boxes.forEach((b, i) => {
+    const cx = L + gw * (i + 0.5);
+    s += '<text x="' + cx + '" y="' + (T + H + 16) + '" text-anchor="middle">' + b.lo + '–' + b.hi + '</text>';
+    KEYS.forEach((k, j) => {
+      const q = b[k]; if (!q) return;
+      const x = cx + (j - 1) * bw * 1.3, c = AX[j];
+      s += '<line x1="' + x + '" x2="' + x + '" y1="' + sy(q.min) + '" y2="' + sy(q.max) + '" stroke="' + c + '" stroke-width="1.2"/>';
+      s += '<line x1="' + (x - bw / 3) + '" x2="' + (x + bw / 3) + '" y1="' + sy(q.min) + '" y2="' + sy(q.min) + '" stroke="' + c + '"/>';
+      s += '<line x1="' + (x - bw / 3) + '" x2="' + (x + bw / 3) + '" y1="' + sy(q.max) + '" y2="' + sy(q.max) + '" stroke="' + c + '"/>';
+      s += '<rect x="' + (x - bw / 2) + '" y="' + sy(q.q3) + '" width="' + bw + '" height="' + Math.max(1, sy(q.q1) - sy(q.q3)) + '" fill="' + c + '" fill-opacity="0.35" stroke="' + c + '"/>';
+      s += '<line x1="' + (x - bw / 2) + '" x2="' + (x + bw / 2) + '" y1="' + sy(q.med) + '" y2="' + sy(q.med) + '" stroke="' + c + '" stroke-width="2"/>';
+      s += '<circle cx="' + x + '" cy="' + sy(q.mean) + '" r="2.5" fill="var(--fg)"/>';
+    });
+  });
+  // mean (solid) and min / max (dashed) joined across the windows, per series
+  KEYS.forEach((k, j) => {
+    const pts = D.boxes.map((b, i) => b[k] ? [L + gw * (i + 0.5) + (j - 1) * bw * 1.3, b[k]] : null).filter(Boolean);
+    if (pts.length < 2) return;
+    const path = f => pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + sy(p[1][f]).toFixed(1)).join(" ");
+    s += '<path d="' + path("mean") + '" fill="none" stroke="' + AX[j] + '" stroke-width="1.6"/>';
+    s += '<path d="' + path("min") + '" fill="none" stroke="' + AX[j] + '" stroke-width="1" stroke-dasharray="4 3" opacity="0.8"/>';
+    s += '<path d="' + path("max") + '" fill="none" stroke="' + AX[j] + '" stroke-width="1" stroke-dasharray="4 3" opacity="0.8"/>';
+  });
+  s += '<text x="' + (L + W) + '" y="258" text-anchor="end">分鐘</text>';
+  $("c_box").innerHTML = s;
+  const S = D.summary;
+  let t = '<tr><th>全程</th><th>n</th><th>mean</th><th>median</th><th>min</th><th>max</th><th>p95</th></tr>';
+  ["e0", "e5", "e10", "el"].forEach((k, j) => { const q = S[k]; if (!q) return;
+    t += '<tr><td>' + NAMES[j] + '</td><td>' + q.n.toLocaleString() + '</td><td>' + q.mean + '</td><td>' + q.med + '</td><td>' + q.min + '</td><td>' + q.max + '</td><td>' + q.p95 + '</td></tr>'; });
+  $("boxtab").innerHTML = t;
+} else if ($("boxcard")) {
+  $("boxcard").hidden = true;
+}
+
+$("ev").innerHTML = D.events.slice().reverse().map(e => '<tr><td>' + e[0] + '</td><td>' + e[1] + '</td></tr>').join("") ||
+  '<tr><td>–</td><td>尚無紀錄</td></tr>';
+</script>

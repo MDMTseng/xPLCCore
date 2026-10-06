@@ -1,0 +1,32 @@
+---
+name: asda-stale-target-investigation
+description: delta vibration (ASDA stale CSP target) SOLVED 2026-10-02: slave config order != wire order (EC0808 DC reference wired after drives); EC0808 now first on the wire; doc 7l
+metadata:
+  node_type: memory
+  type: project
+  originSessionId: f66f7e0c-0330-4b23-97fe-13374412ecbb
+  modified: 2026-09-30T11:54:00.099Z
+---
+
+2026-10-02: mitigation chosen by owner -- stay at 1 ms cycle, drive filter P1.068 = 12 ms on all three (EEPROM; torque shocks ~1/3, settling +3 ms). The params backup json still holds the old 2/10/4 (drive_param.py restore would revert) and axis0Param2.par has 2. All DC/timing settings tried had no effect (handover doc 7i/7j).
+
+2026-10-01: confirmed drive-internal. With SoftMotion bypassed (`tools/direct_test.py`, PLC writes 0x607A directly) the drive's 0x6062 still lags one cycle extra 5.2 % of cycles and sometimes one cycle less. Delta report: `doc_review/delta_report_asda_b3_stale_csp_target.md` (+ .zh-TW, summary). To re-test (e.g. new firmware): `doc_review/asda_direct_test_runbook.md`. Bursts are periodic (2.4-3.6 s), speed-independent. Afternoon 2026-10-01: same-firmware EAxis1/2 burst at the same moments, EAxis0 (owner updated its firmware) bursts at other times -> hypothesis: master frame-vs-SYNC0 timing drift, each firmware its own pick-up point; next test = EasyCAT per-cycle arrival vs `tools/dem_events.py` burst times (handover doc 7f). Owner parked it pending Delta support. Machine returned to packing config 2026-10-01 (Modbus kept off at owner's request; SyncOffset 50 and 0x6062 PDO kept).
+
+The delta vibration the owner felt is the ASDA-B3-E drive (EAxis0 recorded) reusing the previous 1 ms target about 1-3x/s while moving. PLC, SoftMotion PDO output, master, wire, DC timing (EasyCAT at the end of the wire) and the drive's own 0x1C32 counters were all shown clean on 2026-09-30. SyncOffset 50 is the best value (kept); 2 ms cycle and P3.009 Z did not help.
+
+**Why:** the owner wants to take a clean minimal case to Delta. Guessing at PLC or bus fixes wastes their time; the evidence first said drive-internal, but Delta's own PLC does not trigger it (see 2026-10-02 below).
+
+**How to apply:** start from `xPLCCore/doc_review/asda_stale_target_2026-09-30.md`, which lists tools, machine state, pitfalls and the next tests. Next is `tools/pulse_test.py`: a single joint at 0.1 deg/s with the owner recording the ASDA scope, analysed with `tools/asda_scope.py`. Ask whether the owner is at the machine before any real-delta run. See [[machine-motion-safety]], [[plc-download-pitfalls]].
+
+2026-10-02: Delta's own PLC (AX-C12, DIADesigner-AX, 1 ms, SyncOffset 20 %, sync window monitoring off) on our drive: scope_otherPLC1/2 (Desktop\新增資料夾 (2)) show 0 stale cycles in 29.6 s + 8 s at 16 PUU/ms; the same per-cycle-increment check finds bursts every ~2.5 s in our scope22. Points at our master/runtime timing, not the drive alone.
+2026-10-02 later: master settings like Delta (LRW, sync window monitoring 0, SyncOffset 20) on the full line: still 5.05 %. Drives-only bus (QEC, reel, EC0808DN, EasyCAT disabled + unplugged; jobs/templates/set_drives_only.py): direct_test late 0.00 %, all 29893 cycles lag 3. Cause is EC0808DN or EasyCAT on the line; bisect next. Project currently drives-only + Delta-like master settings (restore: set_drives_only BYPASS=False, set_master_like_delta VALUES=ORIGINAL).
+2026-10-02 ROOT CAUSE: EC0808DN with DC on (DC enable 1, sync0, DCSetting 1). Drives + EC0808 DC on: 3.71 % late; EC0808 DC off (set_qec_dc.py with SLAVES=("EC0808DN",), DC_ON=False): 0.00 %. EasyCAT was not on the line when the vibration first appeared. Next: restore full line + original master settings with EC0808 DC off and verify; then revisit P1.068 16 ms filter.
+2026-10-02 FIXED in production: EC0808 DC off but last on the wire made QEC/reel fail "No Sync" (AL 0x2D); owner rewired EC0808 FIRST on the wire (PLC -> EC0808 -> QEC -> reel -> EAxis0..2 -> EasyCAT), EC0808 DC off, QEC/reel DC on, master original: all OP, EAxis0 0.00 %, A axis and reel tests pass. Doc section 7l. Open: circle test, lower P1.068 from 16 ms, tell Delta.
+2026-10-02 17:12: after the fix P1.068 = 0 on all three (no filter: torque max 18/34/24 %, none >= 50 %, settle 0 ms). Open: tell Delta, EAxis1 gain.
+2026-10-02 ESP32 after fix: SYNC0 period shifted -225 ns/ms (was ~0) => DC reference clock changed; likely EC0808DN (first in config order) was the reference before. Verify in IDE DC diagnostics. After a machine power cycle the USB-powered ESP32 must be reset (LAN9252 loses IRQ setup), then re-download to get EasyCAT out of INIT.
+2026-10-02 17:58 FINAL CAUSE: config order != wire order. EC0808DN first in the project tree => DC reference clock, but wired 6th after the drives. Wired first: DC on or off both 0.00 %. Rule: device tree order under the master = wire order. EC0808 DC currently ON (owner to decide on/off).
+2026-10-02 19:15: tree reordered to wire order (EC0808, QEC, reel, EAxis0..2, EasyCAT), Optional off on all slaves (set_slave_order.py); GVL taps moved (TorqueTap now %IW60/72/84 etc.); EC0808 DC ON; direct test 0.00 %.
+2026-10-02 20:03: station addresses now EC0808 1001, QEC 1002, reel 1003, EAxis0..2 1004..1006, EasyCAT 1007 (tree order). drive_param.sdo checks vendor 0x1DD before writes. Final circle: late 0, no >=50 % shocks, P1.068 0. Lesson: a tree reorder moves station addresses and IEC addresses; grep for hardcoded 100x and AT %I/%Q.
+2026-10-03 afternoon: EtherCAT dropouts under REAL motion only (43/11 ms no frames -> all servos lose DC sync -> errorstop, ~2600 frames lost): dip70 failed at 14.9 min x2, dip30 at 30.4 min, then dip30 on the OLD PLC program at 2.9 min; virtual-axis 20 min clean. Not the DWELL logging. Suspect the cables re-plugged in the EC0808-first rewiring (vibration / routing). Owner asked to inspect PLC->EC0808->QEC cables; stop real-servo runs until fixed. Repo PLC code = HEAD (with DWELL); PLC currently runs the pre-DWELL program.
+2026-10-03 16:27: slow Z up/down 10 % 60 min real servo: 0 lost frames, 17102 stops settled. Dropouts only under heavier motion (dip 30/70 %) => load/vibration-dependent hardware (cable/connector/EMI/power).
+2026-10-03 16:36: 6 h slow Z soak failed at 4 min (16 frames gap, then ~2500 lost) -- same dropout at light load. So not load-dependent: intermittent hardware, getting more frequent. Real-servo runs paused pending owner's hardware check.
