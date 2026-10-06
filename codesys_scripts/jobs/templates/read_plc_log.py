@@ -77,7 +77,7 @@ try:
             t(e.TimeStamp.ToString("yyyy-MM-dd HH:mm:ss.fff")), t(e.GetSeverity()),
             cmp_names.get(int(e.CmpID), str(e.CmpID)), t(e.Info).replace("\n", " "))))
     rows.sort(key=lambda r: r[0])
-    path = r"C:\Users\PC\Documents\workspace\codesys_dev\xPLCCore\codesys_scripts\jobs\plc_log_%s.txt" % LOGGER
+    path = os.path.join(STATE_DIR, "plc_log_%s.txt" % LOGGER)   # STATE_DIR: daemon global
     fh = open(path, "w")
     for _, line in rows:
         fh.write(line + "\n")
