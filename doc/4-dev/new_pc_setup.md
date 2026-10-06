@@ -35,8 +35,20 @@ Keep a parent folder (`<workspace>`, e.g. `D:\dev\codesys_dev`): Claude
 Code is started there (step 7).
 
 Check: `npm run check` (typecheck + 136 vitest tests) passes;
-`codesys_project\PackerX.projectarchive` is ~81 MB, not a 130-byte LFS
-pointer (if it is: `git lfs pull`).
+`codesys_project\PackerX.projectarchive` is 81 435 416 bytes, not a
+130-byte LFS pointer (if it is: `git lfs pull`).
+
+If the clone stops with "Clone succeeded, but checkout failed" (the 81 MB
+LFS download broke off, seen once on 2026-10-06), clone without the LFS
+files first and fetch them separately:
+
+```
+set GIT_LFS_SKIP_SMUDGE=1
+git clone --branch flow-analysis https://github.com/MDMTseng/xPLCCore.git xPLCCore
+set GIT_LFS_SKIP_SMUDGE=
+cd xPLCCore
+git lfs pull
+```
 
 ## 3. CODESYS project
 
