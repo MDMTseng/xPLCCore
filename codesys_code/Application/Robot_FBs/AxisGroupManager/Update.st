@@ -23,6 +23,18 @@ SMC_GroupPower_0(
     bDriveStart  := GroupPower_Flag
 );
 
+// Reel power, every state, for the same reason: after the CASE it was
+// skipped in UnInited too, so bReelPowerReq FALSE never reached the reel
+// and it stayed powered (operation enabled) after a reset (found
+// 2026-10-07: reel 0x6041 = 16#1637 in UnInited after a soak).
+// bReelPowerReq is the one set by the previous scan's state.
+fbPowerReel(
+    Axis         := _axReel,
+    Enable       := bReelPowerReq,
+    bRegulatorOn := bReelPowerReq,
+    bDriveStart  := bReelPowerReq
+);
+
 CASE _eState OF
     E_RobotState.UnInited:
         IF(uidx=-1)THEN // On Entry
@@ -266,13 +278,7 @@ END_CASE
 
 // 1. Robot Group Power: called before the CASE (see there), every state.
 
-// 2. Single Motor Power (Reel Pull)
-fbPowerReel(
-    Axis         := _axReel,
-    Enable       := bReelPowerReq,
-    bRegulatorOn := bReelPowerReq,
-    bDriveStart  := bReelPowerReq
-);
+// 2. Single Motor Power (Reel Pull): called before the CASE (see there), every state.
 
 // 3. Single Motor Reset (tick every scan so Done/Busy/Error advance)
 fbResetReel(Axis := _axReel);
