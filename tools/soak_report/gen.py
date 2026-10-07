@@ -157,7 +157,8 @@ data = {
     "e5max": max([s[5] for s in stops if s[5] >= 0], default=0),
     "e0max": max([s[3] for s in stops], default=0), "elmax": max([s[4] for s in stops], default=0),
     "dwell": sorted(set(s[1] for s in stops))[:6],
-    "sub": SUB, "running": not any(e[1] in ("soak 已停止", "全部完成") for e in events),
+    "sub": SUB, "running": not (any(e[1] in ("soak 已停止", "全部完成") for e in events)
+                    or "delta back to virtual" in open(LOG, encoding="utf-8", errors="replace").read()),
 }
 html = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "template.html"), encoding="utf-8").read()
 open(OUT, "w", encoding="utf-8").write(html.replace("/*DATA*/null", json.dumps(data, ensure_ascii=False)))

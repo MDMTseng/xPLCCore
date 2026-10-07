@@ -247,7 +247,7 @@ if (D.boxes && D.boxes.length && D.summary && D.summary.e0) {
       s += '<line x1="' + (x - bw / 3) + '" x2="' + (x + bw / 3) + '" y1="' + sy(q.max) + '" y2="' + sy(q.max) + '" stroke="' + c + '"/>';
       s += '<rect x="' + (x - bw / 2) + '" y="' + sy(q.q3) + '" width="' + bw + '" height="' + Math.max(1, sy(q.q1) - sy(q.q3)) + '" fill="' + c + '" fill-opacity="0.35" stroke="' + c + '"/>';
       s += '<line x1="' + (x - bw / 2) + '" x2="' + (x + bw / 2) + '" y1="' + sy(q.med) + '" y2="' + sy(q.med) + '" stroke="' + c + '" stroke-width="2"/>';
-      s += '<circle cx="' + x + '" cy="' + sy(q.mean) + '" r="2.5" fill="var(--fg)"/>';
+      s += '<circle cx="' + x + '" cy="' + sy(q.mean) + '" r="2.5" fill="var(--ink)"/>';
     });
   });
   // mean (solid) and min / max (dashed) joined across the windows, per series
