@@ -73,6 +73,9 @@ def main():
     ap.add_argument("--recover", type=int, default=0,
                     help="re-download after a dropout, up to N times (needs the owner's OK); default: stop")
     ap.add_argument("--owner-ok", action="store_true")
+    ap.add_argument("--log-snaps", action="store_true",
+                    help="log the start and end of every daemon slave read, to line a dropout up "
+                         "against the CODESYS logins (2026-10-07: 04:52 could not be placed)")
     a = ap.parse_args()
     mc.require_owner_ok(a.owner_ok)
     mc.reconnect()
@@ -102,7 +105,10 @@ def main():
         if why is None and time.time() >= next_snap:
             next_snap = time.time() + a.slaves_every
             try:
+                t_snap = time.strftime("%H:%M:%S")
                 ok, snap = bus_snapshot()
+                if a.log_snaps:
+                    log("snap %s-%s %s" % (t_snap, time.strftime("%H:%M:%S"), "ok" if ok else snap))
                 if not ok:
                     why = "bus: " + snap
             except Exception as ex:
