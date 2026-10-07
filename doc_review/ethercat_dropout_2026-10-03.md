@@ -151,6 +151,50 @@ a (re)start" does not hold. Evidence:
 `codesys_scripts/jobs/incidents/20261006-212128_bus_watch/` (with the PLC
 log, saved afterwards: read_plc_log.py had a hard-coded old-PC path).
 
+**2026-10-07: three more, a cable swap, a re-cabling and a reorder.**
+PLC clock 4 min 43 s ahead of the PC throughout.
+
+| PC time | Event |
+|---|---|
+| 00:42-04:30 | watch leg 1 clean (3.8 h) |
+| ~04:51:59 | dropout (PLC 04:56:41.99), 20 min into leg 2: QEC + reel leave OP, 2539 lost (~2.5 s); no `Demo mode` line this time |
+| ~09:20 | owner: EC0808DN -> QEC cable replaced, ESP32 power-cycled (EasyCAT INIT); GA_EV 8 at 09:23 brought all 7 OP **without a download** (ESP32 back to sync 1) |
+| ~09:24:48 | dropout 1.5 min after the recovery (2564 lost) |
+| 09:28-09:41 | test: 2 min untouched, then 5 CODESYS daemon restarts with 90 s each: 0 lost. A daemon (IDE) start is not the trigger |
+| ~10:48:49 | dropout (PLC 10:53:31.7), 68 min into a watch; only **452** lost (~0.45 s); the last daemon read had ended 17 s before (`--log-snaps`): not a login either |
+| ~10:57 | owner re-cabled: ASDA x3 -> QEC -> reel -> EC0808DN -> EasyCAT. The master came up with the OLD tree (it matches slaves by identity, not position): AutoIncAddr read back showed the new wire order with stations still from the old tree |
+| 11:17 | **unplanned full download** (my error, see below) of the unchanged project |
+| 13:45 | deploy with the tree in wire order (`reorder_2026_10_07.py`, taps by channel name): ASDA 1001-1003, QEC 1004, reel 1005, EC0808DN 1006, EasyCAT 1007; EAxis0 is now the DC reference. ESP32 interval 999-1001 us (989-1011 after the GA_EV 8 restarts) |
+| 13:47 | long watch started on the new bus |
+
+So the dropouts do not follow PC contact (logins, daemon starts, first
+connections), and replacing the EC0808DN -> QEC cable did not stop them;
+the QEC and the reel still leave OP together while the slaves after them
+on the wire stay OP (now, too, with the QEC 4th and the reel 5th): the
+two look like they reset, which points at their supply (section 4.1).
+
+The tree had not matched the wire since at least the new PC: the project
+from the archive had EC0808DN, ASDA, ASDA_1, QEC, ASDA_2, reel, EasyCAT,
+and before the re-cabling the wire was EC0808DN first. The doc's
+"non-optional = position check" is wrong for this master: it accepted the
+re-cabled bus with the old tree.
+
+The QEC itself: vendor 0xBC3, product 0x86D0D6, revision **0x20230816**
+(`0x1008` "MI_X...", `0x100A` "5.12..."); the project's ESI says
+0x20211012 and is a patched QEC-R11MV3S ESI. Its PDO layout matches the
+device (`firmware/qec/esi/README.md`); the master does not check the
+revision. An ESI for 0x20230816 is in `firmware/qec/esi/`, not applied:
+a scripted `dev.update()` dropped the QEC's two SoftMotion axes and reset
+DCSetting.
+
+The 11:17 download: I rehearsed the reorder in the daemon's live project
+to read the new channel addresses, then restored only `PackerX.project`.
+The rehearsal build had rewritten the `.compileinfo` next to it, so the
+next Keep login (a plain `rpc.py read`) saw a device-config difference and
+did STOP + full DOWNLOAD without the owner's go. Same code as before;
+RETAIN wiped; app left stopped and started again by `app_start.py` at the
+owner's choice. Rehearse on a copy of the project from now on.
+
 6 h triangle (`soak_logs/tri6h_1005.log`, `dwell_tri6h.csv`): stop error
 mean 23.2-23.6 um and +10 ms 5.6-6.3 um in every 15-min window, flat. The
 +5 ms mean rose slowly from 9.2 (first minute) to 10.2 um (last hour): the
