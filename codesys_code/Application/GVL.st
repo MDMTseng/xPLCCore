@@ -290,9 +290,9 @@ VAR_GLOBAL
 	   addresses from jobs/templates/dump_drive_target_addr.py). Written
 	   by the application only in the DIRECT test (PRG_EventLog), and
 	   only while EAxis0 is virtual in SoftMotion. *)
-	TapTarget0      AT %QD46 : DINT;
-	TapTarget1      AT %QD50 : DINT;
-	TapTarget2      AT %QD54 : DINT;
+	TapTarget0      AT %QD1 : DINT;
+	TapTarget1      AT %QD5 : DINT;
+	TapTarget2      AT %QD9 : DINT;
 	(* Per drive: glitches of the tapped target (|d2| > DiGlitchThresh),
 	   its max |d2|, and how the tap relates to diSetPosition at the end
 	   of the task: equal to this cycle's (TapEqNow), to last cycle's
@@ -310,23 +310,23 @@ VAR_GLOBAL
 	   (n = 0..3), DemLag[k, 4] none of them; DemStale = cycles where the
 	   target moved but the demand did not; DemGlitch = |d2(demand)| >
 	   DiGlitchThresh. Reset with EcProfReset. *)
-	DemandTap0      AT %ID31 : DINT;
-	DemandTap1      AT %ID37 : DINT;
-	DemandTap2      AT %ID43 : DINT;
-	ActualTap0      AT %ID28 : DINT;    (* EAxis0 drive's Position actual 0x6064, same PDO: a live check *)
-	ActualTap1      AT %ID34 : DINT;
-	ActualTap2      AT %ID40 : DINT;
+	DemandTap0      AT %ID4 : DINT;
+	DemandTap1      AT %ID10 : DINT;
+	DemandTap2      AT %ID16 : DINT;
+	ActualTap0      AT %ID1 : DINT;    (* EAxis0 drive's Position actual 0x6064, same PDO: a live check *)
+	ActualTap1      AT %ID7 : DINT;
+	ActualTap2      AT %ID13 : DINT;
 	(* The drives' Statusword 0x6041 (read-only taps). With P3.019.Z = 1
 	   bit 14 is the drive's own SYNC_OK (synchronisation with the
 	   controller complete); otherwise it shows the positive limit. *)
-	StatusTap0      AT %IW54 : WORD;
-	StatusTap1      AT %IW66 : WORD;
-	StatusTap2      AT %IW78 : WORD;
+	StatusTap0      AT %IW0 : WORD;
+	StatusTap1      AT %IW12 : WORD;
+	StatusTap2      AT %IW24 : WORD;
 	(* The drives' Torque actual 0x6077 (0.1 % rated), same TxPDO 0x1A01:
 	   after 6041 / 6064 / 606C. *)
-	TorqueTap0      AT %IW60 : INT;
-	TorqueTap1      AT %IW72 : INT;
-	TorqueTap2      AT %IW84 : INT;
+	TorqueTap0      AT %IW6 : INT;
+	TorqueTap1      AT %IW18 : INT;
+	TorqueTap2      AT %IW30 : INT;
 	(* Feedback shock monitor (PRG_EventLog, SYS FB_STATS), per drive while
 	   it is in Operation enabled: histograms of |second difference of the
 	   actual position 0x6064| per cycle (PUU; bin edges 1k 2k 5k 10k 20k
@@ -429,7 +429,7 @@ VAR_GLOBAL
 	   DirMaxFe, no host heartbeat for 2 s, or SoftMotion taking the axis
 	   back. DirState: 0 idle, 1-3 enabling, 4 moving, 5 done (holding),
 	   99 aborted (DirReason). *)
-	CtlTap0         AT %QW90 : WORD;
+	CtlTap0         AT %QW0 : WORD;
 	DirEnable       : BOOL;
 	DirHbMs         : UDINT;
 	DirStepInc      : DINT := 145;          (* ~0.1 deg/s at 1 ms (1444705 PUU per deg) *)
