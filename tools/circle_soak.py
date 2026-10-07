@@ -151,6 +151,10 @@ def dwell_read(frm, fh):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--speed", type=float, default=30)
+    ap.add_argument("--jerk-scale", type=float, default=1.0,
+                    help="multiply JERK only (F and ACC stay at --speed). On the short dip / square "
+                         "strokes the moves are jerk-limited from ~70 %%: F and ACC are never reached "
+                         "and the speed grows only with JERK^(1/3) (2026-10-07: 70 -> 80 %% gave ~0)")
     ap.add_argument("--minutes", type=float, default=60)
     ap.add_argument("--report", type=float, default=60)
     ap.add_argument("--cor", type=float, default=49.0, help="corner distance for --shape round")
@@ -168,7 +172,7 @@ def main():
         os.remove(STOP)
     seconds = a.minutes * 60
     s = a.speed / 100.0
-    kin = dict(F=2000.0 * s, ACC=200000.0 * s, DEA=200000.0 * s, JERK=800000.0 * s)
+    kin = dict(F=2000.0 * s, ACC=200000.0 * s, DEA=200000.0 * s, JERK=800000.0 * s * a.jerk_scale)
     square = ((-50, -50), (50, -50), (50, 50), (-50, 50))
     if a.shape == "round":
         laps = int(seconds / 0.3) + 50      # a lap takes >= ~0.5 s at 30 %: more than enough
@@ -220,7 +224,7 @@ def main():
         # CSV (at_ms = AxisGroupSM.RuntimeMs) through one reading of both.
         host = HostTiming(a.dwell_log)
         mc.push("plc_stream_start", {"pkts": pkts, "timeoutMs": 30000})
-        log("soak started: %s %.0f %% for %.0f min, %d packets" % (a.shape, a.speed, a.minutes, len(pkts)))
+        log("soak started: %s %.0f %% (jerk x%g) for %.0f min, %d packets" % (a.shape, a.speed, a.jerk_scale, a.minutes, len(pkts)))
         t0 = last = time.time()
         while time.time() - t0 < seconds:
             time.sleep(1)
