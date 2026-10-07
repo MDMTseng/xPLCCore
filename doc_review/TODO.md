@@ -19,6 +19,7 @@ the commit). Rules that apply to all of it:
 | 1.2 | Unplanned 40-877 ms pauses (~1 per 10 min): run a triangle soak on the machine with the new per-stop fields (queued moves, host packets waiting, cooldown, Z, ms since last accept) and the host timing (reply gaps, UI loop lag, late sends); confirm "supply interrupted > ~1.1 s" and find where (TCP retransmission, UI GC, Comm task) | M, owner OK | plc_ui_integration_review §2.2, #11 |
 | 1.3 | 75 % triangle 6 h soak (stopped on 2026-10-05 to debug the pauses) | M, owner OK | soak campaign |
 | 1.4 | Verify RETAIN (plan, cells done, open tape move) survives a power loss on the Intewell target | M | plan_counting_audit #9 |
+| 1.5 | Torque shocks on EAxis0 + EAxis1 together (never EAxis2): 2026-10-07 at 30 % dip (74.7 / 111.5 %, tq-stop), and in the 80 % JERK x3 soak at 20:16 (78.4 / 61.6 %) and 22:43-22:48 (77.2 / 63.9 %). Commands clean every time (tap / int-target glitches 0, drive demand stale / late 0, EtherCAT lost 0); the drives' actual position and torque show the shock. Suspect a parallelogram ball joint / spring between those arms letting go; inspect at the machine. Soak itself: 5 h 43 min, 119 482 stops, all settled, stop error 74 / +5 ms 20 / +10 ms 11 um, flat | M, at the machine | soak_logs/dip80j3_6h_1007.log |
 
 ## 2. Production plan counts
 
