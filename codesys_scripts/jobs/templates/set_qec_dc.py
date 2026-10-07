@@ -3,8 +3,9 @@
 # reel, EC0808DN). The EtherCAT master takes the first DC slave in the
 # CONFIGURED (device tree) order as the reference clock -- not the first on
 # the wire (2026-10-02, doc_review/asda_stale_target_2026-09-30.md 7l).
-# Stations since the 2026-10-02 reorder (tree = wire): EC0808DN 1001,
-# QEC 1002, reel 1003, EAxis0..2 1004..1006, EasyCAT 1007.
+# Stations since the 2026-10-07 re-cabling (tree = wire): EAxis0..2
+# 1001..1003, QEC 1004, reel 1005, EC0808DN 1006, EasyCAT 1007
+# (tools/topology.py). EAxis0 is first, so it is the DC reference.
 # Offline edit + save; deploy with tools/safe_install.py (drives off).
 #
 #   rpc.py exec --file jobs/templates/set_qec_dc.py

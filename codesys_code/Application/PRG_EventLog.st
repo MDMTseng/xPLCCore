@@ -628,9 +628,9 @@ END_IF;
 GVL.EcTicHist[LIMIT(0, LREAL_TO_INT(lrTicUs / 100.0 - 0.5), 9)] := GVL.EcTicHist[LIMIT(0, LREAL_TO_INT(lrTicUs / 100.0 - 0.5), 9)] + 1;
 
 // ---- The delta drives' sync objects by SDO (GVL.DrvObj*) ----
-// Step k: drive k / 12 (EAxis0/1/2 = station 1004 / 1005 / 1006; wire and
-// tree order since 2026-10-02: EC0808DN 1001, QEC 1002, reel 1003, EAxis0..2,
-// EasyCAT 1007), object k MOD 12 of
+// Step k: drive k / 12 (EAxis0/1/2 = the ASDA slaves; their station
+// addresses read from the master, PhysSlaveAddr, so a slave reorder does
+// not touch this code -- 2026-10-07), object k MOD 12 of
 // SDO_IDX / SDO_SUB; a pause of 50 cycles between reads, ~2 s a sweep.
 // A DRV_SDO request (GVL.SdoReq*) runs first; the sweep waits.
 IF GVL.SdoReqActive THEN
@@ -669,10 +669,10 @@ ELSIF iSdoWait > 0 THEN
     iSdoWait := iSdoWait - 1;
 ELSE
     CASE iSdoStep / 12 OF
-        0: uiSdoDev := 1004;
-        1: uiSdoDev := 1005;
+        0: uiSdoDev := IoConfig_Globals.ASDA_B3_E_CoE_Drive.PhysSlaveAddr;
+        1: uiSdoDev := IoConfig_Globals.ASDA_B3_E_CoE_Drive_1.PhysSlaveAddr;
     ELSE
-        uiSdoDev := 1006;
+        uiSdoDev := IoConfig_Globals.ASDA_B3_E_CoE_Drive_2.PhysSlaveAddr;
     END_CASE;
     fbSdo(xExecute := TRUE, usiCom := 1, uiDevice := uiSdoDev, wIndex := SDO_IDX[iSdoStep MOD 12],
           bySubindex := SDO_SUB[iSdoStep MOD 12], udiTimeOut := 500);

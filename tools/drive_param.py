@@ -1,7 +1,7 @@
 """Read or write ASDA-B3 drive parameters over EtherCAT SDO (PLC SYS
 DRV_SDO / DRV_SDO_RESULT). Parameter Pg.nnn is object 16#2000 + g*16#100 + nnn,
-subindex 0. The delta drives are EAxis0/1/2 = stations 1004/1005/1006 (since the
-2026-10-02 slave reorder: EC0808DN 1001, QEC 1002, reel 1003, EasyCAT 1007).
+subindex 0. The delta drives are EAxis0/1/2 = tools/topology.py DRIVE_STATIONS (1001/1002/1003
+since the 2026-10-07 re-cabling: ASDA x3, QEC 1004, reel 1005, EC0808DN 1006, EasyCAT 1007).
 A write first checks the station's identity (0x1018:01 = Delta 0x1DD) and
 refuses any other device.
 

@@ -1,11 +1,14 @@
 """The machine's EtherCAT topology and PLC address, in one place for the host
-tools. Everything here moves when the CODESYS project tree changes (the
-slave reorder of 2026-10-02 shifted the station addresses and the old 1003
-became the reel): keep it in step with the tree, which must equal the wire
-order (doc_review/asda_stale_target_2026-09-30.md, 7l).
+tools. Only SLAVE_NAMES is maintained by hand: the CODESYS device tree, in
+wire order (the master assigns station 1001, 1002, ... in tree order), and
+every station below is derived from it. 2026-10-07 the owner re-cabled to
+ASDA x3 -> QEC -> reel -> EC0808DN -> EasyCAT (jobs/templates/
+reorder_2026_10_07.py); the PLC side reads its stations from the master
+(PhysSlaveAddr) and GVL's taps follow by channel name (sync_io_taps.py).
+Check a station's identity (0x1018) before writing to it.
 
     import topology as tp
-    tp.DRIVE_STATIONS[1]   # EAxis1 -> 1005
+    tp.DRIVE_STATIONS[1]   # EAxis1 -> 1002
     tp.SLAVE_NAMES         # IoConfig_Globals names, tree order
     tp.PLC_HOST            # from codesys_scripts/codesys_env.json
 """
@@ -27,23 +30,23 @@ def _env(key, default):
 PLC_HOST = _env("plc_host", "192.168.1.70")
 PLC_PORT = int(_env("plc_port", 8125))
 
-# (IoConfig_Globals instance, EtherCAT station address), tree = wire order.
-SLAVES = [
-    ("EC0808DN", 1001),
-    ("QEC_R11MP3S_V", 1002),
-    ("reel_pull_motor", 1003),
-    ("ASDA_B3_E_CoE_Drive", 1004),
-    ("ASDA_B3_E_CoE_Drive_1", 1005),
-    ("ASDA_B3_E_CoE_Drive_2", 1006),
-    ("EasyCAT", 1007),
+# IoConfig_Globals instance names, device tree order = wire order.
+SLAVE_NAMES = [
+    "ASDA_B3_E_CoE_Drive",      # EAxis0
+    "ASDA_B3_E_CoE_Drive_1",    # EAxis1
+    "ASDA_B3_E_CoE_Drive_2",    # EAxis2
+    "QEC_R11MP3S_V",
+    "reel_pull_motor",
+    "EC0808DN",
+    "EasyCAT",
 ]
-SLAVE_NAMES = [name for name, _ in SLAVES]
-STATION_OF = dict(SLAVES)
+STATION_OF = dict((name, 1001 + i) for i, name in enumerate(SLAVE_NAMES))
+SLAVES = [(name, STATION_OF[name]) for name in SLAVE_NAMES]
 
-# The delta trio: axis index (EAxis0..2, SoftMotion) -> station.
-DRIVE_STATIONS = {0: 1004, 1: 1005, 2: 1006}
+# The delta trio: axis index (EAxis0..2, SoftMotion) -> slave, station.
 DRIVE_SLAVES = {0: "ASDA_B3_E_CoE_Drive", 1: "ASDA_B3_E_CoE_Drive_1", 2: "ASDA_B3_E_CoE_Drive_2"}
-REEL_STATION = 1003
+DRIVE_STATIONS = dict((k, STATION_OF[name]) for k, name in DRIVE_SLAVES.items())
+REEL_STATION = STATION_OF["reel_pull_motor"]
 
 # Identity 0x1018:01 of the ASDA-B3 drives: check it before any SDO write.
 DELTA_VENDOR = 0x1DD

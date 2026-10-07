@@ -558,7 +558,7 @@ VAR_GLOBAL
 	EcTicIdx        : INT;
 	(* The delta drives' own count of cycles without new outputs at SYNC0
 	   (CoE 0x1C32:0B SM-event missed) and 0x1C32:20 sync error, read by
-	   SDO in turn (drive k = station 1004 / 1005 / 1006). -1: not read /
+	   SDO in turn (drive k = its slave's PhysSlaveAddr). -1: not read /
 	   SDO error (EcSdoErr = last eError). *)
 	DrvSmMissed     : ARRAY[0..2] OF DINT := [-1, -1, -1];
 	DrvSyncErr      : ARRAY[0..2] OF DINT := [-1, -1, -1];

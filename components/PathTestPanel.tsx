@@ -34,7 +34,8 @@ const left: React.CSSProperties = { ...cell, textAlign: 'left' };
 const fmt = (x: number, d = 1) => (Number.isFinite(x) ? x.toFixed(d) : '-');
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const EV = { POWER_ON: 2, GROUP_ENABLE: 4, HOME_GO: 6, RESET: 8 };
-const STATIONS = [1003, 1004, 1005];
+// EAxis0/1/2 stations, wire order since 2026-10-07 (tools/topology.py DRIVE_STATIONS).
+const STATIONS = [1001, 1002, 1003];
 
 async function readDriveParam(send: Send, station: number, index: number): Promise<number | undefined> {
   const r = await send({ type: 'SYS', cmd: 'DRV_SDO', station, index, sub: 0, size: 4 });
