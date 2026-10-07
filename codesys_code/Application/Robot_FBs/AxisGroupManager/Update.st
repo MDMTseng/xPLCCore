@@ -28,13 +28,16 @@ SMC_GroupPower_0(
 // and it stayed powered (operation enabled) after a reset (found
 // 2026-10-07: reel 0x6041 = 16#1637 in UnInited after a soak).
 // bReelPowerReq is the one set by the previous scan's state.
-// Enable stays TRUE like SMC_GroupPower's: MC_Power with Enable FALSE just
-// stops processing and leaves the drive as it is (it only switches off
-// through bRegulatorOn / bDriveStart FALSE while enabled) -- moving the
-// call alone did not switch the reel off (2026-10-07 14:43).
+// Enable while power is wanted OR the drive still reports power: MC_Power
+// with Enable FALSE just stops processing and leaves the drive as it is,
+// so it must stay enabled until bRegulatorOn FALSE has switched the reel
+// off (moving the call alone did not, 2026-10-07 14:43). Not a constant
+// TRUE: at the application start the axis is not initialised yet, the FB
+// raises 0x1F (not an AXIS_REF) and with Enable held TRUE that error
+// stays latched, so every POWER_ON then trips (2026-10-07 16:15).
 fbPowerReel(
     Axis         := _axReel,
-    Enable       := TRUE,
+    Enable       := bReelPowerReq OR fbPowerReel.Status,
     bRegulatorOn := bReelPowerReq,
     bDriveStart  := bReelPowerReq
 );
