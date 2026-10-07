@@ -28,9 +28,13 @@ SMC_GroupPower_0(
 // and it stayed powered (operation enabled) after a reset (found
 // 2026-10-07: reel 0x6041 = 16#1637 in UnInited after a soak).
 // bReelPowerReq is the one set by the previous scan's state.
+// Enable stays TRUE like SMC_GroupPower's: MC_Power with Enable FALSE just
+// stops processing and leaves the drive as it is (it only switches off
+// through bRegulatorOn / bDriveStart FALSE while enabled) -- moving the
+// call alone did not switch the reel off (2026-10-07 14:43).
 fbPowerReel(
     Axis         := _axReel,
-    Enable       := bReelPowerReq,
+    Enable       := TRUE,
     bRegulatorOn := bReelPowerReq,
     bDriveStart  := bReelPowerReq
 );
